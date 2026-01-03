@@ -1,0 +1,490 @@
+//! LSP Test Client for E2E protocol testing
+//!
+//! Spawns an ecolog-lsp server as a subprocess and communicates
+//! via JSON-RPC over stdio.
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// JSON-RPC request/response ID counter
+static REQUEST_ID: AtomicI64 = AtomicI64::new(1);
+
+/// LSP Test Client for E2E protocol testing
+pub struct LspTestClient {
+    /// Child process handle
+    _child: Child,
+    /// Stdin writer
+    stdin: Arc<Mutex<ChildStdin>>,
+    /// Pending request responses (id -> response)
+    pending_responses: Arc<RwLock<HashMap<i64, Value>>>,
+    /// Received notifications
+    notifications: Arc<RwLock<Vec<JsonRpcNotification>>>,
+    /// Background reader thread handle
+    _reader_handle: thread::JoinHandle<()>,
+    /// Workspace root path
+    pub workspace_root: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: String,
+    pub id: i64,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcResponse {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JsonRpcError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcError {
+    pub code: i64,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRpcNotification {
+    pub jsonrpc: String,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
+}
+
+impl LspTestClient {
+    /// Spawn a new LSP server process and create a test client
+    pub fn spawn(workspace_root: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
+        // Build the LSP binary path (assumes cargo build has been run)
+        let lsp_binary = std::env::var("ECOLOG_LSP_BINARY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                // Try crate-local target first (standalone build)
+                let local_binary = manifest_dir.join("target").join("debug").join("ecolog-lsp");
+                if local_binary.exists() {
+                    return local_binary;
+                }
+                // Fall back to workspace target (workspace build)
+                manifest_dir
+                    .parent()
+                    .map(|p| p.join("target").join("debug").join("ecolog-lsp"))
+                    .unwrap_or(local_binary)
+            });
+
+        if !lsp_binary.exists() {
+            return Err(format!(
+                "LSP binary not found at {:?}. Run 'cargo build' first.",
+                lsp_binary
+            )
+            .into());
+        }
+
+        let mut child = Command::new(&lsp_binary)
+            .current_dir(&workspace_root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+
+        let stdin = child.stdin.take().expect("Failed to capture stdin");
+        let stdout = child.stdout.take().expect("Failed to capture stdout");
+
+        let stdin = Arc::new(Mutex::new(stdin));
+        let pending_responses = Arc::new(RwLock::new(HashMap::new()));
+        let notifications = Arc::new(RwLock::new(Vec::new()));
+
+        // Spawn background reader thread
+        let pending_clone = Arc::clone(&pending_responses);
+        let notifications_clone = Arc::clone(&notifications);
+
+        let reader_handle = thread::spawn(move || {
+            Self::read_messages(stdout, pending_clone, notifications_clone);
+        });
+
+        Ok(Self {
+            _child: child,
+            stdin,
+            pending_responses,
+            notifications,
+            _reader_handle: reader_handle,
+            workspace_root,
+        })
+    }
+
+    /// Background task to read and dispatch messages from stdout
+    fn read_messages(
+        stdout: ChildStdout,
+        pending: Arc<RwLock<HashMap<i64, Value>>>,
+        notifications: Arc<RwLock<Vec<JsonRpcNotification>>>,
+    ) {
+        let mut reader = BufReader::new(stdout);
+
+        loop {
+            // Read headers until empty line
+            let mut content_length: Option<usize> = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    return; // EOF
+                }
+                let line = line.trim();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(len_str) = line.strip_prefix("Content-Length:") {
+                    content_length = len_str.trim().parse().ok();
+                }
+            }
+
+            let Some(len) = content_length else {
+                continue;
+            };
+
+            // Read content
+            let mut content = vec![0u8; len];
+            if std::io::Read::read_exact(&mut reader, &mut content).is_err() {
+                return;
+            }
+
+            let Ok(message): Result<Value, _> = serde_json::from_slice(&content) else {
+                continue;
+            };
+
+            // Dispatch based on message type
+            if let Some(id) = message.get("id").and_then(|v| v.as_i64()) {
+                // Response - store it
+                if message.get("result").is_some() || message.get("error").is_some() {
+                    pending.write().unwrap().insert(id, message);
+                }
+            } else if message.get("method").is_some() {
+                // Notification
+                if let Ok(notif) = serde_json::from_value::<JsonRpcNotification>(message) {
+                    notifications.write().unwrap().push(notif);
+                }
+            }
+        }
+    }
+
+    /// Send a JSON-RPC request and wait for response
+    pub fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request_with_timeout(method, params, Duration::from_secs(30))
+    }
+
+    /// Send a JSON-RPC request with custom timeout
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        duration: Duration,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        let id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
+
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id,
+            method: method.to_string(),
+            params,
+        };
+
+        // Send request
+        self.send_message(&serde_json::to_value(&request)?)?;
+
+        // Wait for response with timeout
+        let start = Instant::now();
+        loop {
+            // Check for response
+            {
+                let mut responses = self.pending_responses.write().unwrap();
+                if let Some(response) = responses.remove(&id) {
+                    if let Some(error) = response.get("error") {
+                        return Err(format!("LSP Error: {:?}", error).into());
+                    }
+                    return Ok(response.get("result").cloned().unwrap_or(Value::Null));
+                }
+            }
+
+            if start.elapsed() > duration {
+                return Err(format!("Request '{}' timed out after {:?}", method, duration).into());
+            }
+
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Send a JSON-RPC notification (no response expected)
+    pub fn notify(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        });
+        self.send_message(&notification)
+    }
+
+    /// Send a raw JSON-RPC message
+    fn send_message(&self, message: &Value) -> Result<(), Box<dyn std::error::Error>> {
+        let content = serde_json::to_string(message)?;
+        let header = format!("Content-Length: {}\r\n\r\n", content.len());
+
+        let mut stdin = self.stdin.lock().unwrap();
+        stdin.write_all(header.as_bytes())?;
+        stdin.write_all(content.as_bytes())?;
+        stdin.flush()?;
+
+        Ok(())
+    }
+
+    /// Get all received notifications
+    pub fn get_notifications(&self) -> Vec<JsonRpcNotification> {
+        self.notifications.read().unwrap().clone()
+    }
+
+    /// Get notifications filtered by method
+    pub fn get_notifications_by_method(&self, method: &str) -> Vec<JsonRpcNotification> {
+        self.notifications
+            .read()
+            .unwrap()
+            .iter()
+            .filter(|n| n.method == method)
+            .cloned()
+            .collect()
+    }
+
+    /// Clear notifications (useful between test steps)
+    pub fn clear_notifications(&self) {
+        self.notifications.write().unwrap().clear();
+    }
+
+    /// Wait for a specific notification with timeout
+    pub fn wait_for_notification(
+        &self,
+        method: &str,
+        timeout_duration: Duration,
+    ) -> Option<JsonRpcNotification> {
+        let start = Instant::now();
+        loop {
+            let notifications = self.get_notifications_by_method(method);
+            if let Some(n) = notifications.last() {
+                return Some(n.clone());
+            }
+            if start.elapsed() > timeout_duration {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Perform full LSP initialization
+    pub fn initialize(&self) -> Result<Value, Box<dyn std::error::Error>> {
+        let init_params = json!({
+            "processId": std::process::id(),
+            "rootUri": format!("file://{}", self.workspace_root.display()),
+            "rootPath": self.workspace_root.display().to_string(),
+            "capabilities": {
+                "textDocument": {
+                    "hover": { "contentFormat": ["markdown", "plaintext"] },
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"]
+                        }
+                    },
+                    "definition": {},
+                    "references": {},
+                    "rename": { "prepareSupport": true },
+                    "publishDiagnostics": {}
+                },
+                "workspace": {
+                    "didChangeWatchedFiles": { "dynamicRegistration": true }
+                }
+            }
+        });
+
+        let result = self.request("initialize", Some(init_params))?;
+
+        // Send initialized notification
+        self.notify("initialized", Some(json!({})))?;
+
+        // Give the server time to complete initialization (indexing, etc.)
+        thread::sleep(Duration::from_millis(500));
+
+        Ok(result)
+    }
+
+    /// Perform graceful shutdown
+    pub fn shutdown(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.request("shutdown", None)?;
+        self.notify("exit", None)?;
+        Ok(())
+    }
+
+    /// Open a text document
+    pub fn open_document(
+        &self,
+        uri: &str,
+        language_id: &str,
+        text: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.notify(
+            "textDocument/didOpen",
+            Some(json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": text
+                }
+            })),
+        )
+    }
+
+    /// Change a text document (full sync)
+    pub fn change_document(
+        &self,
+        uri: &str,
+        version: i32,
+        text: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.notify(
+            "textDocument/didChange",
+            Some(json!({
+                "textDocument": {
+                    "uri": uri,
+                    "version": version
+                },
+                "contentChanges": [{ "text": text }]
+            })),
+        )
+    }
+
+    /// Close a text document
+    pub fn close_document(&self, uri: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.notify(
+            "textDocument/didClose",
+            Some(json!({
+                "textDocument": { "uri": uri }
+            })),
+        )
+    }
+
+    /// Perform hover request
+    pub fn hover(&self, uri: &str, line: u32, character: u32) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/hover",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            })),
+        )
+    }
+
+    /// Perform completion request
+    pub fn completion(&self, uri: &str, line: u32, character: u32) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/completion",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            })),
+        )
+    }
+
+    /// Perform go-to-definition request
+    pub fn definition(&self, uri: &str, line: u32, character: u32) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/definition",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            })),
+        )
+    }
+
+    /// Perform find-references request
+    pub fn references(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+        include_declaration: bool,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/references",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "context": { "includeDeclaration": include_declaration }
+            })),
+        )
+    }
+
+    /// Perform prepare-rename request
+    pub fn prepare_rename(&self, uri: &str, line: u32, character: u32) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/prepareRename",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            })),
+        )
+    }
+
+    /// Perform rename request
+    pub fn rename(
+        &self,
+        uri: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/rename",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "newName": new_name
+            })),
+        )
+    }
+
+    /// Execute a workspace command
+    pub fn execute_command(
+        &self,
+        command: &str,
+        arguments: Vec<Value>,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "workspace/executeCommand",
+            Some(json!({
+                "command": command,
+                "arguments": arguments
+            })),
+        )
+    }
+}
