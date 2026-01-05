@@ -2,7 +2,7 @@ use ecolog_lsp::analysis::document::DocumentManager;
 use ecolog_lsp::analysis::query::QueryEngine;
 use ecolog_lsp::languages::LanguageRegistry;
 use std::sync::Arc;
-use tower_lsp::lsp_types::{Url, Position};
+use tower_lsp::lsp_types::{Position, Url};
 
 async fn setup_manager() -> DocumentManager {
     let query_engine = Arc::new(QueryEngine::new());
@@ -20,11 +20,16 @@ async fn test_definition_reference_exists() {
     let content = r#"
 const api = process.env.API_KEY;
 "#;
-    doc_manager.open(uri.clone(), "javascript".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "javascript".into(), content.to_string(), 1)
+        .await;
 
     // Verify reference is detected (definition would jump to .env file)
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(1, 26));
-    assert!(ref1.is_some(), "Reference should exist for definition lookup");
+    assert!(
+        ref1.is_some(),
+        "Reference should exist for definition lookup"
+    );
     assert_eq!(ref1.unwrap().name, "API_KEY");
 }
 
@@ -36,7 +41,9 @@ async fn test_definition_python_environ() {
 import os
 val = os.environ["DB_HOST"]
 "#;
-    doc_manager.open(uri.clone(), "python".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "python".into(), content.to_string(), 1)
+        .await;
 
     // Verify reference is detected
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 21));

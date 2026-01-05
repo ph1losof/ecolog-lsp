@@ -17,6 +17,10 @@ use tower_lsp::lsp_types::{Position, Range};
 /// Maximum depth for chain resolution to prevent infinite loops.
 pub const MAX_CHAIN_DEPTH: usize = 10;
 
+/// Multiplier for line count when calculating range size.
+/// Used to ensure line differences are weighted more heavily than character differences.
+const RANGE_SIZE_LINE_WEIGHT: u64 = 10000;
+
 /// The binding graph for a single document.
 /// Uses sparse representation - only env-related symbols are tracked.
 #[derive(Debug, Default)]
@@ -175,8 +179,8 @@ impl BindingGraph {
     /// Returns the ScopeId assigned to the scope.
     pub fn add_scope(&mut self, mut scope: Scope) -> ScopeId {
         // Assign ID first (matches vector index + 1), then increment for next scope
-        let id = ScopeId::new(self.next_scope_id)
-            .expect("Scope ID counter overflow - too many scopes");
+        let id =
+            ScopeId::new(self.next_scope_id).expect("Scope ID counter overflow - too many scopes");
         self.next_scope_id += 1;
         scope.id = id;
         // Scope with ID n is at scopes[n-1] (0-based vector)
@@ -277,7 +281,11 @@ impl BindingGraph {
     }
 
     /// Resolve with custom max depth.
-    pub fn resolve_to_env_with_max(&self, symbol_id: SymbolId, max_depth: usize) -> Option<ResolvedEnv> {
+    pub fn resolve_to_env_with_max(
+        &self,
+        symbol_id: SymbolId,
+        max_depth: usize,
+    ) -> Option<ResolvedEnv> {
         self.resolve_to_env_with_depth(symbol_id, max_depth, 0)
     }
 
@@ -389,7 +397,7 @@ impl BindingGraph {
         } else {
             range.end.character as u64
         };
-        lines * 10000 + chars
+        lines * RANGE_SIZE_LINE_WEIGHT + chars
     }
 
     /// Clear all data (useful for re-analysis).
@@ -607,8 +615,17 @@ mod tests {
         assert!(BindingGraph::contains_position(range, Position::new(5, 20)));
 
         assert!(!BindingGraph::contains_position(range, Position::new(5, 9)));
-        assert!(!BindingGraph::contains_position(range, Position::new(5, 21)));
-        assert!(!BindingGraph::contains_position(range, Position::new(4, 15)));
-        assert!(!BindingGraph::contains_position(range, Position::new(6, 15)));
+        assert!(!BindingGraph::contains_position(
+            range,
+            Position::new(5, 21)
+        ));
+        assert!(!BindingGraph::contains_position(
+            range,
+            Position::new(4, 15)
+        ));
+        assert!(!BindingGraph::contains_position(
+            range,
+            Position::new(6, 15)
+        ));
     }
 }

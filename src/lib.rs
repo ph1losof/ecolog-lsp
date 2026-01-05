@@ -1,7 +1,7 @@
-pub mod types;
 pub mod analysis;
 pub mod languages;
 pub mod server;
+pub mod types;
 
-pub use server::LspServer;
 pub use server::config::{EcologConfig, FeatureConfig, StrictConfig, UnifiedMaskingConfig};
+pub use server::LspServer;

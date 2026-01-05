@@ -113,4 +113,10 @@ impl LanguageSupport for Python {
     fn known_env_modules(&self) -> &'static [&'static str] {
         &["os"]
     }
+
+    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
+        // Python supports double quotes and single quotes
+        // Note: triple-quoted strings (''' or """") would require more complex handling
+        text.trim_matches(|c| c == '"' || c == '\'')
+    }
 }

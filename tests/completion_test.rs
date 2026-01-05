@@ -2,7 +2,7 @@ use ecolog_lsp::analysis::document::DocumentManager;
 use ecolog_lsp::analysis::query::QueryEngine;
 use ecolog_lsp::languages::LanguageRegistry;
 use std::sync::Arc;
-use tower_lsp::lsp_types::{Url, Position};
+use tower_lsp::lsp_types::{Position, Url};
 
 async fn setup_manager() -> DocumentManager {
     let query_engine = Arc::new(QueryEngine::new());
@@ -18,17 +18,19 @@ async fn setup_manager() -> DocumentManager {
 async fn test_completion_context_js() {
     let doc_manager = setup_manager().await;
     let uri = Url::parse("file:///test.js").unwrap();
-    
+
     // Incomplete syntax: "env."
     let content = r#"
         const env = process.env;
         env.
     "#;
-    doc_manager.open(uri.clone(), "javascript".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "javascript".into(), content.to_string(), 1)
+        .await;
 
     // Cursor at end of "env." (L2)
-    let pos = Position::new(2, 12); 
-    
+    let pos = Position::new(2, 12);
+
     let ctx = doc_manager.check_completion_context(&uri, pos).await;
     assert!(ctx.is_some(), "Should detect completion context for 'env.'");
     assert_eq!(ctx.unwrap(), "env");
@@ -38,15 +40,17 @@ async fn test_completion_context_js() {
 async fn test_completion_context_python() {
     let doc_manager = setup_manager().await;
     let uri = Url::parse("file:///test.py").unwrap();
-    
+
     // "env."
     let content = r#"
         env.
     "#;
-    doc_manager.open(uri.clone(), "python".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "python".into(), content.to_string(), 1)
+        .await;
 
     let pos = Position::new(1, 12); // "        env."
-    
+
     let ctx = doc_manager.check_completion_context(&uri, pos).await;
     assert!(ctx.is_some(), "Should detect completion context for 'env.'");
     assert_eq!(ctx.unwrap(), "env");

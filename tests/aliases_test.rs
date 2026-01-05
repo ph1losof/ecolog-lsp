@@ -2,7 +2,7 @@ use ecolog_lsp::analysis::document::DocumentManager;
 use ecolog_lsp::analysis::query::QueryEngine;
 use ecolog_lsp::languages::LanguageRegistry;
 use std::sync::Arc;
-use tower_lsp::lsp_types::{Url, Position};
+use tower_lsp::lsp_types::{Position, Url};
 
 async fn setup_manager() -> DocumentManager {
     let query_engine = Arc::new(QueryEngine::new());
@@ -25,14 +25,20 @@ async fn test_js_object_alias() {
         const api = env.API_KEY; 
         const secret = env["SECRET"];
     "#;
-    doc_manager.open(uri.clone(), "javascript".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "javascript".into(), content.to_string(), 1)
+        .await;
 
     // L2: const api = env.API_KEY; (24 is col)
-    let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 24)).expect("Should find ref at L2");
+    let ref1 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(2, 24))
+        .expect("Should find ref at L2");
     assert_eq!(ref1.name, "API_KEY");
 
     // L3: const secret = env["SECRET"];
-    let ref2 = doc_manager.get_env_reference_cloned(&uri, Position::new(3, 30)).expect("Should find ref at L3");
+    let ref2 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(3, 30))
+        .expect("Should find ref at L3");
     assert_eq!(ref2.name, "SECRET");
 }
 
@@ -45,14 +51,20 @@ import os as o
 val1 = o.environ["VAR1"]
 val2 = o.getenv("VAR2")
 "#;
-    doc_manager.open(uri.clone(), "python".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "python".into(), content.to_string(), 1)
+        .await;
 
     // L2: val1 = o.environ["VAR1"]
-    let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 20)).expect("Should find VAR1 at L2");
+    let ref1 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(2, 20))
+        .expect("Should find VAR1 at L2");
     assert_eq!(ref1.name, "VAR1");
 
     // L3: val2 = o.getenv("VAR2")
-    let ref2 = doc_manager.get_env_reference_cloned(&uri, Position::new(3, 19)).expect("Should find VAR2 at L3");
+    let ref2 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(3, 19))
+        .expect("Should find VAR2 at L3");
     assert_eq!(ref2.name, "VAR2");
 }
 
@@ -64,10 +76,14 @@ async fn test_python_object_alias() {
 from os import environ as e
 val = e["VAR"]
 "#;
-    doc_manager.open(uri.clone(), "python".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "python".into(), content.to_string(), 1)
+        .await;
 
     // L2: val = e["VAR"]
-    let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 10)).expect("Should find VAR at L2");
+    let ref1 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(2, 10))
+        .expect("Should find VAR at L2");
     assert_eq!(ref1.name, "VAR");
 }
 
@@ -81,9 +97,13 @@ fn main() {
     let v = e::var("VAR").unwrap();
 }
 "#;
-    doc_manager.open(uri.clone(), "rust".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "rust".into(), content.to_string(), 1)
+        .await;
     // L3: let v = e::var("VAR").unwrap();
-    let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(3, 22)).expect("Should find VAR at L3");
+    let ref1 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(3, 22))
+        .expect("Should find VAR at L3");
     assert_eq!(ref1.name, "VAR");
 }
 
@@ -101,11 +121,15 @@ func main() {
     val := e.Getenv("VAR")
 }
 "#;
-    doc_manager.open(uri.clone(), "go".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "go".into(), content.to_string(), 1)
+        .await;
 
     // L7: val := e.Getenv("VAR")
     // Col start around 21. Check 22.
-    let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(7, 22)).expect("Should find VAR at L7");
+    let ref1 = doc_manager
+        .get_env_reference_cloned(&uri, Position::new(7, 22))
+        .expect("Should find VAR at L7");
     assert_eq!(ref1.name, "VAR");
 }
 
@@ -122,7 +146,9 @@ function b() {
     env.B; // Should NOT be detected as reference
 }
 "#;
-    doc_manager.open(uri.clone(), "javascript".into(), content.to_string(), 1).await;
+    doc_manager
+        .open(uri.clone(), "javascript".into(), content.to_string(), 1)
+        .await;
 
     // env.A should be valid
     let ref_a = doc_manager.get_env_reference_cloned(&uri, Position::new(3, 8));

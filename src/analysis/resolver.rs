@@ -5,8 +5,8 @@
 
 use crate::analysis::binding_graph::BindingGraph;
 use crate::types::{
-    BindingKind, EnvBinding, EnvBindingUsage, EnvReference, ResolvedEnv, ScopeId, Symbol,
-    SymbolId, SymbolUsage,
+    BindingKind, EnvBinding, EnvBindingUsage, EnvReference, ResolvedEnv, ScopeId, Symbol, SymbolId,
+    SymbolUsage,
 };
 use compact_str::CompactString;
 use tower_lsp::lsp_types::{Position, Range};

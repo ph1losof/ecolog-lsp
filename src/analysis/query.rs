@@ -137,8 +137,7 @@ impl QueryEngine {
                     var_name = language.extract_var_name(capture.node, src);
                 } else if idx == idx_env_default_value {
                     if let Ok(text) = capture.node.utf8_text(src) {
-                        // Strip quotes if string
-                        let clean_text = text.trim_matches(|c| c == '"' || c == '\'');
+                        let clean_text = language.strip_quotes(text);
                         _default_value = Some(CompactString::from(clean_text));
                     }
                 } else if idx == idx_object || idx == idx_module {
@@ -153,17 +152,13 @@ impl QueryEngine {
             if let (Some(full), Some(name_r), Some(name)) = (full_range, name_range, var_name) {
                 // Validate imports if object_name is present
                 if let Some(obj) = object_name {
-                    // Normalize standard names
-                    // Normalize standard names
                     let is_std = language.is_standard_env_object(&obj);
 
                     if !is_std {
                         // Check aliases in ImportContext
                         let mut is_valid_alias = false;
                         if let Some((module, _orig)) = import_ctx.aliases.get(&obj) {
-                            if language.known_env_modules().contains(&module.as_str())
-                                || module == "process"
-                            {
+                            if language.known_env_modules().contains(&module.as_str()) {
                                 is_valid_alias = true;
                             }
                         }
@@ -473,10 +468,11 @@ impl QueryEngine {
                 let idx = Some(capture.index);
 
                 if idx == idx_import_path {
-                    module_path =
-                        capture.node.utf8_text(src).ok().map(|s| {
-                            CompactString::from(s.trim_matches(|c| c == '"' || c == '\''))
-                        });
+                    module_path = capture
+                        .node
+                        .utf8_text(src)
+                        .ok()
+                        .map(|s| CompactString::from(language.strip_quotes(s)));
                 } else if idx == idx_original_name {
                     original_name = capture
                         .node
@@ -689,7 +685,13 @@ impl QueryEngine {
         language: &dyn LanguageSupport,
         tree: &Tree,
         source: &[u8],
-    ) -> Vec<(CompactString, tower_lsp::lsp_types::Range, CompactString, tower_lsp::lsp_types::Range, CompactString)> {
+    ) -> Vec<(
+        CompactString,
+        tower_lsp::lsp_types::Range,
+        CompactString,
+        tower_lsp::lsp_types::Range,
+        CompactString,
+    )> {
         let query = match language.destructure_query() {
             Some(q) => q,
             None => return Vec::new(),

@@ -1,6 +1,6 @@
+use crate::languages::LanguageSupport;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
-use crate::languages::LanguageSupport;
 
 pub struct TypeScript;
 pub struct TypeScriptReact;
@@ -31,13 +31,26 @@ impl LanguageSupport for TypeScript {
         Some("process.env")
     }
 
+    fn known_env_modules(&self) -> &'static [&'static str] {
+        &["process"]
+    }
+
     fn is_scope_node(&self, node: Node) -> bool {
         match node.kind() {
-            "program" | "function_declaration" | "arrow_function" | 
-            "function" | "method_definition" | "class_body" | 
-            "statement_block" | "for_statement" | "if_statement" |
-            "else_clause" | "try_statement" | "catch_clause" |
-            "interface_declaration" | "module" => true,
+            "program"
+            | "function_declaration"
+            | "arrow_function"
+            | "function"
+            | "method_definition"
+            | "class_body"
+            | "statement_block"
+            | "for_statement"
+            | "if_statement"
+            | "else_clause"
+            | "try_statement"
+            | "catch_clause"
+            | "interface_declaration"
+            | "module" => true,
             _ => false,
         }
     }
@@ -56,48 +69,69 @@ impl LanguageSupport for TypeScript {
 
     fn reference_query(&self) -> &Query {
         TS_REFERENCE_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/references.scm"))
-                .expect("Failed to compile TypeScript reference query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/references.scm"),
+            )
+            .expect("Failed to compile TypeScript reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(TS_BINDING_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/bindings.scm"))
-                .expect("Failed to compile TypeScript binding query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/bindings.scm"),
+            )
+            .expect("Failed to compile TypeScript binding query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(TS_COMPLETION_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/completion.scm"))
-                .expect("Failed to compile TypeScript completion query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/completion.scm"),
+            )
+            .expect("Failed to compile TypeScript completion query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(TS_IMPORT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/imports.scm"))
-                .expect("Failed to compile TypeScript import query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/imports.scm"),
+            )
+            .expect("Failed to compile TypeScript import query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(TS_REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/reassignments.scm"))
-                .expect("Failed to compile TypeScript reassignment query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/reassignments.scm"),
+            )
+            .expect("Failed to compile TypeScript reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(TS_IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/identifiers.scm"))
-                .expect("Failed to compile TypeScript identifier query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/identifiers.scm"),
+            )
+            .expect("Failed to compile TypeScript identifier query")
         }))
     }
+
+    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
+        // TypeScript supports double quotes, single quotes, and backticks (template literals)
+        text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+    }
 }
-
-
 
 impl LanguageSupport for TypeScriptReact {
     fn id(&self) -> &'static str {
@@ -112,13 +146,27 @@ impl LanguageSupport for TypeScriptReact {
         Some("process.env")
     }
 
+    fn known_env_modules(&self) -> &'static [&'static str] {
+        &["process"]
+    }
+
     fn is_scope_node(&self, node: Node) -> bool {
         match node.kind() {
-            "program" | "function_declaration" | "arrow_function" | 
-            "function" | "method_definition" | "class_body" | 
-            "statement_block" | "for_statement" | "if_statement" |
-            "else_clause" | "try_statement" | "catch_clause" |
-            "interface_declaration" | "module" | "jsx_element" => true,
+            "program"
+            | "function_declaration"
+            | "arrow_function"
+            | "function"
+            | "method_definition"
+            | "class_body"
+            | "statement_block"
+            | "for_statement"
+            | "if_statement"
+            | "else_clause"
+            | "try_statement"
+            | "catch_clause"
+            | "interface_declaration"
+            | "module"
+            | "jsx_element" => true,
             _ => false,
         }
     }
@@ -138,45 +186,68 @@ impl LanguageSupport for TypeScriptReact {
     fn reference_query(&self) -> &Query {
         TSX_REFERENCE_QUERY.get_or_init(|| {
             // Using same queries for now, assuming they are compatible or main query works for both
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/references.scm"))
-                .expect("Failed to compile TypeScriptReact reference query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/references.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(TSX_BINDING_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/bindings.scm"))
-                .expect("Failed to compile TypeScriptReact binding query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/bindings.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact binding query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(TSX_COMPLETION_QUERY.get_or_init(|| {
             // Reusing TS query for TSX
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/completion.scm"))
-                .expect("Failed to compile TypeScriptReact completion query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/completion.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact completion query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(TSX_IMPORT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/imports.scm"))
-                .expect("Failed to compile TypeScriptReact import query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/imports.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact import query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(TSX_REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/reassignments.scm"))
-                .expect("Failed to compile TypeScriptReact reassignment query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/reassignments.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(TSX_IDENTIFIER_QUERY.get_or_init(|| {
             // Using TS query for now
-            Query::new(&self.grammar(), include_str!("../../queries/typescript/identifiers.scm"))
-                .expect("Failed to compile TypeScriptReact identifier query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/identifiers.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact identifier query")
         }))
+    }
+
+    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
+        // TypeScript supports double quotes, single quotes, and backticks (template literals)
+        text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
 }

@@ -6,20 +6,22 @@
 //! 3. Re-assignment through aliases
 //! 4. Scope isolation
 
+use abundantis::Abundantis;
 use ecolog_lsp::analysis::DocumentManager;
-use ecolog_lsp::server::state::ServerState;
-use ecolog_lsp::server::handlers::handle_hover;
 use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::ConfigManager;
-use abundantis::Abundantis;
+use ecolog_lsp::server::handlers::handle_hover;
+use ecolog_lsp::server::state::ServerState;
 use shelter::masker::Masker;
 use shelter::MaskingConfig;
-use tokio::sync::Mutex;
-use tower_lsp::lsp_types::{HoverParams, TextDocumentPositionParams, TextDocumentIdentifier, Position, Url};
-use std::sync::Arc;
 use std::fs::{self, File};
 use std::io::Write;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
+use tower_lsp::lsp_types::{
+    HoverParams, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+};
 
 async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
     let mut registry = LanguageRegistry::new();
@@ -30,18 +32,16 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
     let query_engine = Arc::new(ecolog_lsp::analysis::QueryEngine::new());
     let document_manager = Arc::new(DocumentManager::new(query_engine, languages.clone()));
     let config_manager = Arc::new(ConfigManager::new());
-    let core = Arc::new(Abundantis::builder()
-        .root(temp_dir)
-        .build().await.expect("Failed to build Abundantis"));
+    let core = Arc::new(
+        Abundantis::builder()
+            .root(temp_dir)
+            .build()
+            .await
+            .expect("Failed to build Abundantis"),
+    );
     let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
 
-    ServerState::new(
-        document_manager,
-        languages,
-        core,
-        masker,
-        config_manager,
-    )
+    ServerState::new(document_manager, languages, core, masker, config_manager)
 }
 
 /// Pattern 1: Multi-level binding chains
@@ -50,7 +50,10 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
 /// console.log(b);  // ✓ Must resolve to DB_URL
 #[tokio::test]
 async fn test_multi_level_binding_chain() {
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let temp_dir = std::env::temp_dir().join(format!("ecolog_chain_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -69,23 +72,41 @@ b;"#;
     write!(f, "{}", js_content).unwrap();
     let uri = Url::from_file_path(&js_path).unwrap();
 
-    state.document_manager.open(uri.clone(), "javascript".to_string(), js_content.to_string(), 0).await;
+    state
+        .document_manager
+        .open(
+            uri.clone(),
+            "javascript".to_string(),
+            js_content.to_string(),
+            0,
+        )
+        .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Hover on 'b' (line 2, col 0)
-    let hover = handle_hover(HoverParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            position: Position::new(2, 0),
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position::new(2, 0),
+            },
+            work_done_progress_params: Default::default(),
         },
-        work_done_progress_params: Default::default(),
-    }, &state).await;
+        &state,
+    )
+    .await;
 
     println!("Chain test hover: {:?}", hover);
-    assert!(hover.is_some(), "Should resolve 'b' through the chain to DB_URL");
+    assert!(
+        hover.is_some(),
+        "Should resolve 'b' through the chain to DB_URL"
+    );
     let hover_str = format!("{:?}", hover.unwrap());
-    assert!(hover_str.contains("DB_URL") || hover_str.contains("postgres"),
-            "Hover should resolve to DB_URL, got: {}", hover_str);
+    assert!(
+        hover_str.contains("DB_URL") || hover_str.contains("postgres"),
+        "Hover should resolve to DB_URL, got: {}",
+        hover_str
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -96,7 +117,10 @@ b;"#;
 /// DB_URL;  // ✓ Must resolve to DB_URL
 #[tokio::test]
 async fn test_object_alias_destructure() {
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let temp_dir = std::env::temp_dir().join(format!("ecolog_destruct_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -114,23 +138,41 @@ DB_URL;"#;
     write!(f, "{}", js_content).unwrap();
     let uri = Url::from_file_path(&js_path).unwrap();
 
-    state.document_manager.open(uri.clone(), "javascript".to_string(), js_content.to_string(), 0).await;
+    state
+        .document_manager
+        .open(
+            uri.clone(),
+            "javascript".to_string(),
+            js_content.to_string(),
+            0,
+        )
+        .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Hover on 'DB_URL' usage (line 2, col 0)
-    let hover = handle_hover(HoverParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            position: Position::new(2, 0),
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position::new(2, 0),
+            },
+            work_done_progress_params: Default::default(),
         },
-        work_done_progress_params: Default::default(),
-    }, &state).await;
+        &state,
+    )
+    .await;
 
     println!("Destructure test hover: {:?}", hover);
-    assert!(hover.is_some(), "Should resolve destructured DB_URL from alias");
+    assert!(
+        hover.is_some(),
+        "Should resolve destructured DB_URL from alias"
+    );
     let hover_str = format!("{:?}", hover.unwrap());
-    assert!(hover_str.contains("DB_URL") || hover_str.contains("postgres"),
-            "Hover should resolve to DB_URL, got: {}", hover_str);
+    assert!(
+        hover_str.contains("DB_URL") || hover_str.contains("postgres"),
+        "Hover should resolve to DB_URL, got: {}",
+        hover_str
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -142,7 +184,10 @@ DB_URL;"#;
 /// alpha;  // ✓ Must resolve to ALPHA
 #[tokio::test]
 async fn test_reassignment_through_alias() {
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let temp_dir = std::env::temp_dir().join(format!("ecolog_reassign_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -161,23 +206,41 @@ alpha;"#;
     write!(f, "{}", js_content).unwrap();
     let uri = Url::from_file_path(&js_path).unwrap();
 
-    state.document_manager.open(uri.clone(), "javascript".to_string(), js_content.to_string(), 0).await;
+    state
+        .document_manager
+        .open(
+            uri.clone(),
+            "javascript".to_string(),
+            js_content.to_string(),
+            0,
+        )
+        .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Hover on 'alpha' usage (line 3, col 0)
-    let hover = handle_hover(HoverParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            position: Position::new(3, 0),
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position::new(3, 0),
+            },
+            work_done_progress_params: Default::default(),
         },
-        work_done_progress_params: Default::default(),
-    }, &state).await;
+        &state,
+    )
+    .await;
 
     println!("Reassignment test hover: {:?}", hover);
-    assert!(hover.is_some(), "Should resolve 'alpha' through the chain to ALPHA");
+    assert!(
+        hover.is_some(),
+        "Should resolve 'alpha' through the chain to ALPHA"
+    );
     let hover_str = format!("{:?}", hover.unwrap());
-    assert!(hover_str.contains("ALPHA") || hover_str.contains("secret_alpha"),
-            "Hover should resolve to ALPHA, got: {}", hover_str);
+    assert!(
+        hover_str.contains("ALPHA") || hover_str.contains("secret_alpha"),
+        "Hover should resolve to ALPHA, got: {}",
+        hover_str
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -190,7 +253,10 @@ alpha;"#;
 /// something;  // ✗ NOT linked - out of scope
 #[tokio::test]
 async fn test_scope_isolation_detailed() {
-    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let temp_dir = std::env::temp_dir().join(format!("ecolog_scope_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -210,35 +276,60 @@ something;"#;
     write!(f, "{}", js_content).unwrap();
     let uri = Url::from_file_path(&js_path).unwrap();
 
-    state.document_manager.open(uri.clone(), "javascript".to_string(), js_content.to_string(), 0).await;
+    state
+        .document_manager
+        .open(
+            uri.clone(),
+            "javascript".to_string(),
+            js_content.to_string(),
+            0,
+        )
+        .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // Hover on 'something' inside function (line 2, col 2)
-    let hover_inside = handle_hover(HoverParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            position: Position::new(2, 2),
+    let hover_inside = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position::new(2, 2),
+            },
+            work_done_progress_params: Default::default(),
         },
-        work_done_progress_params: Default::default(),
-    }, &state).await;
+        &state,
+    )
+    .await;
 
     println!("Scope test hover inside: {:?}", hover_inside);
-    assert!(hover_inside.is_some(), "Should resolve 'something' inside the function");
+    assert!(
+        hover_inside.is_some(),
+        "Should resolve 'something' inside the function"
+    );
     let hover_str = format!("{:?}", hover_inside.unwrap());
-    assert!(hover_str.contains("DB_URL") || hover_str.contains("postgres"),
-            "Hover inside function should resolve to DB_URL, got: {}", hover_str);
+    assert!(
+        hover_str.contains("DB_URL") || hover_str.contains("postgres"),
+        "Hover inside function should resolve to DB_URL, got: {}",
+        hover_str
+    );
 
     // Hover on 'something' outside function (line 4, col 0)
-    let hover_outside = handle_hover(HoverParams {
-        text_document_position_params: TextDocumentPositionParams {
-            text_document: TextDocumentIdentifier { uri: uri.clone() },
-            position: Position::new(4, 0),
+    let hover_outside = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position::new(4, 0),
+            },
+            work_done_progress_params: Default::default(),
         },
-        work_done_progress_params: Default::default(),
-    }, &state).await;
+        &state,
+    )
+    .await;
 
     println!("Scope test hover outside: {:?}", hover_outside);
-    assert!(hover_outside.is_none(), "Should NOT resolve 'something' outside the function scope");
+    assert!(
+        hover_outside.is_none(),
+        "Should NOT resolve 'something' outside the function scope"
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

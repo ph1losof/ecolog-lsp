@@ -1,7 +1,7 @@
+use crate::languages::LanguageSupport;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
-use crate::languages::LanguageSupport;
 
 /// Registry of all supported languages
 pub struct LanguageRegistry {
@@ -27,7 +27,7 @@ impl LanguageRegistry {
     pub fn register(&mut self, language: Arc<dyn LanguageSupport>) {
         let lang = language.clone();
         self.by_id.insert(lang.id(), lang.clone());
-        
+
         for ext in lang.extensions() {
             self.by_extension.insert(ext, lang.clone());
         }

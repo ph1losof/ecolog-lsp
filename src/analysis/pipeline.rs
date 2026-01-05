@@ -7,8 +7,7 @@ use crate::analysis::binding_graph::BindingGraph;
 use crate::analysis::query::QueryEngine;
 use crate::languages::LanguageSupport;
 use crate::types::{
-    ImportContext, Scope, ScopeId, ScopeKind, Symbol, SymbolId, SymbolKind, SymbolOrigin,
-    SymbolUsage,
+    ImportContext, Scope, ScopeId, Symbol, SymbolId, SymbolKind, SymbolOrigin, SymbolUsage,
 };
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::Tree;
@@ -43,7 +42,15 @@ impl AnalysisPipeline {
         Self::extract_scopes(language, tree, &mut graph);
 
         // Phase 2: Extract direct references
-        Self::extract_direct_references(query_engine, language, tree, source, import_context, &mut graph).await;
+        Self::extract_direct_references(
+            query_engine,
+            language,
+            tree,
+            source,
+            import_context,
+            &mut graph,
+        )
+        .await;
 
         // Phase 3: Extract bindings
         Self::extract_bindings(query_engine, language, tree, source, &mut graph).await;
@@ -75,10 +82,9 @@ impl AnalysisPipeline {
         parent_scope: ScopeId,
     ) {
         // Check if this node creates a new scope
-        let current_scope = if language.is_scope_node(node)
-            && !matches!(node.kind(), "program" | "source_file" | "module")
-        {
-            let scope_kind = Self::node_to_scope_kind(node.kind());
+        // Skip root nodes (program/source_file/module) as they are already the root scope
+        let current_scope = if language.is_scope_node(node) && !language.is_root_node(node) {
+            let scope_kind = language.node_to_scope_kind(node.kind());
             let scope = Scope {
                 id: ScopeId::root(), // Placeholder, will be overwritten by add_scope
                 parent: Some(parent_scope),
@@ -94,32 +100,6 @@ impl AnalysisPipeline {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             Self::walk_for_scopes(child, language, graph, current_scope);
-        }
-    }
-
-    fn node_to_scope_kind(kind: &str) -> ScopeKind {
-        match kind {
-            // Functions
-            "function_declaration" | "arrow_function" | "function" | "method_definition"
-            | "function_definition" | "function_item" | "func_literal" | "closure_expression"
-            | "generator_function" | "generator_function_declaration" => ScopeKind::Function,
-
-            // Classes
-            "class_declaration" | "class_definition" | "class_body" | "impl_item" | "trait_item"
-            | "class" => ScopeKind::Class,
-
-            // Loops
-            "for_statement" | "for_expression" | "while_statement" | "while_expression"
-            | "loop_expression" | "do_statement" | "for_in_statement" | "for_of_statement" => {
-                ScopeKind::Loop
-            }
-
-            // Conditionals
-            "if_statement" | "if_expression" | "else_clause" | "try_statement" | "catch_clause"
-            | "match_expression" | "switch_statement" | "switch_case" => ScopeKind::Conditional,
-
-            // Everything else is a block
-            _ => ScopeKind::Block,
         }
     }
 
@@ -167,7 +147,12 @@ impl AnalysisPipeline {
             let (origin, kind) = match binding.kind {
                 crate::types::BindingKind::Object => {
                     // Check if this is a specific env var from destructuring or the env object itself
-                    if binding.env_var_name == language.default_env_object_name().unwrap_or("process.env") {
+                    let is_env_object = language
+                        .default_env_object_name()
+                        .map(|name| binding.env_var_name == name)
+                        .unwrap_or(false);
+
+                    if is_env_object {
                         // This is an object alias: const env = process.env
                         (
                             SymbolOrigin::EnvObject {
@@ -296,8 +281,10 @@ impl AnalysisPipeline {
     fn resolve_origins(graph: &mut BindingGraph) {
         // Build a name -> symbol ID map for the entire graph
         // This allows us to resolve forward references
-        let mut name_to_id: std::collections::HashMap<(compact_str::CompactString, ScopeId), SymbolId> =
-            std::collections::HashMap::new();
+        let mut name_to_id: std::collections::HashMap<
+            (compact_str::CompactString, ScopeId),
+            SymbolId,
+        > = std::collections::HashMap::new();
 
         for symbol in graph.symbols() {
             let key = (symbol.name.clone(), symbol.scope);
@@ -311,7 +298,8 @@ impl AnalysisPipeline {
             .filter(|s| {
                 matches!(
                     s.origin,
-                    SymbolOrigin::UnresolvedSymbol { .. } | SymbolOrigin::UnresolvedDestructure { .. }
+                    SymbolOrigin::UnresolvedSymbol { .. }
+                        | SymbolOrigin::UnresolvedDestructure { .. }
                 )
             })
             .map(|s| (s.id, s.scope, s.origin.clone()))
@@ -410,15 +398,25 @@ impl AnalysisPipeline {
         }
 
         // Handle property access on object aliases (env.VAR, env["VAR"])
-        Self::extract_property_accesses(tree, source, graph);
+        Self::extract_property_accesses(language, tree, source, graph);
     }
 
     /// Extract property accesses on env object aliases (e.g., env.API_KEY, env["SECRET"])
-    fn extract_property_accesses(tree: &Tree, source: &[u8], graph: &mut BindingGraph) {
-        Self::walk_for_property_accesses(tree.root_node(), source, graph);
+    fn extract_property_accesses(
+        language: &dyn LanguageSupport,
+        tree: &Tree,
+        source: &[u8],
+        graph: &mut BindingGraph,
+    ) {
+        Self::walk_for_property_accesses(language, tree.root_node(), source, graph);
     }
 
-    fn walk_for_property_accesses(node: tree_sitter::Node, source: &[u8], graph: &mut BindingGraph) {
+    fn walk_for_property_accesses(
+        language: &dyn LanguageSupport,
+        node: tree_sitter::Node,
+        source: &[u8],
+        graph: &mut BindingGraph,
+    ) {
         // Check for member_expression: obj.property
         if node.kind() == "member_expression" {
             if let (Some(object), Some(property)) = (
@@ -473,9 +471,9 @@ impl AnalysisPipeline {
                             if graph.resolves_to_env_object(symbol.id) {
                                 // Extract property name from string literal
                                 if index.kind() == "string" {
-                                    // Get the string content (without quotes)
+                                    // Get string content (without quotes)
                                     if let Ok(raw) = index.utf8_text(source) {
-                                        let prop_name = raw.trim_matches(|c| c == '"' || c == '\'');
+                                        let prop_name = language.strip_quotes(raw);
                                         let usage_range = Self::ts_to_lsp_range(node.range());
                                         let usage = SymbolUsage {
                                             symbol_id: symbol.id,
@@ -496,7 +494,7 @@ impl AnalysisPipeline {
         // Recurse into children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            Self::walk_for_property_accesses(child, source, graph);
+            Self::walk_for_property_accesses(language, child, source, graph);
         }
     }
 
@@ -564,7 +562,10 @@ impl AnalysisPipeline {
     #[inline]
     pub fn ts_to_lsp_range(range: tree_sitter::Range) -> Range {
         Range::new(
-            Position::new(range.start_point.row as u32, range.start_point.column as u32),
+            Position::new(
+                range.start_point.row as u32,
+                range.start_point.column as u32,
+            ),
             Position::new(range.end_point.row as u32, range.end_point.column as u32),
         )
     }
@@ -573,6 +574,8 @@ impl AnalysisPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::languages::javascript::JavaScript;
+    use crate::types::ScopeKind;
 
     #[test]
     fn test_ts_to_lsp_range() {
@@ -593,29 +596,23 @@ mod tests {
 
     #[test]
     fn test_node_to_scope_kind() {
+        // Use JavaScript as a concrete implementation to test the trait's default method
+        let js = JavaScript;
+
         assert_eq!(
-            AnalysisPipeline::node_to_scope_kind("function_declaration"),
+            js.node_to_scope_kind("function_declaration"),
             ScopeKind::Function
         );
+        assert_eq!(js.node_to_scope_kind("arrow_function"), ScopeKind::Function);
         assert_eq!(
-            AnalysisPipeline::node_to_scope_kind("arrow_function"),
-            ScopeKind::Function
-        );
-        assert_eq!(
-            AnalysisPipeline::node_to_scope_kind("class_declaration"),
+            js.node_to_scope_kind("class_declaration"),
             ScopeKind::Class
         );
+        assert_eq!(js.node_to_scope_kind("for_statement"), ScopeKind::Loop);
         assert_eq!(
-            AnalysisPipeline::node_to_scope_kind("for_statement"),
-            ScopeKind::Loop
-        );
-        assert_eq!(
-            AnalysisPipeline::node_to_scope_kind("if_statement"),
+            js.node_to_scope_kind("if_statement"),
             ScopeKind::Conditional
         );
-        assert_eq!(
-            AnalysisPipeline::node_to_scope_kind("statement_block"),
-            ScopeKind::Block
-        );
+        assert_eq!(js.node_to_scope_kind("statement_block"), ScopeKind::Block);
     }
 }

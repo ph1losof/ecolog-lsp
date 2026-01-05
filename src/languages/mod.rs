@@ -1,16 +1,15 @@
-use tree_sitter::{Language, Query, Node};
+use crate::types::{EnvSourceKind, ScopeKind};
 use compact_str::CompactString;
-use crate::types::EnvSourceKind;
+use tree_sitter::{Language, Node, Query};
 
-pub mod registry;
-pub mod javascript;
-pub mod typescript;
-pub mod python;
-pub mod rust;
 pub mod go;
+pub mod javascript;
+pub mod python;
+pub mod registry;
+pub mod rust;
+pub mod typescript;
 
 pub use registry::LanguageRegistry;
-
 
 /// Defines environment variable detection for a programming language
 pub trait LanguageSupport: Send + Sync {
@@ -117,6 +116,12 @@ pub trait LanguageSupport: Send + Sync {
         None
     }
 
+    /// Strip language-specific quote characters from a string literal
+    /// Default implementation removes double and single quotes
+    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
+        text.trim_matches(|c| c == '"' || c == '\'')
+    }
+
     // ─────────────────────────────────────────────────────────────
     // Validation
     // ─────────────────────────────────────────────────────────────
@@ -130,7 +135,7 @@ pub trait LanguageSupport: Send + Sync {
     fn is_standard_env_object(&self, _name: &str) -> bool {
         false
     }
-    
+
     /// Get the default environment object name (e.g. "process.env" or "os.environ")
     /// Used when the binding name is an object alias
     fn default_env_object_name(&self) -> Option<&'static str> {
@@ -141,5 +146,60 @@ pub trait LanguageSupport: Send + Sync {
     fn is_scope_node(&self, _node: Node) -> bool {
         // Default impl: program (whole file) is a scope
         _node.kind() == "program" || _node.kind() == "source_file" || _node.kind() == "module"
+    }
+
+    /// Check if a node is the root/document-level node (e.g. program, source_file, module)
+    /// These nodes represent the entire document and shouldn't create sub-scopes.
+    fn is_root_node(&self, node: Node) -> bool {
+        matches!(node.kind(), "program" | "source_file" | "module")
+    }
+
+    /// Map a tree-sitter node kind to a ScopeKind.
+    /// Override this in language implementations to customize scope classification.
+    fn node_to_scope_kind(&self, kind: &str) -> ScopeKind {
+        match kind {
+            // Functions
+            "function_declaration"
+            | "arrow_function"
+            | "function"
+            | "method_definition"
+            | "function_definition"
+            | "function_item"
+            | "func_literal"
+            | "closure_expression"
+            | "generator_function"
+            | "generator_function_declaration" => ScopeKind::Function,
+
+            // Classes
+            "class_declaration"
+            | "class_definition"
+            | "class_body"
+            | "impl_item"
+            | "trait_item"
+            | "class" => ScopeKind::Class,
+
+            // Loops
+            "for_statement"
+            | "for_expression"
+            | "while_statement"
+            | "while_expression"
+            | "loop_expression"
+            | "do_statement"
+            | "for_in_statement"
+            | "for_of_statement" => ScopeKind::Loop,
+
+            // Conditionals
+            "if_statement"
+            | "if_expression"
+            | "else_clause"
+            | "try_statement"
+            | "catch_clause"
+            | "match_expression"
+            | "switch_statement"
+            | "switch_case" => ScopeKind::Conditional,
+
+            // Everything else is a block
+            _ => ScopeKind::Block,
+        }
     }
 }

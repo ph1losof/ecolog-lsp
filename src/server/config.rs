@@ -1,9 +1,9 @@
 use serde::Deserialize;
-use std::path::Path;
-use std::fs;
-use tokio::sync::{Mutex, RwLock};
-use std::sync::Arc;
 use shelter::Masker;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EcologConfig {
@@ -175,5 +175,9 @@ impl ConfigManager {
     }
 }
 
-fn true_bool() -> bool { true }
-fn false_bool() -> bool { false }
+fn true_bool() -> bool {
+    true
+}
+fn false_bool() -> bool {
+    false
+}

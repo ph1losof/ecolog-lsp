@@ -276,7 +276,10 @@ pub enum SymbolOrigin {
 
     /// Destructured property from another symbol.
     /// Example: `const { DB_URL } = env` → DestructuredProperty { source: env's SymbolId, key: "DB_URL" }
-    DestructuredProperty { source: SymbolId, key: CompactString },
+    DestructuredProperty {
+        source: SymbolId,
+        key: CompactString,
+    },
 
     /// Origin is unknown or not environment-related.
     /// Used as a placeholder before resolution or for non-env symbols.

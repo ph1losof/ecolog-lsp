@@ -1,8 +1,8 @@
-use std::sync::OnceLock;
-use tree_sitter::{Language, Node, Query};
-use compact_str::CompactString;
 use crate::languages::LanguageSupport;
 use crate::types::EnvSourceKind;
+use compact_str::CompactString;
+use std::sync::OnceLock;
+use tree_sitter::{Language, Node, Query};
 
 pub struct JavaScript;
 
@@ -29,12 +29,24 @@ impl LanguageSupport for JavaScript {
         Some("process.env")
     }
 
+    fn known_env_modules(&self) -> &'static [&'static str] {
+        &["process"]
+    }
+
     fn is_scope_node(&self, node: Node) -> bool {
         match node.kind() {
-            "program" | "function_declaration" | "arrow_function" | 
-            "function" | "method_definition" | "class_body" | 
-            "statement_block" | "for_statement" | "if_statement" |
-            "else_clause" | "try_statement" | "catch_clause" => true,
+            "program"
+            | "function_declaration"
+            | "arrow_function"
+            | "function"
+            | "method_definition"
+            | "class_body"
+            | "statement_block"
+            | "for_statement"
+            | "if_statement"
+            | "else_clause"
+            | "try_statement"
+            | "catch_clause" => true,
             _ => false,
         }
     }
@@ -53,43 +65,61 @@ impl LanguageSupport for JavaScript {
 
     fn reference_query(&self) -> &Query {
         REFERENCE_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/references.scm"))
-                .expect("Failed to compile JavaScript reference query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/references.scm"),
+            )
+            .expect("Failed to compile JavaScript reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(BINDING_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/bindings.scm"))
-                .expect("Failed to compile JavaScript binding query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/bindings.scm"),
+            )
+            .expect("Failed to compile JavaScript binding query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(COMPLETION_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/completion.scm"))
-                .expect("Failed to compile JavaScript completion query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/completion.scm"),
+            )
+            .expect("Failed to compile JavaScript completion query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(IMPORT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/imports.scm"))
-                .expect("Failed to compile JavaScript import query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/imports.scm"),
+            )
+            .expect("Failed to compile JavaScript import query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/reassignments.scm"))
-                .expect("Failed to compile JavaScript reassignment query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/reassignments.scm"),
+            )
+            .expect("Failed to compile JavaScript reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/identifiers.scm"))
-                .expect("Failed to compile JavaScript identifier query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/identifiers.scm"),
+            )
+            .expect("Failed to compile JavaScript identifier query")
         }))
     }
 
@@ -99,22 +129,31 @@ impl LanguageSupport for JavaScript {
 
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/assignments.scm"))
-                .expect("Failed to compile JavaScript assignment query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/assignments.scm"),
+            )
+            .expect("Failed to compile JavaScript assignment query")
         }))
     }
 
     fn destructure_query(&self) -> Option<&Query> {
         Some(DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/destructures.scm"))
-                .expect("Failed to compile JavaScript destructure query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/destructures.scm"),
+            )
+            .expect("Failed to compile JavaScript destructure query")
         }))
     }
 
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/javascript/scopes.scm"))
-                .expect("Failed to compile JavaScript scope query")
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/scopes.scm"),
+            )
+            .expect("Failed to compile JavaScript scope query")
         }))
     }
 
@@ -141,7 +180,10 @@ impl LanguageSupport for JavaScript {
                 let inner_object_text = inner_object.utf8_text(source).ok()?;
                 let inner_property_text = inner_property.utf8_text(source).ok()?;
 
-                if inner_object_text == "import" && inner_property_text == "meta" && property_text == "env" {
+                if inner_object_text == "import"
+                    && inner_property_text == "meta"
+                    && property_text == "env"
+                {
                     return Some(EnvSourceKind::Object {
                         canonical_name: "import.meta.env".into(),
                     });
@@ -161,5 +203,10 @@ impl LanguageSupport for JavaScript {
         }
         // For shorthand like { KEY }, the node itself is the key
         node.utf8_text(source).ok().map(|s| s.into())
+    }
+
+    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
+        // JavaScript/TypeScript supports double quotes, single quotes, and backticks (template literals)
+        text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
 }

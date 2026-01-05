@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::analysis::DocumentManager;
 use crate::languages::LanguageRegistry;
 use abundantis::Abundantis;
 use shelter::Masker;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::server::config::ConfigManager;
 

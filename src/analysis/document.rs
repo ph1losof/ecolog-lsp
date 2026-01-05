@@ -1,11 +1,13 @@
-use std::sync::Arc;
-use dashmap::DashMap;
-use tower_lsp::lsp_types::{Url, TextDocumentContentChangeEvent, Position};
-use crate::types::{DocumentState, EnvReference, EnvBinding, ImportContext, EnvBindingUsage, BindingKind};
-use crate::languages::{LanguageRegistry, LanguageSupport};
-use crate::analysis::{QueryEngine, BindingGraph, AnalysisPipeline};
 use crate::analysis::resolver::BindingResolver;
+use crate::analysis::{AnalysisPipeline, BindingGraph, QueryEngine};
+use crate::languages::{LanguageRegistry, LanguageSupport};
+use crate::types::{
+    BindingKind, DocumentState, EnvBinding, EnvBindingUsage, EnvReference, ImportContext,
+};
 use compact_str::CompactString;
+use dashmap::DashMap;
+use std::sync::Arc;
+use tower_lsp::lsp_types::{Position, TextDocumentContentChangeEvent, Url};
 use tree_sitter::Tree;
 
 struct AnalysisResult {
@@ -34,10 +36,17 @@ impl DocumentManager {
 
     pub async fn open(&self, uri: Url, language_id: String, content: String, version: i32) {
         // Detect language
-        let lang_opt = self.languages.get_by_language_id(&language_id)
+        let lang_opt = self
+            .languages
+            .get_by_language_id(&language_id)
             .or_else(|| self.languages.get_for_uri(&uri));
 
-        let mut doc = DocumentState::new(uri.clone(), CompactString::from(&language_id), content.clone(), version);
+        let mut doc = DocumentState::new(
+            uri.clone(),
+            CompactString::from(&language_id),
+            content.clone(),
+            version,
+        );
 
         if let Some(lang) = lang_opt {
             let AnalysisResult {
@@ -56,7 +65,12 @@ impl DocumentManager {
         self.documents.insert(uri, doc);
     }
 
-    pub async fn change(&self, uri: &Url, changes: Vec<TextDocumentContentChangeEvent>, version: i32) {
+    pub async fn change(
+        &self,
+        uri: &Url,
+        changes: Vec<TextDocumentContentChangeEvent>,
+        version: i32,
+    ) {
         // 1. Update content and get snapshot (short lock)
         let (content, language_id) = {
             if let Some(mut doc) = self.documents.get_mut(uri) {
@@ -74,7 +88,9 @@ impl DocumentManager {
         };
 
         // 2. Analyze without lock
-        let lang_opt = self.languages.get_by_language_id(&language_id)
+        let lang_opt = self
+            .languages
+            .get_by_language_id(&language_id)
             .or_else(|| self.languages.get_for_uri(uri));
 
         if let Some(lang) = lang_opt {
@@ -95,7 +111,11 @@ impl DocumentManager {
         }
     }
 
-    async fn analyze_content(&self, content: &str, language: &dyn LanguageSupport) -> AnalysisResult {
+    async fn analyze_content(
+        &self,
+        content: &str,
+        language: &dyn LanguageSupport,
+    ) -> AnalysisResult {
         // Step 1: Parse the document
         let tree = self.query_engine.parse(language, content, None).await;
 
@@ -110,35 +130,36 @@ impl DocumentManager {
         let source = content.as_bytes();
 
         // Step 2: Extract imports (needed for reference validation)
-        let imports = self.query_engine.extract_imports(language, tree, source).await;
+        let imports = self
+            .query_engine
+            .extract_imports(language, tree, source)
+            .await;
 
         // Build ImportContext from extracted imports
         let mut import_ctx = ImportContext::new();
         for import in &imports {
-            import_ctx.imported_modules.insert(import.module_path.clone());
+            import_ctx
+                .imported_modules
+                .insert(import.module_path.clone());
 
             if let Some(alias) = &import.alias {
                 import_ctx.aliases.insert(
                     alias.clone(),
-                    (import.module_path.clone(), import.original_name.clone())
+                    (import.module_path.clone(), import.original_name.clone()),
                 );
             } else {
                 import_ctx.aliases.insert(
                     import.original_name.clone(),
-                    (import.module_path.clone(), import.original_name.clone())
+                    (import.module_path.clone(), import.original_name.clone()),
                 );
             }
         }
 
         // Step 3: Run the AnalysisPipeline to create the BindingGraph
         // This handles all reference extraction, binding tracking, and chain resolution
-        let binding_graph = AnalysisPipeline::analyze(
-            &self.query_engine,
-            language,
-            tree,
-            source,
-            &import_ctx,
-        ).await;
+        let binding_graph =
+            AnalysisPipeline::analyze(&self.query_engine, language, tree, source, &import_ctx)
+                .await;
 
         AnalysisResult {
             tree: Some(tree.clone()),
@@ -169,7 +190,11 @@ impl DocumentManager {
 
     /// Get a usage of an alias binding at the given position.
     /// Uses BindingGraph for resolution.
-    pub fn get_binding_usage_cloned(&self, uri: &Url, position: Position) -> Option<EnvBindingUsage> {
+    pub fn get_binding_usage_cloned(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<EnvBindingUsage> {
         let graph = self.binding_graphs.get(uri)?;
         let resolver = BindingResolver::new(&graph);
         resolver.get_binding_usage_cloned(position)
@@ -187,12 +212,15 @@ impl DocumentManager {
         if let Some(doc) = self.documents.get(uri) {
             if let Some(tree) = &doc.tree {
                 if let Some(lang) = self.languages.get_by_language_id(&doc.language_id) {
-                    let obj_name_opt = self.query_engine.check_completion_context(
-                        lang.as_ref(),
-                        tree,
-                        doc.content.as_bytes(),
-                        position
-                    ).await;
+                    let obj_name_opt = self
+                        .query_engine
+                        .check_completion_context(
+                            lang.as_ref(),
+                            tree,
+                            doc.content.as_bytes(),
+                            position,
+                        )
+                        .await;
 
                     if let Some(obj_name) = obj_name_opt {
                         if lang.is_standard_env_object(&obj_name) {
@@ -215,18 +243,25 @@ impl DocumentManager {
         false
     }
 
-    pub async fn check_completion_context(&self, uri: &Url, position: Position) -> Option<CompactString> {
+    pub async fn check_completion_context(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<CompactString> {
         if let Some(doc) = self.documents.get(uri) {
-             if let Some(tree) = &doc.tree {
-                 if let Some(lang) = self.languages.get_by_language_id(&doc.language_id) {
-                     return self.query_engine.check_completion_context(
-                         lang.as_ref(),
-                         tree,
-                         doc.content.as_bytes(),
-                         position
-                     ).await;
-                 }
-             }
+            if let Some(tree) = &doc.tree {
+                if let Some(lang) = self.languages.get_by_language_id(&doc.language_id) {
+                    return self
+                        .query_engine
+                        .check_completion_context(
+                            lang.as_ref(),
+                            tree,
+                            doc.content.as_bytes(),
+                            position,
+                        )
+                        .await;
+                }
+            }
         }
         None
     }
@@ -236,7 +271,10 @@ impl DocumentManager {
     // =========================================================================
 
     /// Get a reference to the binding graph for a document.
-    pub fn get_binding_graph(&self, uri: &Url) -> Option<dashmap::mapref::one::Ref<Url, BindingGraph>> {
+    pub fn get_binding_graph(
+        &self,
+        uri: &Url,
+    ) -> Option<dashmap::mapref::one::Ref<Url, BindingGraph>> {
         self.binding_graphs.get(uri)
     }
 }
