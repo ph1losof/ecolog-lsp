@@ -281,15 +281,25 @@ impl<'a> BindingResolver<'a> {
     /// Find all locations where an env var is used (directly or through bindings).
     pub fn find_env_var_usages(&self, env_var_name: &str) -> Vec<EnvVarUsageLocation> {
         let mut locations = Vec::new();
+        let mut seen_ranges = std::collections::HashSet::new();
 
         // 1. Direct references
         for reference in self.graph.direct_references() {
             if reference.name == env_var_name {
-                locations.push(EnvVarUsageLocation {
-                    range: reference.name_range,
-                    kind: UsageKind::DirectReference,
-                    binding_name: None,
-                });
+                // Deduplicate by range
+                let range_key = (
+                    reference.name_range.start.line,
+                    reference.name_range.start.character,
+                    reference.name_range.end.line,
+                    reference.name_range.end.character,
+                );
+                if seen_ranges.insert(range_key) {
+                    locations.push(EnvVarUsageLocation {
+                        range: reference.name_range,
+                        kind: UsageKind::DirectReference,
+                        binding_name: None,
+                    });
+                }
             }
         }
 
@@ -316,11 +326,20 @@ impl<'a> BindingResolver<'a> {
                         };
 
                         if let Some(range) = rename_range {
-                            locations.push(EnvVarUsageLocation {
-                                range,
-                                kind: UsageKind::BindingDeclaration,
-                                binding_name: Some(symbol.name.clone()),
-                            });
+                            // Deduplicate by range
+                            let range_key = (
+                                range.start.line,
+                                range.start.character,
+                                range.end.line,
+                                range.end.character,
+                            );
+                            if seen_ranges.insert(range_key) {
+                                locations.push(EnvVarUsageLocation {
+                                    range,
+                                    kind: UsageKind::BindingDeclaration,
+                                    binding_name: Some(symbol.name.clone()),
+                                });
+                            }
                         }
                     }
                 }
@@ -332,15 +351,24 @@ impl<'a> BindingResolver<'a> {
             if let Some(resolved) = self.graph.resolve_to_env(usage.symbol_id) {
                 match &resolved {
                     ResolvedEnv::Variable(name) if name == env_var_name => {
-                        let binding_name = self
-                            .graph
-                            .get_symbol(usage.symbol_id)
-                            .map(|s| s.name.clone());
-                        locations.push(EnvVarUsageLocation {
-                            range: usage.range,
-                            kind: UsageKind::BindingUsage,
-                            binding_name,
-                        });
+                        // Deduplicate by range
+                        let range_key = (
+                            usage.range.start.line,
+                            usage.range.start.character,
+                            usage.range.end.line,
+                            usage.range.end.character,
+                        );
+                        if seen_ranges.insert(range_key) {
+                            let binding_name = self
+                                .graph
+                                .get_symbol(usage.symbol_id)
+                                .map(|s| s.name.clone());
+                            locations.push(EnvVarUsageLocation {
+                                range: usage.range,
+                                kind: UsageKind::BindingUsage,
+                                binding_name,
+                            });
+                        }
                     }
                     ResolvedEnv::Object(_) => {
                         // Check property access
@@ -349,15 +377,24 @@ impl<'a> BindingResolver<'a> {
                                 // Use property_access_range if available (for rename),
                                 // otherwise fall back to usage.range
                                 let range = usage.property_access_range.unwrap_or(usage.range);
-                                let binding_name = self
-                                    .graph
-                                    .get_symbol(usage.symbol_id)
-                                    .map(|s| s.name.clone());
-                                locations.push(EnvVarUsageLocation {
-                                    range,
-                                    kind: UsageKind::PropertyAccess,
-                                    binding_name,
-                                });
+                                // Deduplicate by range
+                                let range_key = (
+                                    range.start.line,
+                                    range.start.character,
+                                    range.end.line,
+                                    range.end.character,
+                                );
+                                if seen_ranges.insert(range_key) {
+                                    let binding_name = self
+                                        .graph
+                                        .get_symbol(usage.symbol_id)
+                                        .map(|s| s.name.clone());
+                                    locations.push(EnvVarUsageLocation {
+                                        range,
+                                        kind: UsageKind::PropertyAccess,
+                                        binding_name,
+                                    });
+                                }
                             }
                         }
                     }

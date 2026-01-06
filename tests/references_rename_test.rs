@@ -500,3 +500,81 @@ async fn test_workspace_index_files_for_env_var() {
         api_key_files.len()
     );
 }
+
+/// Test that renaming one env var doesn't affect similarly-named vars.
+/// For example, renaming `DEBUG` to `SOMEWHAT` should NOT affect `DEBUGHAT`.
+#[tokio::test]
+async fn test_rename_does_not_affect_similar_names() {
+    let fixture = TestFixture::new().await;
+
+    // Create .env file with both DEBUG and DEBUGHAT
+    let env_uri = fixture.create_file(".env", "DEBUG=on\nDEBUGHAT=value");
+
+    // Create code file with both references
+    let js_content = "const d = process.env.DEBUG;\nconst dh = process.env.DEBUGHAT;";
+    let js_uri = fixture.create_file("app.js", js_content);
+
+    // Index workspace
+    fixture.index_workspace().await;
+
+    // Open files
+    fixture
+        .state
+        .document_manager
+        .open(
+            env_uri.clone(),
+            "plaintext".to_string(),
+            "DEBUG=on\nDEBUGHAT=value".to_string(),
+            1,
+        )
+        .await;
+    fixture
+        .state
+        .document_manager
+        .open(
+            js_uri.clone(),
+            "javascript".to_string(),
+            js_content.to_string(),
+            1,
+        )
+        .await;
+
+    // Rename DEBUG to SOMEWHAT (should NOT affect DEBUGHAT)
+    let params = RenameParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: env_uri.clone() },
+            position: Position {
+                line: 0,
+                character: 0, // On DEBUG in .env
+            },
+        },
+        new_name: "SOMEWHAT".to_string(),
+        work_done_progress_params: Default::default(),
+    };
+
+    let result = handle_rename(params, &fixture.state).await;
+
+    assert!(result.is_some(), "Rename should succeed");
+    let edit = result.unwrap();
+    let changes = edit.changes.expect("Should have changes");
+
+    // Check .env edits
+    let env_edits = changes.get(&env_uri).expect(".env should have edits");
+    assert_eq!(env_edits.len(), 1, "Should only rename DEBUG, not DEBUGHAT");
+
+    // The edit should be for "DEBUG" only (at line 0, chars 0-5)
+    let first_edit = &env_edits[0];
+    assert_eq!(first_edit.new_text, "SOMEWHAT");
+    assert_eq!(first_edit.range.start.line, 0);
+    assert_eq!(first_edit.range.start.character, 0);
+    assert_eq!(first_edit.range.end.line, 0);
+    assert_eq!(first_edit.range.end.character, 5); // "DEBUG" is 5 chars
+
+    // Check JS edits
+    if let Some(js_edits) = changes.get(&js_uri) {
+        assert_eq!(js_edits.len(), 1, "Should only rename DEBUG reference, not DEBUGHAT");
+        let js_edit = &js_edits[0];
+        assert_eq!(js_edit.new_text, "SOMEWHAT");
+        // DEBUG is at position 22-27 in "const d = process.env.DEBUG;"
+    }
+}
