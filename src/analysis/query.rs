@@ -9,6 +9,14 @@ use tokio::sync::Mutex;
 use tower_lsp::lsp_types::Range as LspRange;
 use tree_sitter::{Parser, Query, QueryCursor, QueryMatch, Tree};
 
+/// Maximum number of parsers to keep per language in the pool.
+/// Excess parsers are dropped to prevent memory growth.
+const MAX_PARSERS_PER_LANGUAGE: usize = 4;
+
+/// Maximum number of query cursors to keep in the pool.
+/// Excess cursors are dropped to prevent memory growth.
+const MAX_CURSORS: usize = 8;
+
 /// Pool of parsers to reuse allocations
 pub struct ParserPool {
     parsers: HashMap<&'static str, Vec<Parser>>,
@@ -38,7 +46,12 @@ impl ParserPool {
 
     pub fn release(&mut self, language_id: &'static str, mut parser: Parser) {
         parser.reset();
-        self.parsers.entry(language_id).or_default().push(parser);
+        let parsers = self.parsers.entry(language_id).or_default();
+        // Only keep up to MAX_PARSERS_PER_LANGUAGE parsers to prevent memory growth
+        if parsers.len() < MAX_PARSERS_PER_LANGUAGE {
+            parsers.push(parser);
+        }
+        // Otherwise drop the parser (deallocate)
     }
 }
 
@@ -100,8 +113,12 @@ impl QueryEngine {
             }
         }
 
+        // Return cursor to pool, but only if under capacity
         let mut cursor_guard = self.cursor_pool.lock().await;
-        cursor_guard.push(cursor);
+        if cursor_guard.len() < MAX_CURSORS {
+            cursor_guard.push(cursor);
+        }
+        // Otherwise drop the cursor (deallocate)
 
         results
     }

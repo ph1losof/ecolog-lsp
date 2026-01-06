@@ -9,8 +9,24 @@ use crate::languages::LanguageSupport;
 use crate::types::{
     ImportContext, Scope, ScopeId, Symbol, SymbolId, SymbolKind, SymbolOrigin, SymbolUsage,
 };
+use compact_str::CompactString;
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::Tree;
+
+/// Candidate property access collected during tree walk, to be processed after symbol resolution.
+#[derive(Debug)]
+struct PropertyAccessCandidate {
+    /// Object name (e.g., "env" in env.API_KEY)
+    object_name: CompactString,
+    /// Property name (e.g., "API_KEY" in env.API_KEY)
+    property_name: CompactString,
+    /// Range of the entire expression
+    usage_range: Range,
+    /// Range of just the property name
+    property_range: Range,
+    /// Position of the object (for scope lookup)
+    object_position: Position,
+}
 
 /// Orchestrates multi-phase analysis to build a BindingGraph.
 pub struct AnalysisPipeline;
@@ -38,8 +54,12 @@ impl AnalysisPipeline {
         let root_range = Self::ts_to_lsp_range(tree.root_node().range());
         graph.set_root_range(root_range);
 
-        // Phase 1: Extract scopes
-        Self::extract_scopes(language, tree, &mut graph);
+        // Phase 1: Extract scopes AND collect property access candidates in a single tree walk
+        // This optimization reduces tree traversals from 2 to 1 by combining:
+        // - Scope extraction (Phase 1)
+        // - Property access candidate collection (previously done in Phase 5)
+        let property_candidates =
+            Self::extract_scopes_and_collect_property_accesses(language, tree, source, &mut graph);
 
         // Phase 2: Extract direct references
         Self::extract_direct_references(
@@ -58,28 +78,52 @@ impl AnalysisPipeline {
         // Phase 4: Resolve origins (build chains)
         Self::resolve_origins(&mut graph);
 
-        // Phase 5: Extract usages
+        // Phase 5: Extract usages (identifiers only, property accesses already collected)
         Self::extract_usages(query_engine, language, tree, source, &mut graph).await;
+
+        // Phase 5b: Process collected property access candidates (now that symbol table is populated)
+        Self::process_property_access_candidates(&property_candidates, &mut graph);
 
         // Phase 6: Process reassignments
         Self::process_reassignments(query_engine, language, tree, source, &mut graph).await;
+
+        // Phase 7: Rebuild range index for fast destructure key lookups
+        graph.rebuild_range_index();
 
         graph
     }
 
     // =========================================================================
-    // Phase 1: Extract Scopes
+    // Phase 1: Combined Scope Extraction and Property Access Collection
     // =========================================================================
 
-    fn extract_scopes(language: &dyn LanguageSupport, tree: &Tree, graph: &mut BindingGraph) {
-        Self::walk_for_scopes(tree.root_node(), language, graph, ScopeId::root());
+    /// Combined tree walk that extracts scopes AND collects property access candidates.
+    /// This optimization reduces tree traversals from 2 to 1.
+    fn extract_scopes_and_collect_property_accesses(
+        language: &dyn LanguageSupport,
+        tree: &Tree,
+        source: &[u8],
+        graph: &mut BindingGraph,
+    ) -> Vec<PropertyAccessCandidate> {
+        let mut candidates = Vec::new();
+        Self::walk_combined(
+            tree.root_node(),
+            language,
+            source,
+            graph,
+            ScopeId::root(),
+            &mut candidates,
+        );
+        candidates
     }
 
-    fn walk_for_scopes(
+    fn walk_combined(
         node: tree_sitter::Node,
         language: &dyn LanguageSupport,
+        source: &[u8],
         graph: &mut BindingGraph,
         parent_scope: ScopeId,
+        candidates: &mut Vec<PropertyAccessCandidate>,
     ) {
         // Check if this node creates a new scope
         // Skip root nodes (program/source_file/module) as they are already the root scope
@@ -96,10 +140,127 @@ impl AnalysisPipeline {
             parent_scope
         };
 
+        // Collect property access candidates (member_expression: obj.property)
+        if node.kind() == "member_expression" {
+            if let Some(candidate) = Self::extract_member_expression_candidate(node, source) {
+                candidates.push(candidate);
+            }
+        }
+
+        // Collect subscript expression candidates (obj["property"])
+        if node.kind() == "subscript_expression" {
+            if let Some(candidate) =
+                Self::extract_subscript_expression_candidate(node, source, language)
+            {
+                candidates.push(candidate);
+            }
+        }
+
         // Recurse to children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            Self::walk_for_scopes(child, language, graph, current_scope);
+            Self::walk_combined(child, language, source, graph, current_scope, candidates);
+        }
+    }
+
+    /// Extract a property access candidate from a member_expression node.
+    fn extract_member_expression_candidate(
+        node: tree_sitter::Node,
+        source: &[u8],
+    ) -> Option<PropertyAccessCandidate> {
+        let object = node.child_by_field_name("object")?;
+        let property = node.child_by_field_name("property")?;
+
+        // Only handle simple identifier objects
+        if object.kind() != "identifier" {
+            return None;
+        }
+
+        let obj_name = object.utf8_text(source).ok()?;
+        let prop_name = property.utf8_text(source).ok()?;
+
+        Some(PropertyAccessCandidate {
+            object_name: obj_name.into(),
+            property_name: prop_name.into(),
+            usage_range: Self::ts_to_lsp_range(node.range()),
+            property_range: Self::ts_to_lsp_range(property.range()),
+            object_position: Position::new(
+                object.start_position().row as u32,
+                object.start_position().column as u32,
+            ),
+        })
+    }
+
+    /// Extract a property access candidate from a subscript_expression node.
+    fn extract_subscript_expression_candidate(
+        node: tree_sitter::Node,
+        source: &[u8],
+        language: &dyn LanguageSupport,
+    ) -> Option<PropertyAccessCandidate> {
+        let object = node.child_by_field_name("object")?;
+        let index = node.child_by_field_name("index")?;
+
+        // Only handle simple identifier objects
+        if object.kind() != "identifier" {
+            return None;
+        }
+
+        // Only handle string literal indices
+        if index.kind() != "string" {
+            return None;
+        }
+
+        let obj_name = object.utf8_text(source).ok()?;
+        let raw = index.utf8_text(source).ok()?;
+        let prop_name = language.strip_quotes(raw);
+
+        // Calculate the range of just the string content (without quotes)
+        let index_range = index.range();
+        let prop_range = Range {
+            start: Position {
+                line: index_range.start_point.row as u32,
+                character: index_range.start_point.column as u32 + 1, // skip opening quote
+            },
+            end: Position {
+                line: index_range.end_point.row as u32,
+                character: index_range.end_point.column as u32 - 1, // skip closing quote
+            },
+        };
+
+        Some(PropertyAccessCandidate {
+            object_name: obj_name.into(),
+            property_name: prop_name.into(),
+            usage_range: Self::ts_to_lsp_range(node.range()),
+            property_range: prop_range,
+            object_position: Position::new(
+                object.start_position().row as u32,
+                object.start_position().column as u32,
+            ),
+        })
+    }
+
+    /// Process collected property access candidates after symbol table is populated.
+    fn process_property_access_candidates(
+        candidates: &[PropertyAccessCandidate],
+        graph: &mut BindingGraph,
+    ) {
+        for candidate in candidates {
+            let scope = graph.scope_at_position(candidate.object_position);
+
+            // Look up the object symbol
+            if let Some(symbol) = graph.lookup_symbol(&candidate.object_name, scope) {
+                // Check if this symbol resolves to an env object
+                if graph.resolves_to_env_object(symbol.id) {
+                    let usage = SymbolUsage {
+                        symbol_id: symbol.id,
+                        range: candidate.usage_range,
+                        scope,
+                        property_access: Some(candidate.property_name.clone()),
+                        property_access_range: Some(candidate.property_range),
+                    };
+                    graph.add_usage(usage);
+                }
+            }
         }
     }
 
@@ -279,19 +440,9 @@ impl AnalysisPipeline {
     // =========================================================================
 
     fn resolve_origins(graph: &mut BindingGraph) {
-        // Build a name -> symbol ID map for the entire graph
-        // This allows us to resolve forward references
-        let mut name_to_id: std::collections::HashMap<
-            (compact_str::CompactString, ScopeId),
-            SymbolId,
-        > = std::collections::HashMap::new();
-
-        for symbol in graph.symbols() {
-            let key = (symbol.name.clone(), symbol.scope);
-            name_to_id.insert(key, symbol.id);
-        }
-
         // Collect symbols needing resolution (to avoid borrow issues)
+        // Uses BindingGraph's existing name_index via lookup_symbol_id instead of
+        // creating a temporary HashMap, reducing memory churn.
         let symbols_to_resolve: Vec<(SymbolId, ScopeId, SymbolOrigin)> = graph
             .symbols()
             .iter()
@@ -305,18 +456,20 @@ impl AnalysisPipeline {
             .map(|s| (s.id, s.scope, s.origin.clone()))
             .collect();
 
-        // Resolve each unresolved symbol
+        // Resolve each unresolved symbol using graph's lookup methods
         for (symbol_id, scope, origin) in symbols_to_resolve {
             let new_origin = match origin {
                 SymbolOrigin::UnresolvedSymbol { source_name } => {
-                    // Try to find source symbol by walking up the scope chain
-                    Self::lookup_in_scope_chain(&name_to_id, graph, &source_name, scope)
+                    // Use BindingGraph's built-in lookup which walks the scope chain
+                    graph
+                        .lookup_symbol_id(&source_name, scope)
                         .map(|target| SymbolOrigin::Symbol { target })
                         .unwrap_or(SymbolOrigin::Unresolvable)
                 }
                 SymbolOrigin::UnresolvedDestructure { source_name, key } => {
-                    // Try to find source symbol by walking up the scope chain
-                    Self::lookup_in_scope_chain(&name_to_id, graph, &source_name, scope)
+                    // Use BindingGraph's built-in lookup which walks the scope chain
+                    graph
+                        .lookup_symbol_id(&source_name, scope)
                         .map(|source| SymbolOrigin::DestructuredProperty { source, key })
                         .unwrap_or(SymbolOrigin::Unresolvable)
                 }
@@ -328,31 +481,6 @@ impl AnalysisPipeline {
                 sym.origin = new_origin;
             }
         }
-    }
-
-    /// Look up a symbol name in the scope chain, trying current scope first,
-    /// then walking up to parent scopes.
-    fn lookup_in_scope_chain(
-        name_to_id: &std::collections::HashMap<(compact_str::CompactString, ScopeId), SymbolId>,
-        graph: &BindingGraph,
-        name: &str,
-        start_scope: ScopeId,
-    ) -> Option<SymbolId> {
-        let name = compact_str::CompactString::from(name);
-        let mut current_scope = Some(start_scope);
-
-        while let Some(scope_id) = current_scope {
-            // Try to find in current scope
-            let key = (name.clone(), scope_id);
-            if let Some(&symbol_id) = name_to_id.get(&key) {
-                return Some(symbol_id);
-            }
-
-            // Walk up to parent scope
-            current_scope = graph.get_scope(scope_id).and_then(|s| s.parent);
-        }
-
-        None
     }
 
     // =========================================================================
@@ -398,121 +526,9 @@ impl AnalysisPipeline {
             }
         }
 
-        // Handle property access on object aliases (env.VAR, env["VAR"])
-        Self::extract_property_accesses(language, tree, source, graph);
-    }
-
-    /// Extract property accesses on env object aliases (e.g., env.API_KEY, env["SECRET"])
-    fn extract_property_accesses(
-        language: &dyn LanguageSupport,
-        tree: &Tree,
-        source: &[u8],
-        graph: &mut BindingGraph,
-    ) {
-        Self::walk_for_property_accesses(language, tree.root_node(), source, graph);
-    }
-
-    fn walk_for_property_accesses(
-        language: &dyn LanguageSupport,
-        node: tree_sitter::Node,
-        source: &[u8],
-        graph: &mut BindingGraph,
-    ) {
-        // Check for member_expression: obj.property
-        if node.kind() == "member_expression" {
-            if let (Some(object), Some(property)) = (
-                node.child_by_field_name("object"),
-                node.child_by_field_name("property"),
-            ) {
-                // Check if object is an identifier that resolves to an env object
-                if object.kind() == "identifier" {
-                    if let Ok(obj_name) = object.utf8_text(source) {
-                        let scope = graph.scope_at_position(Position::new(
-                            object.start_position().row as u32,
-                            object.start_position().column as u32,
-                        ));
-
-                        if let Some(symbol) = graph.lookup_symbol(obj_name, scope) {
-                            // Check if this symbol resolves to an env object
-                            if graph.resolves_to_env_object(symbol.id) {
-                                if let Ok(prop_name) = property.utf8_text(source) {
-                                    // Create a usage with property access
-                                    let usage_range = Self::ts_to_lsp_range(node.range());
-                                    let prop_range = Self::ts_to_lsp_range(property.range());
-                                    let usage = SymbolUsage {
-                                        symbol_id: symbol.id,
-                                        range: usage_range,
-                                        scope,
-                                        property_access: Some(prop_name.into()),
-                                        property_access_range: Some(prop_range),
-                                    };
-                                    graph.add_usage(usage);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check for subscript_expression: obj["property"]
-        if node.kind() == "subscript_expression" {
-            if let (Some(object), Some(index)) = (
-                node.child_by_field_name("object"),
-                node.child_by_field_name("index"),
-            ) {
-                // Check if object is an identifier that resolves to an env object
-                if object.kind() == "identifier" {
-                    if let Ok(obj_name) = object.utf8_text(source) {
-                        let scope = graph.scope_at_position(Position::new(
-                            object.start_position().row as u32,
-                            object.start_position().column as u32,
-                        ));
-
-                        if let Some(symbol) = graph.lookup_symbol(obj_name, scope) {
-                            // Check if this symbol resolves to an env object
-                            if graph.resolves_to_env_object(symbol.id) {
-                                // Extract property name from string literal
-                                if index.kind() == "string" {
-                                    // Get string content (without quotes)
-                                    if let Ok(raw) = index.utf8_text(source) {
-                                        let prop_name = language.strip_quotes(raw);
-                                        let usage_range = Self::ts_to_lsp_range(node.range());
-                                        // Calculate the range of just the string content (without quotes)
-                                        // The string node includes quotes, so offset by 1 on each side
-                                        let index_range = index.range();
-                                        let prop_range = Range {
-                                            start: Position {
-                                                line: index_range.start_point.row as u32,
-                                                character: index_range.start_point.column as u32 + 1, // skip opening quote
-                                            },
-                                            end: Position {
-                                                line: index_range.end_point.row as u32,
-                                                character: index_range.end_point.column as u32 - 1, // skip closing quote
-                                            },
-                                        };
-                                        let usage = SymbolUsage {
-                                            symbol_id: symbol.id,
-                                            range: usage_range,
-                                            scope,
-                                            property_access: Some(prop_name.into()),
-                                            property_access_range: Some(prop_range),
-                                        };
-                                        graph.add_usage(usage);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Recurse into children
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            Self::walk_for_property_accesses(language, child, source, graph);
-        }
+        // Note: Property access handling (env.VAR, env["VAR"]) is now done via
+        // candidates collected during Phase 1's combined tree walk and processed
+        // in Phase 5b (process_property_access_candidates).
     }
 
     // =========================================================================

@@ -16,10 +16,16 @@ struct AnalysisResult {
     binding_graph: BindingGraph,
 }
 
+/// Unified document entry containing both state and analysis results.
+/// This prevents desynchronization between document state and binding graph.
+pub struct DocumentEntry {
+    pub state: DocumentState,
+    pub binding_graph: BindingGraph,
+}
+
 pub struct DocumentManager {
-    documents: DashMap<Url, DocumentState>,
-    /// Binding graphs for enhanced resolution (parallel to documents).
-    binding_graphs: DashMap<Url, BindingGraph>,
+    /// Unified document storage (state + binding graph together).
+    documents: DashMap<Url, DocumentEntry>,
     query_engine: Arc<QueryEngine>,
     languages: Arc<LanguageRegistry>,
 }
@@ -28,7 +34,6 @@ impl DocumentManager {
     pub fn new(query_engine: Arc<QueryEngine>, languages: Arc<LanguageRegistry>) -> Self {
         Self {
             documents: DashMap::new(),
-            binding_graphs: DashMap::new(),
             query_engine,
             languages,
         }
@@ -48,7 +53,7 @@ impl DocumentManager {
             version,
         );
 
-        if let Some(lang) = lang_opt {
+        let binding_graph = if let Some(lang) = lang_opt {
             let AnalysisResult {
                 tree,
                 import_context,
@@ -57,12 +62,19 @@ impl DocumentManager {
 
             doc.tree = tree;
             doc.import_context = import_context;
-            self.binding_graphs.insert(uri.clone(), binding_graph);
+            binding_graph
         } else {
-            self.binding_graphs.insert(uri.clone(), BindingGraph::new());
-        }
+            BindingGraph::new()
+        };
 
-        self.documents.insert(uri, doc);
+        // Atomic insert of unified entry
+        self.documents.insert(
+            uri,
+            DocumentEntry {
+                state: doc,
+                binding_graph,
+            },
+        );
     }
 
     pub async fn change(
@@ -73,15 +85,15 @@ impl DocumentManager {
     ) {
         // 1. Update content and get snapshot (short lock)
         let (content, language_id) = {
-            if let Some(mut doc) = self.documents.get_mut(uri) {
+            if let Some(mut entry) = self.documents.get_mut(uri) {
                 // Apply changes - assuming FULL sync mode
                 for change in changes {
                     if change.range.is_none() {
-                        doc.content = change.text;
+                        entry.state.content = change.text;
                     }
                 }
-                doc.version = version;
-                (doc.content.clone(), doc.language_id.clone())
+                entry.state.version = version;
+                (entry.state.content.clone(), entry.state.language_id.clone())
             } else {
                 return;
             }
@@ -100,12 +112,12 @@ impl DocumentManager {
                 binding_graph,
             } = self.analyze_content(&content, lang.as_ref()).await;
 
-            // 3. Apply results if version matches (short lock)
-            if let Some(mut doc) = self.documents.get_mut(uri) {
-                if doc.version == version {
-                    doc.tree = tree;
-                    doc.import_context = import_context;
-                    self.binding_graphs.insert(uri.clone(), binding_graph);
+            // 3. Apply results atomically if version matches (short lock)
+            if let Some(mut entry) = self.documents.get_mut(uri) {
+                if entry.state.version == version {
+                    entry.state.tree = tree;
+                    entry.state.import_context = import_context;
+                    entry.binding_graph = binding_graph;
                 }
             }
         }
@@ -168,23 +180,23 @@ impl DocumentManager {
         }
     }
 
-    pub fn get(&self, uri: &Url) -> Option<dashmap::mapref::one::Ref<Url, DocumentState>> {
-        self.documents.get(uri)
+    pub fn get(&self, uri: &Url) -> Option<dashmap::mapref::one::MappedRef<Url, DocumentEntry, DocumentState>> {
+        self.documents.get(uri).map(|entry| entry.map(|e| &e.state))
     }
 
     /// Get an environment variable reference at the given position (cloned for thread safety).
     /// Uses BindingGraph for resolution.
     pub fn get_env_reference_cloned(&self, uri: &Url, position: Position) -> Option<EnvReference> {
-        let graph = self.binding_graphs.get(uri)?;
-        let resolver = BindingResolver::new(&graph);
+        let entry = self.documents.get(uri)?;
+        let resolver = BindingResolver::new(&entry.binding_graph);
         resolver.get_env_reference_cloned(position)
     }
 
     /// Get an environment variable binding at the given position (cloned for thread safety).
     /// Uses BindingGraph for resolution.
     pub fn get_env_binding_cloned(&self, uri: &Url, position: Position) -> Option<EnvBinding> {
-        let graph = self.binding_graphs.get(uri)?;
-        let resolver = BindingResolver::new(&graph);
+        let entry = self.documents.get(uri)?;
+        let resolver = BindingResolver::new(&entry.binding_graph);
         resolver.get_env_binding_cloned(position)
     }
 
@@ -195,29 +207,29 @@ impl DocumentManager {
         uri: &Url,
         position: Position,
     ) -> Option<EnvBindingUsage> {
-        let graph = self.binding_graphs.get(uri)?;
-        let resolver = BindingResolver::new(&graph);
+        let entry = self.documents.get(uri)?;
+        let resolver = BindingResolver::new(&entry.binding_graph);
         resolver.get_binding_usage_cloned(position)
     }
 
     /// Get the BindingKind for a usage by looking up its original binding declaration.
     /// Uses BindingGraph for resolution.
     pub fn get_binding_kind_for_usage(&self, uri: &Url, binding_name: &str) -> Option<BindingKind> {
-        let graph = self.binding_graphs.get(uri)?;
-        let resolver = BindingResolver::new(&graph);
+        let entry = self.documents.get(uri)?;
+        let resolver = BindingResolver::new(&entry.binding_graph);
         resolver.get_binding_kind(binding_name)
     }
 
     pub async fn check_completion(&self, uri: &Url, position: Position) -> bool {
-        if let Some(doc) = self.documents.get(uri) {
-            if let Some(tree) = &doc.tree {
-                if let Some(lang) = self.languages.get_by_language_id(&doc.language_id) {
+        if let Some(entry) = self.documents.get(uri) {
+            if let Some(tree) = &entry.state.tree {
+                if let Some(lang) = self.languages.get_by_language_id(&entry.state.language_id) {
                     let obj_name_opt = self
                         .query_engine
                         .check_completion_context(
                             lang.as_ref(),
                             tree,
-                            doc.content.as_bytes(),
+                            entry.state.content.as_bytes(),
                             position,
                         )
                         .await;
@@ -228,12 +240,10 @@ impl DocumentManager {
                         }
 
                         // Check if obj_name is an env object alias via BindingGraph
-                        if let Some(graph) = self.binding_graphs.get(uri) {
-                            let resolver = BindingResolver::new(&graph);
-                            if let Some(kind) = resolver.get_binding_kind(&obj_name) {
-                                if kind == BindingKind::Object {
-                                    return true;
-                                }
+                        let resolver = BindingResolver::new(&entry.binding_graph);
+                        if let Some(kind) = resolver.get_binding_kind(&obj_name) {
+                            if kind == BindingKind::Object {
+                                return true;
                             }
                         }
                     }
@@ -248,15 +258,15 @@ impl DocumentManager {
         uri: &Url,
         position: Position,
     ) -> Option<CompactString> {
-        if let Some(doc) = self.documents.get(uri) {
-            if let Some(tree) = &doc.tree {
-                if let Some(lang) = self.languages.get_by_language_id(&doc.language_id) {
+        if let Some(entry) = self.documents.get(uri) {
+            if let Some(tree) = &entry.state.tree {
+                if let Some(lang) = self.languages.get_by_language_id(&entry.state.language_id) {
                     return self
                         .query_engine
                         .check_completion_context(
                             lang.as_ref(),
                             tree,
-                            doc.content.as_bytes(),
+                            entry.state.content.as_bytes(),
                             position,
                         )
                         .await;
@@ -274,8 +284,8 @@ impl DocumentManager {
     pub fn get_binding_graph(
         &self,
         uri: &Url,
-    ) -> Option<dashmap::mapref::one::Ref<Url, BindingGraph>> {
-        self.binding_graphs.get(uri)
+    ) -> Option<dashmap::mapref::one::MappedRef<Url, DocumentEntry, BindingGraph>> {
+        self.documents.get(uri).map(|entry| entry.map(|e| &e.binding_graph))
     }
 
     /// Get all open document URIs.

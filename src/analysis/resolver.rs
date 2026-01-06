@@ -149,6 +149,12 @@ impl<'a> BindingResolver<'a> {
     /// Find an env var at the given position.
     /// Checks direct references, symbol declarations, destructured keys, and symbol usages.
     pub fn env_at_position(&self, position: Position) -> Option<EnvHit<'a>> {
+        tracing::trace!(
+            "Looking up env at position line={}, char={}",
+            position.line,
+            position.character
+        );
+
         // 1. Check direct references first (highest priority)
         for reference in self.graph.direct_references() {
             if BindingGraph::contains_position(reference.full_range, position)
@@ -167,12 +173,11 @@ impl<'a> BindingResolver<'a> {
 
         // 3. Check destructured property keys (e.g., hovering over API_KEY in `{ API_KEY: apiKey }`)
         // This is separate from symbol_at_position because the key range is different from the name range
-        for symbol in self.graph.symbols() {
-            if let Some(key_range) = symbol.destructured_key_range {
-                if BindingGraph::contains_position(key_range, position) {
-                    if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
-                        return Some(EnvHit::ViaSymbol { symbol, resolved });
-                    }
+        // Using optimized range index for O(log n) lookup instead of O(n) iteration
+        if let Some(symbol_id) = self.graph.symbol_at_destructure_key(position) {
+            if let Some(symbol) = self.graph.get_symbol(symbol_id) {
+                if let Some(resolved) = self.graph.resolve_to_env(symbol_id) {
+                    return Some(EnvHit::ViaSymbol { symbol, resolved });
                 }
             }
         }
@@ -203,6 +208,11 @@ impl<'a> BindingResolver<'a> {
             }
         }
 
+        tracing::debug!(
+            "No env var found at position line={}, char={}",
+            position.line,
+            position.character
+        );
         None
     }
 

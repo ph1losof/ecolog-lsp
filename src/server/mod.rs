@@ -1,9 +1,12 @@
 pub mod config;
 pub mod env_resolution;
+pub mod error;
 pub mod handlers;
 pub mod semantic_tokens;
 pub mod state;
 pub mod util;
+
+pub use error::LspError;
 
 use crate::analysis::{DocumentManager, QueryEngine};
 use crate::languages::LanguageRegistry;
@@ -177,7 +180,7 @@ impl LspServer {
         } else {
             // For code files, extract env var references from binding graph
             if let Some(graph_ref) = self.state.document_manager.get_binding_graph(uri) {
-                let resolver = BindingResolver::new(&graph_ref);
+                let resolver = BindingResolver::new(&*graph_ref);
                 resolver.all_env_vars().into_iter().collect()
             } else {
                 FxHashSet::default()

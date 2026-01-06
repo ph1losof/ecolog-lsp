@@ -138,6 +138,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
         let config = state.config.get_config();
         let config = config.read().await;
         if !config.features.hover {
+            tracing::debug!("Hover feature disabled");
             return None;
         }
     }
@@ -248,12 +249,11 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    // Get document state for import context
-    let doc = state.document_manager.get(uri)?;
-    let import_ctx = doc.import_context.clone();
-    let tree = doc.tree.clone();
-    let content = doc.content.clone();
-    drop(doc);
+    // Get document state for import context (scoped to drop MappedRef before await)
+    let (import_ctx, tree, content) = {
+        let doc = state.document_manager.get(uri)?;
+        (doc.import_context.clone(), doc.tree.clone(), doc.content.clone())
+    };
 
     // Get the identifier at position from the syntax tree
     let (identifier_name, identifier_range) =
@@ -513,6 +513,7 @@ pub async fn handle_completion(
         let config_manager = state.config.get_config();
         let config = config_manager.read().await;
         if !config.features.completion {
+            tracing::debug!("Completion feature disabled");
             return None;
         }
         (
@@ -615,6 +616,7 @@ pub async fn handle_definition(
         let config = state.config.get_config();
         let config = config.read().await;
         if !config.features.definition {
+            tracing::debug!("Definition feature disabled");
             return None;
         }
     }
@@ -685,10 +687,11 @@ async fn handle_definition_cross_module(
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
 
-    // Get document state for import context
-    let doc = state.document_manager.get(uri)?;
-    let import_ctx = doc.import_context.clone();
-    drop(doc);
+    // Get document state for import context (scoped to drop MappedRef before await)
+    let import_ctx = {
+        let doc = state.document_manager.get(uri)?;
+        doc.import_context.clone()
+    };
 
     // Get the identifier at position
     let (identifier_name, _) = get_identifier_at_position(state, uri, position).await?;
@@ -823,6 +826,7 @@ pub async fn compute_diagnostics(
         let config = state.config.get_config();
         let config = config.read().await;
         if !config.features.diagnostics {
+            tracing::debug!("Diagnostics feature disabled");
             return vec![];
         }
     }
@@ -833,6 +837,7 @@ pub async fn compute_diagnostics(
     let content = {
         let doc_ref = state.document_manager.get(uri);
         let Some(doc) = doc_ref else {
+            tracing::debug!("Document not found for diagnostics: {}", uri);
             return vec![];
         };
         doc.content.clone()
@@ -1308,10 +1313,11 @@ async fn get_env_var_from_cross_module(
     uri: &Url,
     position: Position,
 ) -> Option<String> {
-    // Get document state for import context
-    let doc = state.document_manager.get(uri)?;
-    let import_ctx = doc.import_context.clone();
-    drop(doc);
+    // Get document state for import context (scoped to drop MappedRef before await)
+    let import_ctx = {
+        let doc = state.document_manager.get(uri)?;
+        doc.import_context.clone()
+    };
 
     // Get the identifier at position
     let (identifier_name, _) = get_identifier_at_position(state, uri, position).await?;
@@ -1350,7 +1356,7 @@ async fn get_env_var_usages_in_file(
 ) -> Vec<crate::analysis::resolver::EnvVarUsageLocation> {
     // Try to get existing binding graph from DocumentManager
     if let Some(graph_ref) = state.document_manager.get_binding_graph(uri) {
-        let resolver = BindingResolver::new(&graph_ref);
+        let resolver = BindingResolver::new(&*graph_ref);
         return resolver.find_env_var_usages(env_var_name);
     }
 
@@ -1496,12 +1502,19 @@ async fn get_env_var_in_env_file(
     position: Position,
 ) -> Option<(String, Range)> {
     // Get content from document manager or read from disk
-    let content = if let Some(doc) = state.document_manager.get(uri) {
-        doc.content.clone()
-    } else if let Ok(path) = uri.to_file_path() {
-        tokio::fs::read_to_string(&path).await.ok()?
-    } else {
-        return None;
+    // Note: We scope the document access to drop MappedRef before any potential await
+    let content = {
+        let doc_content = state.document_manager.get(uri).map(|doc| doc.content.clone());
+        match doc_content {
+            Some(c) => c,
+            None => {
+                if let Ok(path) = uri.to_file_path() {
+                    tokio::fs::read_to_string(&path).await.ok()?
+                } else {
+                    return None;
+                }
+            }
+        }
     };
 
     // Parse the env file

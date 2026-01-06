@@ -21,6 +21,13 @@ pub const MAX_CHAIN_DEPTH: usize = 10;
 /// Used to ensure line differences are weighted more heavily than character differences.
 const RANGE_SIZE_LINE_WEIGHT: u64 = 10000;
 
+/// Index entry for range-based lookups.
+#[derive(Debug, Clone, Copy)]
+struct RangeIndexEntry {
+    range: Range,
+    symbol_id: SymbolId,
+}
+
 /// The binding graph for a single document.
 /// Uses sparse representation - only env-related symbols are tracked.
 #[derive(Debug, Default)]
@@ -42,6 +49,10 @@ pub struct BindingGraph {
     /// Symbol usages.
     usages: Vec<SymbolUsage>,
 
+    /// Sorted index of destructured key ranges for fast position lookups.
+    /// Enables O(log n) binary search instead of O(n) iteration.
+    destructure_range_index: Vec<RangeIndexEntry>,
+
     /// Counter for generating symbol IDs.
     next_symbol_id: u32,
 
@@ -58,6 +69,7 @@ impl BindingGraph {
             name_index: FxHashMap::default(),
             direct_references: Vec::new(),
             usages: Vec::new(),
+            destructure_range_index: Vec::new(),
             next_symbol_id: 0,
             next_scope_id: 1, // Start at 1 since we pre-create root
         };
@@ -101,6 +113,14 @@ impl BindingGraph {
             .entry(key)
             .or_insert_with(SmallVec::new)
             .push(id);
+
+        // Index destructured key range if present
+        if let Some(key_range) = symbol.destructured_key_range {
+            self.destructure_range_index.push(RangeIndexEntry {
+                range: key_range,
+                symbol_id: id,
+            });
+        }
 
         self.symbols.push(symbol);
         id
@@ -168,6 +188,72 @@ impl BindingGraph {
                 return Some(symbol);
             }
         }
+        None
+    }
+
+    /// Rebuild the destructure range index (sort by range start position).
+    /// This should be called after all symbols have been added to enable efficient lookups.
+    pub fn rebuild_range_index(&mut self) {
+        self.destructure_range_index.sort_by(|a, b| {
+            a.range
+                .start
+                .line
+                .cmp(&b.range.start.line)
+                .then_with(|| a.range.start.character.cmp(&b.range.start.character))
+        });
+    }
+
+    /// Binary search for symbol at position in destructured keys.
+    /// Returns SymbolId if found. Requires the index to be sorted (call rebuild_range_index first).
+    pub fn symbol_at_destructure_key(&self, position: Position) -> Option<SymbolId> {
+        // Binary search for entries that might contain the position
+        // We search for the rightmost entry whose start is <= position
+        let mut left = 0;
+        let mut right = self.destructure_range_index.len();
+        let mut found_idx = None;
+
+        while left < right {
+            let mid = left + (right - left) / 2;
+            let entry = &self.destructure_range_index[mid];
+
+            if Self::contains_position(entry.range, position) {
+                return Some(entry.symbol_id);
+            }
+
+            // Check if position is before this entry
+            if position.line < entry.range.start.line
+                || (position.line == entry.range.start.line
+                    && position.character < entry.range.start.character)
+            {
+                right = mid;
+            } else {
+                left = mid + 1;
+                found_idx = Some(mid);
+            }
+        }
+
+        // Linear search nearby entries (in case of overlapping ranges)
+        if let Some(idx) = found_idx {
+            // Check a few entries before and after
+            for offset in 0..3 {
+                if let Some(i) = idx.checked_sub(offset) {
+                    if i < self.destructure_range_index.len() {
+                        let entry = &self.destructure_range_index[i];
+                        if Self::contains_position(entry.range, position) {
+                            return Some(entry.symbol_id);
+                        }
+                    }
+                }
+                let i = idx + offset + 1;
+                if i < self.destructure_range_index.len() {
+                    let entry = &self.destructure_range_index[i];
+                    if Self::contains_position(entry.range, position) {
+                        return Some(entry.symbol_id);
+                    }
+                }
+            }
+        }
+
         None
     }
 
@@ -407,6 +493,7 @@ impl BindingGraph {
         self.name_index.clear();
         self.direct_references.clear();
         self.usages.clear();
+        self.destructure_range_index.clear();
         self.next_symbol_id = 0;
         self.next_scope_id = 1;
 
