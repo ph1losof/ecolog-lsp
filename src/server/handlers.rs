@@ -779,6 +779,15 @@ pub async fn handle_references(
     for file_uri in &files {
         let usages = get_env_var_usages_in_file(state, file_uri, &env_var_name).await;
         for usage in usages {
+            // Skip binding usages - they're usages of the local binding name,
+            // not actual references to the env var name. Including them would be
+            // confusing for rename preview (since they won't be renamed).
+            if matches!(
+                usage.kind,
+                crate::analysis::resolver::UsageKind::BindingUsage
+            ) {
+                continue;
+            }
             locations.push(Location {
                 uri: file_uri.clone(),
                 range: usage.range,
