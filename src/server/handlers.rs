@@ -109,9 +109,17 @@ fn format_hover_markdown(
         _ => format!("**`{}`**", env_var_name),
     };
 
+    // For multi-line values, wrap each line in backticks to preserve formatting
+    // Inline code blocks don't interpret markdown, so asterisks are safe
+    let value_formatted = if resolved.value.contains('\n') {
+        format!("`{}`", resolved.value.replace('\n', "`\n`"))
+    } else {
+        format!("`{}`", resolved.value)
+    };
+
     let mut markdown = format!(
-        "{}\n\n**Value**: `{}`\n**Source**: `{}`",
-        header, resolved.value, resolved.source
+        "{}\n\n**Value**: {}\n\n**Source**: `{}`",
+        header, value_formatted, resolved.source
     );
 
     if let Some(desc) = &resolved.description {
@@ -182,9 +190,15 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             format_hover_markdown(&env_var_name, Some(b_name), &resolved)
         } else {
             // Direct reference: show just value and source without header
+            // Wrap each line in backticks - inline code doesn't interpret markdown
+            let value_formatted = if resolved.value.contains('\n') {
+                format!("`{}`", resolved.value.replace('\n', "`\n`"))
+            } else {
+                format!("`{}`", resolved.value)
+            };
             let mut md = format!(
-                "**Value**: `{}`\n**Source**: `{}`",
-                resolved.value, resolved.source
+                "**Value**: {}\n\n**Source**: `{}`",
+                value_formatted, resolved.source
             );
             if let Some(desc) = &resolved.description {
                 md.push_str(&format!("\n\n*{}*", desc));
@@ -557,7 +571,14 @@ pub async fn handle_completion(
 
                     let source_str = format_source(&var.source, &context.workspace_root);
 
-                    let mut doc = format!("**Value**: `{}`\n**Source**: `{}`", value, source_str);
+                    // Wrap each line in backticks - inline code doesn't interpret markdown
+                    let value_formatted = if value.contains('\n') {
+                        format!("`{}`", value.replace('\n', "`\n`"))
+                    } else {
+                        format!("`{}`", value)
+                    };
+
+                    let mut doc = format!("**Value**: {}\n\n**Source**: `{}`", value_formatted, source_str);
                     if let Some(desc) = &var.description {
                         doc.push_str(&format!("\n\n*{}*", desc));
                     }
