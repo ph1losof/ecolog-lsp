@@ -1,5 +1,5 @@
 use abundantis::Abundantis;
-use ecolog_lsp::analysis::DocumentManager;
+use ecolog_lsp::analysis::{DocumentManager, QueryEngine, WorkspaceIndex, WorkspaceIndexer};
 use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::ConfigManager;
 use ecolog_lsp::server::handlers::handle_semantic_tokens_full;
@@ -31,8 +31,8 @@ async fn test_glob_config_semantic_tokens() {
     // Setup Server
     let registry = LanguageRegistry::new();
     let languages = Arc::new(registry);
-    let query_engine = Arc::new(ecolog_lsp::analysis::QueryEngine::new());
-    let document_manager = Arc::new(DocumentManager::new(query_engine, languages.clone()));
+    let query_engine = Arc::new(QueryEngine::new());
+    let document_manager = Arc::new(DocumentManager::new(query_engine.clone(), languages.clone()));
     let config_manager = Arc::new(ConfigManager::new());
     let core = Arc::new(
         Abundantis::builder()
@@ -42,6 +42,13 @@ async fn test_glob_config_semantic_tokens() {
             .expect("Failed to build Abundantis"),
     );
     let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
+    let workspace_index = Arc::new(WorkspaceIndex::new());
+    let indexer = Arc::new(WorkspaceIndexer::new(
+        Arc::clone(&workspace_index),
+        query_engine,
+        Arc::clone(&languages),
+        temp_dir.clone(),
+    ));
 
     let state = ServerState::new(
         document_manager,
@@ -49,6 +56,8 @@ async fn test_glob_config_semantic_tokens() {
         core,
         masker,
         config_manager.clone(),
+        workspace_index,
+        indexer,
     );
 
     // Update Config with custom pattern

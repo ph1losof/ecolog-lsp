@@ -277,4 +277,9 @@ impl DocumentManager {
     ) -> Option<dashmap::mapref::one::Ref<Url, BindingGraph>> {
         self.binding_graphs.get(uri)
     }
+
+    /// Get access to the query engine for parsing.
+    pub fn query_engine(&self) -> &Arc<QueryEngine> {
+        &self.query_engine
+    }
 }

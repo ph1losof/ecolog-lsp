@@ -2,8 +2,7 @@
 // Tests all masking modes, pattern overrides, and source overrides
 
 use abundantis::Abundantis;
-use ecolog_lsp::analysis::DocumentManager;
-use ecolog_lsp::analysis::QueryEngine;
+use ecolog_lsp::analysis::{DocumentManager, QueryEngine, WorkspaceIndex, WorkspaceIndexer};
 use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::{ConfigManager, EcologConfig};
 use ecolog_lsp::server::handlers;
@@ -45,7 +44,8 @@ impl MaskingTestFixture {
 
         let languages = Arc::new(registry);
         let query_engine = Arc::new(QueryEngine::new());
-        let document_manager = Arc::new(DocumentManager::new(query_engine, languages.clone()));
+        let document_manager =
+            Arc::new(DocumentManager::new(query_engine.clone(), languages.clone()));
 
         // Build abundantis
         let core = Arc::new(
@@ -68,7 +68,24 @@ impl MaskingTestFixture {
         // Apply the provided config to the manager
         config_manager.update(config).await;
 
-        let state = ServerState::new(document_manager, languages, core, masker, config_manager);
+        // Setup workspace index and indexer
+        let workspace_index = Arc::new(WorkspaceIndex::new());
+        let indexer = Arc::new(WorkspaceIndexer::new(
+            Arc::clone(&workspace_index),
+            query_engine,
+            Arc::clone(&languages),
+            temp_dir.clone(),
+        ));
+
+        let state = ServerState::new(
+            document_manager,
+            languages,
+            core,
+            masker,
+            config_manager,
+            workspace_index,
+            indexer,
+        );
 
         Self { temp_dir, state }
     }

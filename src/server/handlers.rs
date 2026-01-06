@@ -1,13 +1,18 @@
+use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver};
 use crate::server::semantic_tokens::SemanticTokenProvider;
 use crate::server::state::ServerState;
+use crate::types::ImportContext;
 use abundantis::source::VariableSource;
 use korni::{Error as KorniError, ParseOptions};
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::Path;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, Diagnostic, DiagnosticSeverity,
-    Documentation, ExecuteCommandParams, Hover, HoverContents, HoverParams, MarkupContent,
-    MarkupKind, NumberOrString, SemanticTokens, SemanticTokensParams, SemanticTokensResult,
+    Documentation, ExecuteCommandParams, Hover, HoverContents, HoverParams, Location,
+    MarkupContent, MarkupKind, NumberOrString, Position, PrepareRenameResponse, Range,
+    ReferenceParams, RenameParams, SemanticTokens, SemanticTokensParams, SemanticTokensResult,
+    TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
 };
 
 fn format_source(source: &VariableSource, root: &Path) -> String {
@@ -702,4 +707,368 @@ pub async fn handle_execute_command(
         }
         _ => None,
     }
+}
+
+// ============================================================================
+// Find References Handler
+// ============================================================================
+
+/// Handle textDocument/references request.
+///
+/// Finds all references to the environment variable at the given position
+/// across the entire workspace.
+pub async fn handle_references(
+    params: ReferenceParams,
+    state: &ServerState,
+) -> Option<Vec<Location>> {
+    let uri = &params.text_document_position.text_document.uri;
+    let position = params.text_document_position.position;
+    let include_declaration = params.context.include_declaration;
+
+    // Step 1: Get env var name at position
+    let env_var_name = get_env_var_at_position(state, uri, position)?;
+
+    // Step 2: Query workspace index for files that reference this env var
+    let files = state.workspace_index.files_for_env_var(&env_var_name);
+
+    let mut locations = Vec::new();
+
+    // Step 3: For each file, collect usages
+    for file_uri in &files {
+        let usages = get_env_var_usages_in_file(state, file_uri, &env_var_name).await;
+        for usage in usages {
+            locations.push(Location {
+                uri: file_uri.clone(),
+                range: usage.range,
+            });
+        }
+    }
+
+    // Step 4: Include .env definition if requested
+    if include_declaration {
+        if let Some(def_location) = find_env_definition(state, &env_var_name).await {
+            // Only add if not already included (might already be in indexed files)
+            if !locations.iter().any(|loc| loc == &def_location) {
+                locations.push(def_location);
+            }
+        }
+    }
+
+    if locations.is_empty() {
+        None
+    } else {
+        Some(locations)
+    }
+}
+
+/// Get the environment variable name at a position in a document.
+fn get_env_var_at_position(state: &ServerState, uri: &Url, position: Position) -> Option<String> {
+    // Try direct reference first
+    if let Some(reference) = state.document_manager.get_env_reference_cloned(uri, position) {
+        return Some(reference.name.to_string());
+    }
+
+    // Try binding
+    if let Some(binding) = state.document_manager.get_env_binding_cloned(uri, position) {
+        return Some(binding.env_var_name.to_string());
+    }
+
+    // Try binding usage
+    if let Some(usage) = state.document_manager.get_binding_usage_cloned(uri, position) {
+        return Some(usage.env_var_name.to_string());
+    }
+
+    None
+}
+
+/// Get all usages of an env var in a file.
+///
+/// If the file is open in DocumentManager, uses the existing BindingGraph.
+/// Otherwise, parses the file on demand.
+async fn get_env_var_usages_in_file(
+    state: &ServerState,
+    uri: &Url,
+    env_var_name: &str,
+) -> Vec<crate::analysis::resolver::EnvVarUsageLocation> {
+    // Try to get existing binding graph from DocumentManager
+    if let Some(graph_ref) = state.document_manager.get_binding_graph(uri) {
+        let resolver = BindingResolver::new(&graph_ref);
+        return resolver.find_env_var_usages(env_var_name);
+    }
+
+    // Parse file on demand
+    if let Some(graph) = parse_file_for_binding_graph(state, uri).await {
+        let resolver = BindingResolver::new(&graph);
+        return resolver.find_env_var_usages(env_var_name);
+    }
+
+    Vec::new()
+}
+
+/// Parse a file and return its BindingGraph.
+async fn parse_file_for_binding_graph(state: &ServerState, uri: &Url) -> Option<BindingGraph> {
+    let path = uri.to_file_path().ok()?;
+    let content = tokio::fs::read_to_string(&path).await.ok()?;
+    let lang = state.languages.get_for_uri(uri)?;
+
+    let query_engine = state.document_manager.query_engine();
+    let tree = query_engine.parse(lang.as_ref(), &content, None).await?;
+
+    let graph = AnalysisPipeline::analyze(
+        query_engine,
+        lang.as_ref(),
+        &tree,
+        content.as_bytes(),
+        &ImportContext::default(),
+    )
+    .await;
+
+    Some(graph)
+}
+
+/// Find the definition location of an env var in .env files.
+async fn find_env_definition(state: &ServerState, env_var_name: &str) -> Option<Location> {
+    // Get workspace root
+    let workspace_root = {
+        let workspace = state.core.workspace.read();
+        workspace.root().to_path_buf()
+    };
+
+    // Get env file patterns from config
+    let env_patterns: Vec<String> = {
+        let config = state.config.get_config();
+        let config = config.read().await;
+        config
+            .workspace
+            .env_files
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
+
+    // Search for definition in env files
+    for pattern in env_patterns {
+        let env_path = workspace_root.join(&pattern);
+        if env_path.exists() {
+            if let Ok(content) = tokio::fs::read_to_string(&env_path).await {
+                let entries = korni::parse_with_options(&content, ParseOptions::full());
+
+                for entry in entries {
+                    if let korni::Entry::Pair(kv) = entry {
+                        if kv.key.as_ref() == env_var_name {
+                            if let Some(key_span) = kv.key_span {
+                                // Convert korni span to LSP range
+                                let range = korni_span_to_range(&content, key_span);
+                                let uri =
+                                    Url::from_file_path(&env_path).ok()?;
+                                return Some(Location { uri, range });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Convert a korni Span to an LSP Range.
+fn korni_span_to_range(content: &str, span: korni::Span) -> Range {
+    let (start_line, start_col) = offset_to_line_col(content, span.start.offset);
+    let (end_line, end_col) = offset_to_line_col(content, span.end.offset);
+
+    Range {
+        start: Position {
+            line: start_line,
+            character: start_col,
+        },
+        end: Position {
+            line: end_line,
+            character: end_col,
+        },
+    }
+}
+
+/// Convert a byte offset to line/column.
+fn offset_to_line_col(content: &str, offset: usize) -> (u32, u32) {
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for (i, ch) in content.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+// ============================================================================
+// Rename Handlers
+// ============================================================================
+
+/// Handle textDocument/prepareRename request.
+///
+/// Validates that rename is possible at the position and returns the range
+/// of text that will be renamed.
+pub async fn handle_prepare_rename(
+    params: TextDocumentPositionParams,
+    state: &ServerState,
+) -> Option<PrepareRenameResponse> {
+    let uri = &params.text_document.uri;
+    let position = params.position;
+
+    // Get env var name and range at position
+    let (env_var_name, range) = get_env_var_with_range(state, uri, position)?;
+
+    // Validate it's a reasonable env var name
+    if !is_valid_env_var_name(&env_var_name) {
+        return None;
+    }
+
+    Some(PrepareRenameResponse::Range(range))
+}
+
+/// Handle textDocument/rename request.
+///
+/// Renames the environment variable at the given position across the entire
+/// workspace, including .env file definitions and all code references.
+pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<WorkspaceEdit> {
+    let uri = &params.text_document_position.text_document.uri;
+    let position = params.text_document_position.position;
+    let new_name = &params.new_name;
+
+    // Validate new name
+    if !is_valid_env_var_name(new_name) {
+        return None;
+    }
+
+    // Get old env var name
+    let old_name = get_env_var_at_position(state, uri, position)?;
+
+    // Collect all edits
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+
+    // Step 1: Collect all code references across workspace
+    let files = state.workspace_index.files_for_env_var(&old_name);
+    for file_uri in &files {
+        let edits = collect_rename_edits(state, file_uri, &old_name, new_name).await;
+        if !edits.is_empty() {
+            changes.insert(file_uri.clone(), edits);
+        }
+    }
+
+    // Step 2: Rename in .env file(s)
+    if let Some(def_location) = find_env_definition(state, &old_name).await {
+        changes
+            .entry(def_location.uri.clone())
+            .or_default()
+            .push(TextEdit {
+                range: def_location.range,
+                new_text: new_name.to_string(),
+            });
+    }
+
+    if changes.is_empty() {
+        None
+    } else {
+        Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        })
+    }
+}
+
+/// Get the environment variable name and its range at a position.
+fn get_env_var_with_range(
+    state: &ServerState,
+    uri: &Url,
+    position: Position,
+) -> Option<(String, Range)> {
+    // Try direct reference first
+    if let Some(reference) = state.document_manager.get_env_reference_cloned(uri, position) {
+        return Some((reference.name.to_string(), reference.name_range));
+    }
+
+    // Try binding - for destructured bindings, use the key range if available
+    if let Some(binding) = state.document_manager.get_env_binding_cloned(uri, position) {
+        // For destructured bindings like `{ API_KEY: apiKey }`, use the key range
+        let range = binding
+            .destructured_key_range
+            .unwrap_or(binding.binding_range);
+        return Some((binding.env_var_name.to_string(), range));
+    }
+
+    // Try binding usage - the usage refers to a binding, not the env var directly
+    // We can't rename the env var from here, but return info for validation
+    if let Some(usage) = state.document_manager.get_binding_usage_cloned(uri, position) {
+        return Some((usage.env_var_name.to_string(), usage.range));
+    }
+
+    None
+}
+
+/// Collect rename edits for a file.
+async fn collect_rename_edits(
+    state: &ServerState,
+    uri: &Url,
+    old_name: &str,
+    new_name: &str,
+) -> Vec<TextEdit> {
+    let mut edits = Vec::new();
+
+    let usages = get_env_var_usages_in_file(state, uri, old_name).await;
+
+    for usage in usages {
+        // Determine the edit based on usage kind
+        let edit = match usage.kind {
+            crate::analysis::resolver::UsageKind::DirectReference
+            | crate::analysis::resolver::UsageKind::PropertyAccess
+            | crate::analysis::resolver::UsageKind::BindingDeclaration => {
+                // Direct rename of the env var name
+                TextEdit {
+                    range: usage.range,
+                    new_text: new_name.to_string(),
+                }
+            }
+            crate::analysis::resolver::UsageKind::BindingUsage => {
+                // Binding usages refer to the binding name, not the env var
+                // We don't rename these - they keep their binding name
+                continue;
+            }
+        };
+
+        edits.push(edit);
+    }
+
+    edits
+}
+
+/// Check if a string is a valid environment variable name.
+fn is_valid_env_var_name(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+
+    // First char must be letter or underscore
+    let mut chars = name.chars();
+    if let Some(first) = chars.next() {
+        if !first.is_ascii_alphabetic() && first != '_' {
+            return false;
+        }
+    }
+
+    // Rest must be alphanumeric or underscore
+    for ch in chars {
+        if !ch.is_ascii_alphanumeric() && ch != '_' {
+            return false;
+        }
+    }
+
+    true
 }

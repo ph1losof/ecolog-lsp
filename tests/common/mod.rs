@@ -1,7 +1,7 @@
 use abundantis::Abundantis;
-use ecolog_lsp::analysis::DocumentManager;
+use ecolog_lsp::analysis::{DocumentManager, QueryEngine, WorkspaceIndex, WorkspaceIndexer};
 use ecolog_lsp::languages::LanguageRegistry;
-use ecolog_lsp::server::config::ConfigManager;
+use ecolog_lsp::server::config::{ConfigManager, EcologConfig};
 use ecolog_lsp::server::state::ServerState;
 use shelter::masker::Masker;
 use shelter::MaskingConfig;
@@ -53,8 +53,9 @@ impl TestFixture {
         registry.register(Arc::new(ecolog_lsp::languages::go::Go));
         let languages = Arc::new(registry);
 
-        let query_engine = Arc::new(ecolog_lsp::analysis::QueryEngine::new());
-        let document_manager = Arc::new(DocumentManager::new(query_engine, languages.clone()));
+        let query_engine = Arc::new(QueryEngine::new());
+        let document_manager =
+            Arc::new(DocumentManager::new(query_engine.clone(), languages.clone()));
         let mut config_manager = ConfigManager::new();
         let core = Arc::new(
             Abundantis::builder()
@@ -68,16 +69,46 @@ impl TestFixture {
         config_manager.set_masker(masker.clone());
         let config_manager = Arc::new(config_manager);
 
-        let state = ServerState::new(document_manager, languages, core, masker, config_manager);
+        // Setup workspace index and indexer
+        let workspace_index = Arc::new(WorkspaceIndex::new());
+        let indexer = Arc::new(WorkspaceIndexer::new(
+            Arc::clone(&workspace_index),
+            query_engine,
+            Arc::clone(&languages),
+            temp_dir.clone(),
+        ));
+
+        let state = ServerState::new(
+            document_manager,
+            languages,
+            core,
+            masker,
+            config_manager,
+            workspace_index,
+            indexer,
+        );
 
         Self { temp_dir, state }
     }
 
     pub fn create_file(&self, name: &str, content: &str) -> Url {
         let path = self.temp_dir.join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
         let mut f = File::create(&path).unwrap();
         write!(f, "{}", content).unwrap();
         Url::from_file_path(&path).unwrap()
+    }
+
+    /// Index the workspace
+    pub async fn index_workspace(&self) {
+        let config = EcologConfig::default();
+        self.state
+            .indexer
+            .index_workspace(&config)
+            .await
+            .expect("Failed to index workspace");
     }
 }
 

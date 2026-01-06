@@ -7,7 +7,7 @@
 //! 4. Scope isolation
 
 use abundantis::Abundantis;
-use ecolog_lsp::analysis::DocumentManager;
+use ecolog_lsp::analysis::{DocumentManager, QueryEngine, WorkspaceIndex, WorkspaceIndexer};
 use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::ConfigManager;
 use ecolog_lsp::server::handlers::handle_hover;
@@ -29,8 +29,8 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
     registry.register(Arc::new(ecolog_lsp::languages::typescript::TypeScript));
     let languages = Arc::new(registry);
 
-    let query_engine = Arc::new(ecolog_lsp::analysis::QueryEngine::new());
-    let document_manager = Arc::new(DocumentManager::new(query_engine, languages.clone()));
+    let query_engine = Arc::new(QueryEngine::new());
+    let document_manager = Arc::new(DocumentManager::new(query_engine.clone(), languages.clone()));
     let config_manager = Arc::new(ConfigManager::new());
     let core = Arc::new(
         Abundantis::builder()
@@ -40,8 +40,23 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
             .expect("Failed to build Abundantis"),
     );
     let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
+    let workspace_index = Arc::new(WorkspaceIndex::new());
+    let indexer = Arc::new(WorkspaceIndexer::new(
+        Arc::clone(&workspace_index),
+        query_engine,
+        Arc::clone(&languages),
+        temp_dir.to_path_buf(),
+    ));
 
-    ServerState::new(document_manager, languages, core, masker, config_manager)
+    ServerState::new(
+        document_manager,
+        languages,
+        core,
+        masker,
+        config_manager,
+        workspace_index,
+        indexer,
+    )
 }
 
 /// Pattern 1: Multi-level binding chains
