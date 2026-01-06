@@ -409,9 +409,10 @@ pub async fn compute_diagnostics(
         doc.content.clone()
     };
 
-    // 2. Get references from BindingGraph (direct refs + symbols resolving to env vars)
-    let (references, env_var_symbols): (
+    // 2. Get references from BindingGraph (direct refs + symbols resolving to env vars + property accesses)
+    let (references, env_var_symbols, property_accesses): (
         Vec<crate::types::EnvReference>,
+        Vec<(compact_str::CompactString, tower_lsp::lsp_types::Range)>,
         Vec<(compact_str::CompactString, tower_lsp::lsp_types::Range)>,
     ) = {
         if let Some(graph) = state.document_manager.get_binding_graph(uri) {
@@ -428,9 +429,30 @@ pub async fn compute_diagnostics(
                     }
                 })
                 .collect();
-            (refs, symbols)
+            // Collect property accesses on env object aliases (e.g., env.DEBUG2)
+            let prop_accesses: Vec<_> = graph
+                .usages()
+                .iter()
+                .filter_map(|usage| {
+                    // Only care about usages with property access
+                    let prop_name = usage.property_access.as_ref()?;
+                    // Check if the symbol is an env object
+                    let symbol = graph.get_symbol(usage.symbol_id)?;
+                    if matches!(
+                        graph.resolve_to_env(symbol.id),
+                        Some(crate::types::ResolvedEnv::Object(_))
+                    ) {
+                        // Use property_access_range if available, otherwise fall back to usage.range
+                        let range = usage.property_access_range.unwrap_or(usage.range);
+                        Some((prop_name.clone(), range))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (refs, symbols, prop_accesses)
         } else {
-            (vec![], vec![])
+            (vec![], vec![], vec![])
         }
     };
 
@@ -550,6 +572,26 @@ pub async fn compute_diagnostics(
 
             // Check symbols that resolve to env vars (e.g., destructured patterns)
             for (env_name, range) in env_var_symbols {
+                let resolved_result = state
+                    .core
+                    .resolution
+                    .resolve(&env_name, &context, registry)
+                    .await;
+
+                if let Ok(None) = resolved_result {
+                    diagnostics.push(Diagnostic {
+                        range,
+                        severity: Some(DiagnosticSeverity::WARNING),
+                        code: Some(NumberOrString::String("undefined-env-var".to_string())),
+                        source: Some("ecolog".to_string()),
+                        message: format!("Environment variable '{}' is not defined.", env_name),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            // Check property accesses on env object aliases (e.g., env.DEBUG2)
+            for (env_name, range) in property_accesses {
                 let resolved_result = state
                     .core
                     .resolution
