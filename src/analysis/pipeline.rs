@@ -390,6 +390,7 @@ impl AnalysisPipeline {
                             range,
                             scope,
                             property_access: None,
+                            property_access_range: None,
                         };
                         graph.add_usage(usage);
                     }
@@ -437,11 +438,13 @@ impl AnalysisPipeline {
                                 if let Ok(prop_name) = property.utf8_text(source) {
                                     // Create a usage with property access
                                     let usage_range = Self::ts_to_lsp_range(node.range());
+                                    let prop_range = Self::ts_to_lsp_range(property.range());
                                     let usage = SymbolUsage {
                                         symbol_id: symbol.id,
                                         range: usage_range,
                                         scope,
                                         property_access: Some(prop_name.into()),
+                                        property_access_range: Some(prop_range),
                                     };
                                     graph.add_usage(usage);
                                 }
@@ -475,11 +478,25 @@ impl AnalysisPipeline {
                                     if let Ok(raw) = index.utf8_text(source) {
                                         let prop_name = language.strip_quotes(raw);
                                         let usage_range = Self::ts_to_lsp_range(node.range());
+                                        // Calculate the range of just the string content (without quotes)
+                                        // The string node includes quotes, so offset by 1 on each side
+                                        let index_range = index.range();
+                                        let prop_range = Range {
+                                            start: Position {
+                                                line: index_range.start_point.row as u32,
+                                                character: index_range.start_point.column as u32 + 1, // skip opening quote
+                                            },
+                                            end: Position {
+                                                line: index_range.end_point.row as u32,
+                                                character: index_range.end_point.column as u32 - 1, // skip closing quote
+                                            },
+                                        };
                                         let usage = SymbolUsage {
                                             symbol_id: symbol.id,
                                             range: usage_range,
                                             scope,
                                             property_access: Some(prop_name.into()),
+                                            property_access_range: Some(prop_range),
                                         };
                                         graph.add_usage(usage);
                                     }

@@ -124,46 +124,75 @@ impl LspServer {
     async fn update_workspace_index_for_document(&self, uri: &Url) {
         use crate::analysis::{workspace_index::FileIndexEntry, BindingResolver};
         use compact_str::CompactString;
+        use korni::ParseOptions;
         use rustc_hash::FxHashSet;
         use std::time::SystemTime;
 
-        // Get binding graph from document manager
-        if let Some(graph_ref) = self.state.document_manager.get_binding_graph(uri) {
-            let resolver = BindingResolver::new(&graph_ref);
-            let env_vars: FxHashSet<CompactString> =
-                resolver.all_env_vars().into_iter().collect();
+        // Get file path for metadata
+        let path = uri
+            .to_file_path()
+            .unwrap_or_else(|_| std::path::PathBuf::from(uri.path()));
 
-            // Get file path for metadata
-            let path = uri
-                .to_file_path()
-                .unwrap_or_else(|_| std::path::PathBuf::from(uri.path()));
+        // Use current time as mtime for open documents
+        let mtime = SystemTime::now();
 
-            // Use current time as mtime for open documents
-            let mtime = SystemTime::now();
+        // Determine if this is an env file
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_env_file = {
+            let config = self.state.config.get_config();
+            let config = config.read().await;
+            config.workspace.env_files.iter().any(|pattern| {
+                glob::Pattern::new(pattern.as_str())
+                    .map(|p| p.matches(file_name))
+                    .unwrap_or(false)
+            })
+        };
 
-            // Determine if this is an env file
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let is_env_file = {
-                let config = self.state.config.get_config();
-                let config = config.read().await;
-                config.workspace.env_files.iter().any(|pattern| {
-                    glob::Pattern::new(pattern.as_str())
-                        .map(|p| p.matches(file_name))
-                        .unwrap_or(false)
-                })
+        let env_vars: FxHashSet<CompactString> = if is_env_file {
+            // For .env files, parse with korni to extract defined env vars
+            let vars = if let Some(doc) = self.state.document_manager.get(uri) {
+                let content = &doc.content;
+                let entries = korni::parse_with_options(content, ParseOptions::full());
+                entries
+                    .into_iter()
+                    .filter_map(|entry| {
+                        if let korni::Entry::Pair(kv) = entry {
+                            Some(CompactString::from(kv.key.as_ref()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                FxHashSet::default()
             };
 
-            // Update the workspace index
-            self.state.workspace_index.update_file(
-                uri,
-                FileIndexEntry {
-                    mtime,
-                    env_vars,
-                    is_env_file,
-                    path,
-                },
-            );
-        }
+            // Refresh Abundantis to pick up new/renamed env vars
+            if let Err(e) = self.state.core.refresh().await {
+                tracing::warn!("Failed to refresh Abundantis after env file change: {}", e);
+            }
+
+            vars
+        } else {
+            // For code files, extract env var references from binding graph
+            if let Some(graph_ref) = self.state.document_manager.get_binding_graph(uri) {
+                let resolver = BindingResolver::new(&graph_ref);
+                resolver.all_env_vars().into_iter().collect()
+            } else {
+                FxHashSet::default()
+            }
+        };
+
+        // Update the workspace index
+        self.state.workspace_index.update_file(
+            uri,
+            FileIndexEntry {
+                mtime,
+                env_vars,
+                is_env_file,
+                path,
+            },
+        );
     }
 }
 

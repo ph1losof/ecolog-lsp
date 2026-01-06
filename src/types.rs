@@ -443,6 +443,10 @@ pub struct SymbolUsage {
     /// For object usages with property access (e.g., `env.VAR`),
     /// this is the property being accessed ("VAR").
     pub property_access: Option<CompactString>,
+
+    /// For object usages with property access, the range of just the property name.
+    /// E.g., for `env.VAR`, this is the range of "VAR".
+    pub property_access_range: Option<Range>,
 }
 
 /// Result of resolving a symbol to its terminal env var.

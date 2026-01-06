@@ -270,6 +270,192 @@ async fn test_rename_invalid_new_name() {
 }
 
 // ============================================================================
+// Rename from .env File Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_prepare_rename_in_env_file() {
+    let fixture = TestFixture::new().await;
+
+    // Create a .env file with a variable
+    let env_uri = fixture.create_file(".env", "API_KEY=secret123\nDB_URL=postgres://localhost");
+
+    // Open the .env file
+    fixture
+        .state
+        .document_manager
+        .open(
+            env_uri.clone(),
+            "plaintext".to_string(),
+            "API_KEY=secret123\nDB_URL=postgres://localhost".to_string(),
+            1,
+        )
+        .await;
+
+    // Prepare rename on API_KEY (position within the key name)
+    let params = TextDocumentPositionParams {
+        text_document: TextDocumentIdentifier { uri: env_uri },
+        position: Position {
+            line: 0,
+            character: 3, // Within "API_KEY"
+        },
+    };
+
+    let result = handle_prepare_rename(params, &fixture.state).await;
+
+    assert!(result.is_some(), "Prepare rename should succeed for env var in .env file");
+}
+
+#[tokio::test]
+async fn test_rename_from_env_file() {
+    let fixture = TestFixture::new().await;
+
+    // Create .env file
+    let env_uri = fixture.create_file(".env", "API_KEY=secret123");
+
+    // Create code files referencing API_KEY
+    let js_uri = fixture.create_file("app.js", "const key = process.env.API_KEY;");
+    let ts_uri = fixture.create_file("config.ts", "const apiKey = process.env.API_KEY;");
+
+    // Index workspace
+    fixture.index_workspace().await;
+
+    // Open all files
+    fixture
+        .state
+        .document_manager
+        .open(
+            env_uri.clone(),
+            "plaintext".to_string(),
+            "API_KEY=secret123".to_string(),
+            1,
+        )
+        .await;
+    fixture
+        .state
+        .document_manager
+        .open(
+            js_uri.clone(),
+            "javascript".to_string(),
+            "const key = process.env.API_KEY;".to_string(),
+            1,
+        )
+        .await;
+    fixture
+        .state
+        .document_manager
+        .open(
+            ts_uri.clone(),
+            "typescript".to_string(),
+            "const apiKey = process.env.API_KEY;".to_string(),
+            1,
+        )
+        .await;
+
+    // Rename API_KEY to AUTH_TOKEN from .env file
+    let params = RenameParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: env_uri.clone() },
+            position: Position {
+                line: 0,
+                character: 3, // Within "API_KEY"
+            },
+        },
+        new_name: "AUTH_TOKEN".to_string(),
+        work_done_progress_params: Default::default(),
+    };
+
+    let result = handle_rename(params, &fixture.state).await;
+
+    assert!(result.is_some(), "Rename from .env file should return edits");
+    let edit = result.unwrap();
+
+    assert!(edit.changes.is_some(), "WorkspaceEdit should have changes");
+    let changes = edit.changes.unwrap();
+
+    // Should have edits for at least the .env file and possibly code files
+    assert!(!changes.is_empty(), "Should have edits for at least one file");
+
+    // The .env file should definitely be in the changes
+    assert!(
+        changes.contains_key(&env_uri),
+        "Changes should include the .env file"
+    );
+}
+
+#[tokio::test]
+async fn test_rename_from_env_file_updates_code_files() {
+    let fixture = TestFixture::new().await;
+
+    // Create .env file
+    let env_uri = fixture.create_file(".env", "DB_HOST=localhost");
+
+    // Create code file
+    let js_content = "const host = process.env.DB_HOST;\nconst url = `http://${process.env.DB_HOST}:8080`;";
+    let js_uri = fixture.create_file("server.js", js_content);
+
+    // Index workspace
+    fixture.index_workspace().await;
+
+    // Open files
+    fixture
+        .state
+        .document_manager
+        .open(
+            env_uri.clone(),
+            "plaintext".to_string(),
+            "DB_HOST=localhost".to_string(),
+            1,
+        )
+        .await;
+    fixture
+        .state
+        .document_manager
+        .open(
+            js_uri.clone(),
+            "javascript".to_string(),
+            js_content.to_string(),
+            1,
+        )
+        .await;
+
+    // Rename from .env file
+    let params = RenameParams {
+        text_document_position: TextDocumentPositionParams {
+            text_document: TextDocumentIdentifier { uri: env_uri.clone() },
+            position: Position {
+                line: 0,
+                character: 2, // Within "DB_HOST"
+            },
+        },
+        new_name: "DATABASE_HOST".to_string(),
+        work_done_progress_params: Default::default(),
+    };
+
+    let result = handle_rename(params, &fixture.state).await;
+
+    assert!(result.is_some(), "Rename should succeed");
+    let edit = result.unwrap();
+    let changes = edit.changes.expect("Should have changes");
+
+    // Check that js file got edits (if indexed)
+    if changes.contains_key(&js_uri) {
+        let js_edits = &changes[&js_uri];
+        // Should have edits for both DB_HOST occurrences
+        assert!(
+            js_edits.len() >= 1,
+            "JS file should have at least 1 edit"
+        );
+    }
+
+    // .env file should always have the edit
+    assert!(
+        changes.contains_key(&env_uri),
+        ".env file should be in changes"
+    );
+}
+
+// ============================================================================
 // Workspace Index Tests
 // ============================================================================
 

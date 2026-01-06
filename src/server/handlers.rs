@@ -912,10 +912,67 @@ fn offset_to_line_col(content: &str, offset: usize) -> (u32, u32) {
 // Rename Handlers
 // ============================================================================
 
+/// Check if a URI points to an env file based on config patterns.
+async fn is_env_file_uri(state: &ServerState, uri: &Url) -> bool {
+    let file_name = match uri.to_file_path().ok().and_then(|p| {
+        p.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+    }) {
+        Some(name) => name,
+        None => return false,
+    };
+
+    let config = state.config.get_config();
+    let config = config.read().await;
+    config.workspace.env_files.iter().any(|pattern| {
+        glob::Pattern::new(pattern)
+            .map(|p| p.matches(&file_name))
+            .unwrap_or(false)
+    })
+}
+
+/// Get the environment variable name and range at a position in a .env file.
+async fn get_env_var_in_env_file(
+    state: &ServerState,
+    uri: &Url,
+    position: Position,
+) -> Option<(String, Range)> {
+    // Get content from document manager or read from disk
+    let content = if let Some(doc) = state.document_manager.get(uri) {
+        doc.content.clone()
+    } else if let Ok(path) = uri.to_file_path() {
+        tokio::fs::read_to_string(&path).await.ok()?
+    } else {
+        return None;
+    };
+
+    // Parse the env file
+    let entries = korni::parse_with_options(&content, ParseOptions::full());
+
+    for entry in entries {
+        if let korni::Entry::Pair(kv) = entry {
+            if let Some(key_span) = kv.key_span {
+                let range = korni_span_to_range(&content, key_span);
+
+                // Check if position is within this key's range
+                if position.line >= range.start.line
+                    && position.line <= range.end.line
+                    && position.character >= range.start.character
+                    && position.character <= range.end.character
+                {
+                    return Some((kv.key.as_ref().to_string(), range));
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Handle textDocument/prepareRename request.
 ///
 /// Validates that rename is possible at the position and returns the range
-/// of text that will be renamed.
+/// of text that will be renamed. Works for both code files and .env files.
 pub async fn handle_prepare_rename(
     params: TextDocumentPositionParams,
     state: &ServerState,
@@ -923,7 +980,16 @@ pub async fn handle_prepare_rename(
     let uri = &params.text_document.uri;
     let position = params.position;
 
-    // Get env var name and range at position
+    // Check if this is a .env file first
+    if is_env_file_uri(state, uri).await {
+        let (env_var_name, range) = get_env_var_in_env_file(state, uri, position).await?;
+        if !is_valid_env_var_name(&env_var_name) {
+            return None;
+        }
+        return Some(PrepareRenameResponse::Range(range));
+    }
+
+    // Get env var name and range at position (code files)
     let (env_var_name, range) = get_env_var_with_range(state, uri, position)?;
 
     // Validate it's a reasonable env var name
@@ -938,6 +1004,7 @@ pub async fn handle_prepare_rename(
 ///
 /// Renames the environment variable at the given position across the entire
 /// workspace, including .env file definitions and all code references.
+/// Works for both code files and .env files.
 pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<WorkspaceEdit> {
     let uri = &params.text_document_position.text_document.uri;
     let position = params.text_document_position.position;
@@ -948,13 +1015,29 @@ pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<
         return None;
     }
 
-    // Get old env var name
-    let old_name = get_env_var_at_position(state, uri, position)?;
+    // Check if we're renaming from a .env file
+    let is_source_env_file = is_env_file_uri(state, uri).await;
+
+    // Get old env var name and its range if in .env file
+    let (old_name, source_range) = if is_source_env_file {
+        let (name, range) = get_env_var_in_env_file(state, uri, position).await?;
+        (name, Some(range))
+    } else {
+        (get_env_var_at_position(state, uri, position)?, None)
+    };
 
     // Collect all edits
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
 
-    // Step 1: Collect all code references across workspace
+    // Step 1: If source is .env file, include it directly (avoids path canonicalization issues)
+    if let Some(range) = source_range {
+        changes.entry(uri.clone()).or_default().push(TextEdit {
+            range,
+            new_text: new_name.to_string(),
+        });
+    }
+
+    // Step 2: Collect all code references across workspace
     let files = state.workspace_index.files_for_env_var(&old_name);
     for file_uri in &files {
         let edits = collect_rename_edits(state, file_uri, &old_name, new_name).await;
@@ -963,15 +1046,18 @@ pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<
         }
     }
 
-    // Step 2: Rename in .env file(s)
+    // Step 3: Rename in other .env file(s) - skip if already added as source
     if let Some(def_location) = find_env_definition(state, &old_name).await {
-        changes
-            .entry(def_location.uri.clone())
-            .or_default()
-            .push(TextEdit {
-                range: def_location.range,
-                new_text: new_name.to_string(),
-            });
+        // Only add if not already in changes (avoid duplicate edits due to path differences)
+        if !changes.contains_key(&def_location.uri) {
+            changes
+                .entry(def_location.uri.clone())
+                .or_default()
+                .push(TextEdit {
+                    range: def_location.range,
+                    new_text: new_name.to_string(),
+                });
+        }
     }
 
     if changes.is_empty() {
@@ -1030,15 +1116,20 @@ async fn collect_rename_edits(
             crate::analysis::resolver::UsageKind::DirectReference
             | crate::analysis::resolver::UsageKind::PropertyAccess
             | crate::analysis::resolver::UsageKind::BindingDeclaration => {
-                // Direct rename of the env var name
+                // DirectReference: process.env.VAR -> process.env.NEW_NAME
+                // PropertyAccess: env.VAR -> env.NEW_NAME (via alias)
+                // BindingDeclaration: for destructuring patterns where the env var key appears
+                //   - { VAR } = process.env -> { NEW_NAME } = process.env
+                //   - { VAR: v } = process.env -> { NEW_NAME: v } = process.env
                 TextEdit {
                     range: usage.range,
                     new_text: new_name.to_string(),
                 }
             }
             crate::analysis::resolver::UsageKind::BindingUsage => {
-                // Binding usages refer to the binding name, not the env var
-                // We don't rename these - they keep their binding name
+                // Binding usages refer to the local binding name, not the env var
+                // e.g., 'a' in 'console.log(a)' where 'const a = process.env.VAR'
+                // We don't rename these - they keep their local binding name
                 continue;
             }
         };

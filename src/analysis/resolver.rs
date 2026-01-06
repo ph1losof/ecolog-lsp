@@ -294,15 +294,34 @@ impl<'a> BindingResolver<'a> {
         }
 
         // 2. Symbol declarations that resolve to this env var
+        // Only include if we have a proper env var range to rename
         for symbol in self.graph.symbols() {
             if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
                 if let ResolvedEnv::Variable(name) = &resolved {
                     if name == env_var_name {
-                        locations.push(EnvVarUsageLocation {
-                            range: symbol.name_range,
-                            kind: UsageKind::BindingDeclaration,
-                            binding_name: Some(symbol.name.clone()),
-                        });
+                        // Determine the correct range for renaming:
+                        // - If destructured with rename (e.g., { VAR: v }), use destructured_key_range
+                        // - If shorthand destructure (e.g., { VAR }), the symbol name IS the env var
+                        // - If regular binding (e.g., const a = process.env.VAR), skip - DirectReference covers it
+                        let rename_range = if let Some(key_range) = symbol.destructured_key_range {
+                            // Renamed destructuring: { ENV_VAR: localName }
+                            Some(key_range)
+                        } else if symbol.name.as_str() == env_var_name {
+                            // Shorthand destructuring: { ENV_VAR } - the binding name IS the env var
+                            Some(symbol.name_range)
+                        } else {
+                            // Regular binding like `const a = process.env.VAR`
+                            // The env var is already covered by DirectReference, skip the binding
+                            None
+                        };
+
+                        if let Some(range) = rename_range {
+                            locations.push(EnvVarUsageLocation {
+                                range,
+                                kind: UsageKind::BindingDeclaration,
+                                binding_name: Some(symbol.name.clone()),
+                            });
+                        }
                     }
                 }
             }
@@ -327,12 +346,15 @@ impl<'a> BindingResolver<'a> {
                         // Check property access
                         if let Some(prop) = &usage.property_access {
                             if prop == env_var_name {
+                                // Use property_access_range if available (for rename),
+                                // otherwise fall back to usage.range
+                                let range = usage.property_access_range.unwrap_or(usage.range);
                                 let binding_name = self
                                     .graph
                                     .get_symbol(usage.symbol_id)
                                     .map(|s| s.name.clone());
                                 locations.push(EnvVarUsageLocation {
-                                    range: usage.range,
+                                    range,
                                     kind: UsageKind::PropertyAccess,
                                     binding_name,
                                 });
@@ -664,17 +686,78 @@ mod tests {
             range: make_range(2, 10, 2, 16),
             scope: ScopeId::root(),
             property_access: None,
+            property_access_range: None,
         });
 
         let resolver = BindingResolver::new(&graph);
 
         let usages = resolver.find_env_var_usages("API_KEY");
-        assert_eq!(usages.len(), 3); // direct + binding decl + binding usage
+        // Only 2 usages now:
+        // - DirectReference: for the actual env var access
+        // - BindingUsage: for usages of the binding
+        // BindingDeclaration is excluded because the binding name ("apiKey") != env var name ("API_KEY")
+        // and there's no destructured_key_range. This is correct for rename - we don't want to
+        // rename the local variable "apiKey" when renaming "API_KEY".
+        assert_eq!(usages.len(), 2);
 
         assert!(usages.iter().any(|u| u.kind == UsageKind::DirectReference));
-        assert!(usages
-            .iter()
-            .any(|u| u.kind == UsageKind::BindingDeclaration));
         assert!(usages.iter().any(|u| u.kind == UsageKind::BindingUsage));
+    }
+
+    #[test]
+    fn test_find_usages_destructured() {
+        let mut graph = BindingGraph::new();
+
+        // Add binding with shorthand destructuring: const { API_KEY } = process.env
+        // Here binding name == env var name
+        graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "API_KEY".into(),  // Same as env var name (shorthand destructuring)
+            declaration_range: make_range(0, 0, 0, 35),
+            name_range: make_range(0, 8, 0, 15),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar {
+                name: "API_KEY".into(),
+            },
+            kind: SymbolKind::DestructuredProperty,
+            is_valid: true,
+            destructured_key_range: None,  // No separate key range for shorthand
+        });
+
+        let resolver = BindingResolver::new(&graph);
+
+        let usages = resolver.find_env_var_usages("API_KEY");
+        // Should include BindingDeclaration because binding name == env var name
+        assert_eq!(usages.len(), 1);
+        assert!(usages.iter().any(|u| u.kind == UsageKind::BindingDeclaration));
+    }
+
+    #[test]
+    fn test_find_usages_destructured_with_rename() {
+        let mut graph = BindingGraph::new();
+
+        // Add binding with renamed destructuring: const { API_KEY: apiKey } = process.env
+        graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "apiKey".into(),  // Local binding name
+            declaration_range: make_range(0, 0, 0, 45),
+            name_range: make_range(0, 18, 0, 24),  // Range of "apiKey"
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar {
+                name: "API_KEY".into(),
+            },
+            kind: SymbolKind::DestructuredProperty,
+            is_valid: true,
+            destructured_key_range: Some(make_range(0, 8, 0, 15)),  // Range of "API_KEY"
+        });
+
+        let resolver = BindingResolver::new(&graph);
+
+        let usages = resolver.find_env_var_usages("API_KEY");
+        // Should include BindingDeclaration with the destructured_key_range
+        assert_eq!(usages.len(), 1);
+        assert!(usages.iter().any(|u| u.kind == UsageKind::BindingDeclaration));
+        // The range should be the key range, not the binding name range
+        assert_eq!(usages[0].range, make_range(0, 8, 0, 15));
     }
 }
