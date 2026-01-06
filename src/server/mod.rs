@@ -380,6 +380,14 @@ impl LanguageServer for LspServer {
                 continue;
             }
 
+            // Check if this is an env file
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let is_env_file = config.workspace.env_files.iter().any(|pattern| {
+                glob::Pattern::new(pattern.as_str())
+                    .map(|p| p.matches(file_name))
+                    .unwrap_or(false)
+            });
+
             // Handle file changes for workspace index
             match change.typ {
                 FileChangeType::CREATED | FileChangeType::CHANGED => {
@@ -388,10 +396,46 @@ impl LanguageServer for LspServer {
                         .indexer
                         .on_file_changed(&change.uri, &config)
                         .await;
+
+                    // Refresh Abundantis for env file changes so diagnostics update correctly
+                    // This is important after rename operations where the .env file is modified
+                    if is_env_file {
+                        if let Err(e) = self.state.core.refresh().await {
+                            tracing::warn!(
+                                "Failed to refresh Abundantis after env file change: {}",
+                                e
+                            );
+                        }
+
+                        // Republish diagnostics for all open documents after env file change
+                        // This ensures diagnostics are updated with the new env var definitions
+                        for uri in self.state.document_manager.all_uris() {
+                            let diagnostics =
+                                handlers::compute_diagnostics(&uri, &self.state).await;
+                            self.client.publish_diagnostics(uri, diagnostics, None).await;
+                        }
+                    }
                 }
                 FileChangeType::DELETED => {
                     // Remove from index
                     self.state.indexer.on_file_deleted(&change.uri);
+
+                    // Refresh Abundantis if env file was deleted
+                    if is_env_file {
+                        if let Err(e) = self.state.core.refresh().await {
+                            tracing::warn!(
+                                "Failed to refresh Abundantis after env file deletion: {}",
+                                e
+                            );
+                        }
+
+                        // Republish diagnostics for all open documents after env file deletion
+                        for uri in self.state.document_manager.all_uris() {
+                            let diagnostics =
+                                handlers::compute_diagnostics(&uri, &self.state).await;
+                            self.client.publish_diagnostics(uri, diagnostics, None).await;
+                        }
+                    }
                 }
                 _ => {}
             }

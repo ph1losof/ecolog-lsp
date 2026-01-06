@@ -278,6 +278,11 @@ impl DocumentManager {
         self.binding_graphs.get(uri)
     }
 
+    /// Get all open document URIs.
+    pub fn all_uris(&self) -> Vec<Url> {
+        self.documents.iter().map(|entry| entry.key().clone()).collect()
+    }
+
     /// Get access to the query engine for parsing.
     pub fn query_engine(&self) -> &Arc<QueryEngine> {
         &self.query_engine
