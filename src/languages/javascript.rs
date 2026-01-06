@@ -220,4 +220,36 @@ impl LanguageSupport for JavaScript {
         // JavaScript/TypeScript supports double quotes, single quotes, and backticks (template literals)
         text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
+
+    fn extract_property_access(
+        &self,
+        tree: &tree_sitter::Tree,
+        content: &str,
+        byte_offset: usize,
+    ) -> Option<(CompactString, CompactString)> {
+        let node = tree
+            .root_node()
+            .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+        // Check if we're on a property_identifier
+        if node.kind() != "property_identifier" {
+            return None;
+        }
+
+        let parent = node.parent()?;
+        if parent.kind() != "member_expression" {
+            return None;
+        }
+
+        // Get the object of the member expression
+        let object_node = parent.child_by_field_name("object")?;
+        if object_node.kind() != "identifier" {
+            return None;
+        }
+
+        let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
+        let property_name = node.utf8_text(content.as_bytes()).ok()?;
+
+        Some((object_name.into(), property_name.into()))
+    }
 }

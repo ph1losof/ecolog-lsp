@@ -129,6 +129,25 @@ pub trait LanguageSupport: Send + Sync {
         node.utf8_text(source).ok().map(|s| s.trim().into())
     }
 
+    /// Extract property access info from AST at position.
+    /// Returns (object_name, property_name) if position is on a property access.
+    ///
+    /// This is language-specific because different languages use different AST node types:
+    /// - JavaScript/TypeScript: `member_expression` → `property_identifier`
+    /// - Python: `attribute` node
+    /// - Rust: `field_expression` → `field_identifier`
+    /// - Go: `selector_expression`
+    ///
+    /// Default implementation returns None (not supported).
+    fn extract_property_access(
+        &self,
+        _tree: &tree_sitter::Tree,
+        _content: &str,
+        _byte_offset: usize,
+    ) -> Option<(CompactString, CompactString)> {
+        None
+    }
+
     /// Check if a node represents an env source (process.env, os.environ, etc.)
     /// Returns the kind of env source if it is one.
     fn is_env_source_node(&self, _node: Node, _source: &[u8]) -> Option<EnvSourceKind> {

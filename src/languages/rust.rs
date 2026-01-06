@@ -115,4 +115,43 @@ impl LanguageSupport for Rust {
             _ => false,
         }
     }
+
+    fn extract_property_access(
+        &self,
+        tree: &tree_sitter::Tree,
+        content: &str,
+        byte_offset: usize,
+    ) -> Option<(compact_str::CompactString, compact_str::CompactString)> {
+        let node = tree
+            .root_node()
+            .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+        // In Rust, we might be on the field_identifier inside a `field_expression`
+        // Check if current node or parent is a `field_expression`
+        let field_expr = if node.kind() == "field_expression" {
+            node
+        } else if let Some(parent) = node.parent() {
+            if parent.kind() == "field_expression" {
+                parent
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+
+        // Get the value (object) and field from the field_expression
+        let value_node = field_expr.child_by_field_name("value")?;
+        let field_node = field_expr.child_by_field_name("field")?;
+
+        // We want the value to be a simple identifier
+        if value_node.kind() != "identifier" {
+            return None;
+        }
+
+        let object_name = value_node.utf8_text(content.as_bytes()).ok()?;
+        let property_name = field_node.utf8_text(content.as_bytes()).ok()?;
+
+        Some((object_name.into(), property_name.into()))
+    }
 }

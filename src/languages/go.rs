@@ -136,4 +136,43 @@ impl LanguageSupport for Go {
         // Go supports double quotes, single quotes, and backticks (raw strings)
         text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
+
+    fn extract_property_access(
+        &self,
+        tree: &tree_sitter::Tree,
+        content: &str,
+        byte_offset: usize,
+    ) -> Option<(compact_str::CompactString, compact_str::CompactString)> {
+        let node = tree
+            .root_node()
+            .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+        // In Go, we might be on the field_identifier inside a `selector_expression`
+        // Check if current node or parent is a `selector_expression`
+        let selector = if node.kind() == "selector_expression" {
+            node
+        } else if let Some(parent) = node.parent() {
+            if parent.kind() == "selector_expression" {
+                parent
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+
+        // Get the operand (object) and field from the selector_expression
+        let operand_node = selector.child_by_field_name("operand")?;
+        let field_node = selector.child_by_field_name("field")?;
+
+        // We want the operand to be a simple identifier
+        if operand_node.kind() != "identifier" {
+            return None;
+        }
+
+        let object_name = operand_node.utf8_text(content.as_bytes()).ok()?;
+        let property_name = field_node.utf8_text(content.as_bytes()).ok()?;
+
+        Some((object_name.into(), property_name.into()))
+    }
 }

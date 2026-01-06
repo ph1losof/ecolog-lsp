@@ -40,6 +40,87 @@ fn format_source(source: &VariableSource, root: &Path) -> String {
     }
 }
 
+/// Result of resolving an environment variable with masking applied.
+struct ResolvedEnvVarValue {
+    /// The masked or unmasked value
+    value: String,
+    /// Source description (file path, "System Environment", etc.)
+    source: String,
+    /// Optional description from the env var definition
+    description: Option<compact_str::CompactString>,
+}
+
+/// Resolve an environment variable and apply masking based on config.
+/// This is the core resolution logic used by all hover handlers.
+async fn resolve_env_var_value(
+    env_var_name: &str,
+    file_path: &Path,
+    state: &ServerState,
+) -> Option<ResolvedEnvVarValue> {
+    let context = {
+        let workspace = state.core.workspace.read();
+        workspace.context_for_file(file_path)?
+    };
+
+    let registry = &state.core.registry;
+    let resolved = state
+        .core
+        .resolution
+        .resolve(env_var_name, &context, registry)
+        .await
+        .ok()??;
+
+    let should_mask = {
+        let config_manager = state.config.get_config();
+        let config = config_manager.read().await;
+        config.masking.should_mask_hover()
+    };
+
+    let value = if should_mask {
+        let mut masker = state.masker.lock().await;
+        let source = resolved
+            .source
+            .file_path()
+            .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
+            .and_then(|p| p.to_str());
+        masker.mask(&resolved.resolved_value, source, Some(resolved.key.as_str()))
+    } else {
+        resolved.resolved_value.to_string()
+    };
+
+    let source_str = format_source(&resolved.source, &context.workspace_root);
+
+    Some(ResolvedEnvVarValue {
+        value,
+        source: source_str,
+        description: resolved.description.clone(),
+    })
+}
+
+/// Format hover markdown with optional arrow notation.
+/// Shows `**identifier** → **env_var**` if names differ, otherwise just `**env_var**`.
+fn format_hover_markdown(
+    env_var_name: &str,
+    identifier_name: Option<&str>,
+    resolved: &ResolvedEnvVarValue,
+) -> String {
+    let header = match identifier_name {
+        Some(id) if id != env_var_name => format!("**`{}`** → **`{}`**", id, env_var_name),
+        _ => format!("**`{}`**", env_var_name),
+    };
+
+    let mut markdown = format!(
+        "{}\n\n**Value**: `{}`\n**Source**: `{}`",
+        header, resolved.value, resolved.source
+    );
+
+    if let Some(desc) = &resolved.description {
+        markdown.push_str(&format!("\n\n*{}*", desc));
+    }
+
+    markdown
+}
+
 pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
@@ -91,64 +172,25 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             return handle_hover_cross_module(params, state).await;
         };
 
-    // Resolve value using Abundantis
+    // Resolve value using unified helper
     let file_path = uri.to_file_path().ok()?;
 
-    let context = {
-        let workspace = state.core.workspace.read();
-        workspace.context_for_file(&file_path)?
-    };
-
-    let registry = &state.core.registry;
-    let resolved_result = state
-        .core
-        .resolution
-        .resolve(&env_var_name, &context, registry)
-        .await;
-
-    if let Ok(Some(variable)) = resolved_result {
-        let should_mask = {
-            let config_manager = state.config.get_config();
-            let config = config_manager.read().await;
-            config.masking.should_mask_hover()
-        };
-
-        let value = if should_mask {
-            let mut masker = state.masker.lock().await;
-            let source = variable
-                .source
-                .file_path()
-                .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
-                .and_then(|p| p.to_str());
-            let key = Some(variable.key.as_str());
-            masker.mask(&variable.resolved_value, source, key)
-        } else {
-            variable.resolved_value.to_string()
-        };
-
-        let source_str = format_source(&variable.source, &context.workspace_root);
-
+    if let Some(resolved) = resolve_env_var_value(&env_var_name, &file_path, state).await {
         // Build markdown with binding indicator if applicable
-        let mut markdown = if is_binding {
+        let markdown = if is_binding {
             let b_name = binding_name.as_deref().unwrap_or(env_var_name.as_str());
-            if b_name == env_var_name {
-                format!(
-                    "**`{}`**\n\n**Value**: `{}`\n**Source**: `{}`",
-                    env_var_name, value, source_str
-                )
-            } else {
-                format!(
-                    "**`{}`** → **`{}`**\n\n**Value**: `{}`\n**Source**: `{}`",
-                    b_name, env_var_name, value, source_str
-                )
-            }
+            format_hover_markdown(&env_var_name, Some(b_name), &resolved)
         } else {
-            format!("**Value**: `{}`\n**Source**: `{}`", value, source_str)
+            // Direct reference: show just value and source without header
+            let mut md = format!(
+                "**Value**: `{}`\n**Source**: `{}`",
+                resolved.value, resolved.source
+            );
+            if let Some(desc) = &resolved.description {
+                md.push_str(&format!("\n\n*{}*", desc));
+            }
+            md
         };
-
-        if let Some(desc) = &variable.description {
-            markdown.push_str(&format!("\n\n*{}*", desc));
-        }
 
         return Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -246,65 +288,18 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
             name: env_var_name,
             ..
         } => {
-            // Resolve the env var value using Abundantis
             let file_path = uri.to_file_path().ok()?;
-            let context = {
-                let workspace = state.core.workspace.read();
-                workspace.context_for_file(&file_path)?
-            };
+            let resolved = resolve_env_var_value(&env_var_name, &file_path, state).await?;
+            let markdown =
+                format_hover_markdown(&env_var_name, Some(identifier_name.as_str()), &resolved);
 
-            let registry = &state.core.registry;
-            let resolved_result = state
-                .core
-                .resolution
-                .resolve(&env_var_name, &context, registry)
-                .await;
-
-            if let Ok(Some(variable)) = resolved_result {
-                let should_mask = {
-                    let config_manager = state.config.get_config();
-                    let config = config_manager.read().await;
-                    config.masking.should_mask_hover()
-                };
-
-                let value = if should_mask {
-                    let mut masker = state.masker.lock().await;
-                    let source = variable
-                        .source
-                        .file_path()
-                        .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
-                        .and_then(|p| p.to_str());
-                    let key = Some(variable.key.as_str());
-                    masker.mask(&variable.resolved_value, source, key)
-                } else {
-                    variable.resolved_value.to_string()
-                };
-
-                let source_str = format_source(&variable.source, &context.workspace_root);
-
-                // Only show arrow if the identifier name differs from env var name
-                let header = if identifier_name.as_str() != env_var_name.as_str() {
-                    format!("**`{}`** → **`{}`**", identifier_name, env_var_name)
-                } else {
-                    format!("**`{}`**", env_var_name)
-                };
-
-                let markdown = format!(
-                    "{}\n\n**Value**: `{}`\n**Source**: `{}`",
-                    header, value, source_str
-                );
-
-                return Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: markdown,
-                    }),
-                    range: Some(identifier_range),
-                });
-            }
-
-            // Env var not found in sources
-            None
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: markdown,
+                }),
+                range: Some(identifier_range),
+            })
         }
         CrossModuleResolution::EnvObject { canonical_name, .. } => {
             // The import resolves to an env object (e.g., process.env)
@@ -330,6 +325,9 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
 
 /// Handle hover on a property access where the object is an imported env object.
 /// e.g., `env.SECRET_KEY` where `env` is imported as process.env
+///
+/// This function is language-agnostic: it delegates AST node type detection to
+/// the LanguageSupport trait via `extract_property_access()`.
 async fn handle_hover_on_imported_env_object_property(
     uri: &Url,
     position: Position,
@@ -342,37 +340,25 @@ async fn handle_hover_on_imported_env_object_property(
 ) -> Option<Hover> {
     let tree = tree.as_ref()?;
 
+    // Get the language for this file
+    let language = state.languages.get_for_uri(uri)?;
+
     // Convert LSP position to byte offset
     let rope = ropey::Rope::from_str(content);
     let line_start = rope.try_line_to_char(position.line as usize).ok()?;
     let char_offset = line_start + position.character as usize;
     let byte_offset = rope.try_char_to_byte(char_offset).ok()?;
 
-    // Find the node at position
-    let node = tree
-        .root_node()
-        .descendant_for_byte_range(byte_offset, byte_offset)?;
-
-    // Check if it's a property_identifier and get the parent member_expression
-    if node.kind() != "property_identifier" {
-        return None;
-    }
-
-    let parent = node.parent()?;
-    if parent.kind() != "member_expression" {
-        return None;
-    }
-
-    // Get the object of the member expression
-    let object_node = parent.child_by_field_name("object")?;
-    if object_node.kind() != "identifier" {
-        return None;
-    }
-
-    let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
+    // Use language-agnostic property access extraction
+    // This handles different AST node types per language:
+    // - JavaScript/TypeScript: member_expression → property_identifier
+    // - Python: attribute node
+    // - Rust: field_expression → field_identifier
+    // - Go: selector_expression
+    let (object_name, _extracted_property) = language.extract_property_access(tree, content, byte_offset)?;
 
     // Check if the object is an imported env object
-    let (module_path, original_name) = import_ctx.aliases.get(object_name)?;
+    let (module_path, original_name) = import_ctx.aliases.get(object_name.as_str())?;
 
     // Only resolve relative imports
     if !module_path.starts_with("./") && !module_path.starts_with("../") {
@@ -393,62 +379,19 @@ async fn handle_hover_on_imported_env_object_property(
             // The import resolves to an env object!
             // The property name is the env var name
             let env_var_name = property_name.as_str();
-
-            // Resolve the env var value using Abundantis
             let file_path = uri.to_file_path().ok()?;
-            let context = {
-                let workspace = state.core.workspace.read();
-                workspace.context_for_file(&file_path)?
+
+            let markdown = if let Some(resolved) =
+                resolve_env_var_value(env_var_name, &file_path, state).await
+            {
+                format_hover_markdown(env_var_name, None, &resolved)
+            } else {
+                // Env var not found in sources, but we know it's an env var access
+                format!(
+                    "**`{}`**\n\n*Environment variable not found in sources*",
+                    env_var_name
+                )
             };
-
-            let registry = &state.core.registry;
-            let resolved_result = state
-                .core
-                .resolution
-                .resolve(env_var_name, &context, registry)
-                .await;
-
-            if let Ok(Some(variable)) = resolved_result {
-                let should_mask = {
-                    let config_manager = state.config.get_config();
-                    let config = config_manager.read().await;
-                    config.masking.should_mask_hover()
-                };
-
-                let value = if should_mask {
-                    let mut masker = state.masker.lock().await;
-                    let source = variable
-                        .source
-                        .file_path()
-                        .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
-                        .and_then(|p| p.to_str());
-                    let key = Some(variable.key.as_str());
-                    masker.mask(&variable.resolved_value, source, key)
-                } else {
-                    variable.resolved_value.to_string()
-                };
-
-                let source_str = format_source(&variable.source, &context.workspace_root);
-
-                let markdown = format!(
-                    "**`{}`**\n\n**Value**: `{}`\n**Source**: `{}`",
-                    env_var_name, value, source_str
-                );
-
-                return Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: markdown,
-                    }),
-                    range: Some(*property_range),
-                });
-            }
-
-            // Env var not found in sources, but we know it's an env var access
-            let markdown = format!(
-                "**`{}`**\n\n*Environment variable not found in sources*",
-                env_var_name
-            );
 
             Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {

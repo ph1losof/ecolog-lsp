@@ -130,4 +130,43 @@ impl LanguageSupport for Python {
         // Note: triple-quoted strings (''' or """") would require more complex handling
         text.trim_matches(|c| c == '"' || c == '\'')
     }
+
+    fn extract_property_access(
+        &self,
+        tree: &tree_sitter::Tree,
+        content: &str,
+        byte_offset: usize,
+    ) -> Option<(compact_str::CompactString, compact_str::CompactString)> {
+        let node = tree
+            .root_node()
+            .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+        // In Python, we might be on the attribute identifier inside an `attribute` node
+        // Check if current node or parent is an `attribute` node
+        let attr_node = if node.kind() == "attribute" {
+            node
+        } else if let Some(parent) = node.parent() {
+            if parent.kind() == "attribute" {
+                parent
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+
+        // Get the object and attribute from the attribute node
+        let object_node = attr_node.child_by_field_name("object")?;
+        let attribute_node = attr_node.child_by_field_name("attribute")?;
+
+        // We want the object to be a simple identifier
+        if object_node.kind() != "identifier" {
+            return None;
+        }
+
+        let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
+        let property_name = attribute_node.utf8_text(content.as_bytes()).ok()?;
+
+        Some((object_name.into(), property_name.into()))
+    }
 }

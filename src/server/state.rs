@@ -45,6 +45,14 @@ impl ServerState {
         }
     }
 
+    /// Get the environment context for a file URI.
+    /// This provides a convenient method to get the WorkspaceContext needed for env var resolution.
+    pub fn get_env_context(&self, uri: &tower_lsp::lsp_types::Url) -> Option<abundantis::WorkspaceContext> {
+        let file_path = uri.to_file_path().ok()?;
+        let workspace = self.core.workspace.read();
+        workspace.context_for_file(&file_path)
+    }
+
     /// Create a new ServerState with workspace indexing support.
     pub fn with_indexing(
         document_manager: Arc<DocumentManager>,

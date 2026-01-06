@@ -1,4 +1,5 @@
 pub mod config;
+pub mod env_resolution;
 pub mod handlers;
 pub mod semantic_tokens;
 pub mod state;
