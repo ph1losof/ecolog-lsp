@@ -10,6 +10,7 @@ static IMPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
+static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Rust {
     fn id(&self) -> &'static str {
@@ -89,6 +90,16 @@ impl LanguageSupport for Rust {
                 include_str!("../../queries/rust/identifiers.scm"),
             )
             .expect("Failed to compile Rust identifier query")
+        }))
+    }
+
+    fn export_query(&self) -> Option<&Query> {
+        Some(EXPORT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/rust/exports.scm"),
+            )
+            .expect("Failed to compile Rust export query")
         }))
     }
 

@@ -484,3 +484,208 @@ pub enum EnvSourceKind {
     /// A specific env variable access.
     Variable { name: CompactString },
 }
+
+// ============================================================================
+// Cross-Module Import/Export Tracking
+// ============================================================================
+
+/// What an export resolves to at module boundary.
+/// Language-agnostic representation of an exported binding's resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportResolution {
+    /// Directly exports an env var.
+    /// Example: `export const dbUrl = process.env.DATABASE_URL`
+    EnvVar { name: CompactString },
+
+    /// Exports the env object itself.
+    /// Example: `export const env = process.env`
+    EnvObject { canonical_name: CompactString },
+
+    /// Re-exports from another module (chain tracking).
+    /// Example: `export { dbUrl } from "./config"`
+    ReExport {
+        /// The module specifier being re-exported from
+        source_module: CompactString,
+        /// The original name in the source module
+        original_name: CompactString,
+    },
+
+    /// Exports a symbol that resolves through local binding chain.
+    /// The SymbolId can be used to resolve via the file's BindingGraph.
+    /// Example: `const x = env.DB; export { x }`
+    LocalChain { symbol_id: SymbolId },
+
+    /// Non-env-related export (skip during resolution).
+    Unknown,
+}
+
+impl ExportResolution {
+    /// Check if this export is potentially env-related.
+    pub fn is_env_related(&self) -> bool {
+        !matches!(self, ExportResolution::Unknown)
+    }
+}
+
+/// An exported symbol from a module.
+/// Language-agnostic representation of a module export.
+#[derive(Debug, Clone)]
+pub struct ModuleExport {
+    /// The exported name (what importers use).
+    pub exported_name: CompactString,
+
+    /// Original/local name if different (for `export { local as exported }`).
+    /// None if exported_name == local name.
+    pub local_name: Option<CompactString>,
+
+    /// What this export resolves to.
+    pub resolution: ExportResolution,
+
+    /// Range of the export declaration (for go-to-definition).
+    pub declaration_range: Range,
+
+    /// Whether this is a default export.
+    pub is_default: bool,
+}
+
+impl ModuleExport {
+    /// Get the local name (falls back to exported_name if not aliased).
+    pub fn local_name_or_exported(&self) -> &CompactString {
+        self.local_name.as_ref().unwrap_or(&self.exported_name)
+    }
+}
+
+/// Per-file export information stored in WorkspaceIndex.
+/// Contains all exports from a single module, language-agnostic.
+#[derive(Debug, Clone, Default)]
+pub struct FileExportEntry {
+    /// Named exports: exported_name -> ModuleExport
+    pub named_exports: HashMap<CompactString, ModuleExport>,
+
+    /// Default export (if any).
+    pub default_export: Option<ModuleExport>,
+
+    /// Re-export all patterns: `export * from "./module"`
+    /// Stores the module specifiers.
+    pub wildcard_reexports: Vec<CompactString>,
+}
+
+impl FileExportEntry {
+    /// Create a new empty FileExportEntry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if this file has any exports.
+    pub fn is_empty(&self) -> bool {
+        self.named_exports.is_empty()
+            && self.default_export.is_none()
+            && self.wildcard_reexports.is_empty()
+    }
+
+    /// Get an export by name (checks named exports).
+    pub fn get_export(&self, name: &str) -> Option<&ModuleExport> {
+        self.named_exports.get(name)
+    }
+
+    /// Get all env-related exports.
+    pub fn env_related_exports(&self) -> impl Iterator<Item = &ModuleExport> {
+        self.named_exports
+            .values()
+            .chain(self.default_export.iter())
+            .filter(|e| e.resolution.is_env_related())
+    }
+
+    /// Get all exported env var names (for reverse indexing).
+    pub fn exported_env_vars(&self) -> Vec<CompactString> {
+        self.env_related_exports()
+            .filter_map(|e| {
+                if let ExportResolution::EnvVar { name } = &e.resolution {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+/// Kind of import statement.
+/// Language-agnostic categorization of import types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportKind {
+    /// Named import: `import { foo } from "./module"` or `from module import foo`
+    Named {
+        /// The name being imported from the source module
+        imported_name: CompactString,
+    },
+
+    /// Default import: `import foo from "./module"`
+    Default,
+
+    /// Namespace import: `import * as foo from "./module"`
+    Namespace,
+
+    /// CommonJS-style named: `const { foo } = require("./module")`
+    CommonJSNamed {
+        /// The name being imported
+        imported_name: CompactString,
+    },
+
+    /// CommonJS-style default: `const foo = require("./module")`
+    CommonJSDefault,
+}
+
+impl ImportKind {
+    /// Get the imported name for named imports.
+    pub fn imported_name(&self) -> Option<&CompactString> {
+        match self {
+            ImportKind::Named { imported_name } | ImportKind::CommonJSNamed { imported_name } => {
+                Some(imported_name)
+            }
+            _ => None,
+        }
+    }
+
+    /// Check if this is a namespace import.
+    pub fn is_namespace(&self) -> bool {
+        matches!(self, ImportKind::Namespace)
+    }
+
+    /// Check if this is a default import.
+    pub fn is_default(&self) -> bool {
+        matches!(self, ImportKind::Default | ImportKind::CommonJSDefault)
+    }
+}
+
+/// Import information for cross-module resolution.
+/// Represents a single import binding in a file.
+#[derive(Debug, Clone)]
+pub struct ModuleImport {
+    /// The import specifier (e.g., "./config", "../utils/env").
+    pub module_specifier: CompactString,
+
+    /// Resolved file URI (after module resolution).
+    /// None if resolution failed or hasn't been attempted.
+    pub resolved_uri: Option<Url>,
+
+    /// What's being imported.
+    pub kind: ImportKind,
+
+    /// Local binding name in the importing file.
+    pub local_name: CompactString,
+
+    /// Range of the import statement.
+    pub range: Range,
+}
+
+impl ModuleImport {
+    /// Check if this import has been resolved to a file.
+    pub fn is_resolved(&self) -> bool {
+        self.resolved_uri.is_some()
+    }
+
+    /// Check if this is a relative import (starts with ./ or ../).
+    pub fn is_relative(&self) -> bool {
+        self.module_specifier.starts_with("./") || self.module_specifier.starts_with("../")
+    }
+}

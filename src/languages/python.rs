@@ -10,6 +10,7 @@ static IMPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
+static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Python {
     fn id(&self) -> &'static str {
@@ -107,6 +108,16 @@ impl LanguageSupport for Python {
                 include_str!("../../queries/python/identifiers.scm"),
             )
             .expect("Failed to compile Python identifier query")
+        }))
+    }
+
+    fn export_query(&self) -> Option<&Query> {
+        Some(EXPORT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/python/exports.scm"),
+            )
+            .expect("Failed to compile Python export query")
         }))
     }
 

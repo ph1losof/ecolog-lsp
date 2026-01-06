@@ -1,4 +1,6 @@
-use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver};
+use crate::analysis::{
+    AnalysisPipeline, BindingGraph, BindingResolver, CrossModuleResolution, CrossModuleResolver,
+};
 use crate::server::semantic_tokens::SemanticTokenProvider;
 use crate::server::state::ServerState;
 use crate::types::ImportContext;
@@ -85,7 +87,8 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
                 kind,
             )
         } else {
-            return None;
+            // Fallback: Try cross-module resolution for imported symbols
+            return handle_hover_cross_module(params, state).await;
         };
 
     // Resolve value using Abundantis
@@ -180,6 +183,371 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
     }
 }
 
+/// Handle hover for imported symbols using cross-module resolution.
+///
+/// This is called when local resolution fails (no direct reference, binding, or usage).
+/// It checks if the identifier at the position is an imported symbol and tries to
+/// resolve it through the export chain to find if it represents an env var.
+async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> Option<Hover> {
+    let uri = &params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+
+    // Get document state for import context
+    let doc = state.document_manager.get(uri)?;
+    let import_ctx = doc.import_context.clone();
+    let tree = doc.tree.clone();
+    let content = doc.content.clone();
+    drop(doc);
+
+    // Get the identifier at position from the syntax tree
+    let (identifier_name, identifier_range) =
+        get_identifier_at_position(state, uri, position).await?;
+
+    // Check if this identifier is an import alias
+    let (module_path, original_name) = match import_ctx.aliases.get(&identifier_name) {
+        Some(alias) => alias.clone(),
+        None => {
+            // Not a direct import alias - check if it's a property access on an imported env object
+            // e.g., `env.SECRET_KEY` where `env` is imported as an env object
+            return handle_hover_on_imported_env_object_property(
+                uri,
+                position,
+                &identifier_name,
+                &identifier_range,
+                &import_ctx,
+                &tree,
+                &content,
+                state,
+            )
+            .await;
+        }
+    };
+
+    // Only resolve relative imports (workspace-internal)
+    if !module_path.starts_with("./") && !module_path.starts_with("../") {
+        return None;
+    }
+
+    // Create CrossModuleResolver and try to resolve the import
+    let cross_resolver = CrossModuleResolver::new(
+        state.workspace_index.clone(),
+        state.module_resolver.clone(),
+        state.languages.clone(),
+    );
+
+    // For default imports, the original_name is the module path itself
+    // e.g., import foo from "./config" -> aliases: {"foo": ("./config", "./config")}
+    // For named imports, original_name is the exported name
+    // e.g., import { a } from "./config" -> aliases: {"a": ("./config", "a")}
+    let is_default = original_name == module_path;
+
+    match cross_resolver.resolve_import(uri, &module_path, &original_name, is_default) {
+        CrossModuleResolution::EnvVar {
+            name: env_var_name,
+            ..
+        } => {
+            // Resolve the env var value using Abundantis
+            let file_path = uri.to_file_path().ok()?;
+            let context = {
+                let workspace = state.core.workspace.read();
+                workspace.context_for_file(&file_path)?
+            };
+
+            let registry = &state.core.registry;
+            let resolved_result = state
+                .core
+                .resolution
+                .resolve(&env_var_name, &context, registry)
+                .await;
+
+            if let Ok(Some(variable)) = resolved_result {
+                let should_mask = {
+                    let config_manager = state.config.get_config();
+                    let config = config_manager.read().await;
+                    config.masking.should_mask_hover()
+                };
+
+                let value = if should_mask {
+                    let mut masker = state.masker.lock().await;
+                    let source = variable
+                        .source
+                        .file_path()
+                        .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
+                        .and_then(|p| p.to_str());
+                    let key = Some(variable.key.as_str());
+                    masker.mask(&variable.resolved_value, source, key)
+                } else {
+                    variable.resolved_value.to_string()
+                };
+
+                let source_str = format_source(&variable.source, &context.workspace_root);
+
+                // Only show arrow if the identifier name differs from env var name
+                let header = if identifier_name.as_str() != env_var_name.as_str() {
+                    format!("**`{}`** → **`{}`**", identifier_name, env_var_name)
+                } else {
+                    format!("**`{}`**", env_var_name)
+                };
+
+                let markdown = format!(
+                    "{}\n\n**Value**: `{}`\n**Source**: `{}`",
+                    header, value, source_str
+                );
+
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: markdown,
+                    }),
+                    range: Some(identifier_range),
+                });
+            }
+
+            // Env var not found in sources
+            None
+        }
+        CrossModuleResolution::EnvObject { canonical_name, .. } => {
+            // The import resolves to an env object (e.g., process.env)
+            // Only show arrow if the identifier name differs from canonical name
+            let header = if identifier_name.as_str() != canonical_name.as_str() {
+                format!("**`{}`** → **`{}`**", identifier_name, canonical_name)
+            } else {
+                format!("**`{}`**", canonical_name)
+            };
+            let markdown = format!("{}\n\n*Environment Object*", header);
+
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: markdown,
+                }),
+                range: Some(identifier_range),
+            })
+        }
+        CrossModuleResolution::Unresolved => None,
+    }
+}
+
+/// Handle hover on a property access where the object is an imported env object.
+/// e.g., `env.SECRET_KEY` where `env` is imported as process.env
+async fn handle_hover_on_imported_env_object_property(
+    uri: &Url,
+    position: Position,
+    property_name: &compact_str::CompactString,
+    property_range: &Range,
+    import_ctx: &ImportContext,
+    tree: &Option<tree_sitter::Tree>,
+    content: &str,
+    state: &ServerState,
+) -> Option<Hover> {
+    let tree = tree.as_ref()?;
+
+    // Convert LSP position to byte offset
+    let rope = ropey::Rope::from_str(content);
+    let line_start = rope.try_line_to_char(position.line as usize).ok()?;
+    let char_offset = line_start + position.character as usize;
+    let byte_offset = rope.try_char_to_byte(char_offset).ok()?;
+
+    // Find the node at position
+    let node = tree
+        .root_node()
+        .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+    // Check if it's a property_identifier and get the parent member_expression
+    if node.kind() != "property_identifier" {
+        return None;
+    }
+
+    let parent = node.parent()?;
+    if parent.kind() != "member_expression" {
+        return None;
+    }
+
+    // Get the object of the member expression
+    let object_node = parent.child_by_field_name("object")?;
+    if object_node.kind() != "identifier" {
+        return None;
+    }
+
+    let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
+
+    // Check if the object is an imported env object
+    let (module_path, original_name) = import_ctx.aliases.get(object_name)?;
+
+    // Only resolve relative imports
+    if !module_path.starts_with("./") && !module_path.starts_with("../") {
+        return None;
+    }
+
+    // Create CrossModuleResolver and check if the import resolves to an env object
+    let cross_resolver = CrossModuleResolver::new(
+        state.workspace_index.clone(),
+        state.module_resolver.clone(),
+        state.languages.clone(),
+    );
+
+    let is_default = original_name == module_path;
+
+    match cross_resolver.resolve_import(uri, module_path, original_name, is_default) {
+        CrossModuleResolution::EnvObject { .. } => {
+            // The import resolves to an env object!
+            // The property name is the env var name
+            let env_var_name = property_name.as_str();
+
+            // Resolve the env var value using Abundantis
+            let file_path = uri.to_file_path().ok()?;
+            let context = {
+                let workspace = state.core.workspace.read();
+                workspace.context_for_file(&file_path)?
+            };
+
+            let registry = &state.core.registry;
+            let resolved_result = state
+                .core
+                .resolution
+                .resolve(env_var_name, &context, registry)
+                .await;
+
+            if let Ok(Some(variable)) = resolved_result {
+                let should_mask = {
+                    let config_manager = state.config.get_config();
+                    let config = config_manager.read().await;
+                    config.masking.should_mask_hover()
+                };
+
+                let value = if should_mask {
+                    let mut masker = state.masker.lock().await;
+                    let source = variable
+                        .source
+                        .file_path()
+                        .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
+                        .and_then(|p| p.to_str());
+                    let key = Some(variable.key.as_str());
+                    masker.mask(&variable.resolved_value, source, key)
+                } else {
+                    variable.resolved_value.to_string()
+                };
+
+                let source_str = format_source(&variable.source, &context.workspace_root);
+
+                let markdown = format!(
+                    "**`{}`**\n\n**Value**: `{}`\n**Source**: `{}`",
+                    env_var_name, value, source_str
+                );
+
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: markdown,
+                    }),
+                    range: Some(*property_range),
+                });
+            }
+
+            // Env var not found in sources, but we know it's an env var access
+            let markdown = format!(
+                "**`{}`**\n\n*Environment variable not found in sources*",
+                env_var_name
+            );
+
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: markdown,
+                }),
+                range: Some(*property_range),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Check if the completion context is an imported env object.
+/// e.g., `env.` where `env` is imported as process.env
+async fn check_imported_env_object_completion(
+    uri: &Url,
+    position: Position,
+    state: &ServerState,
+) -> bool {
+    // Get the object name from the completion context
+    let obj_name = match state
+        .document_manager
+        .check_completion_context(uri, position)
+        .await
+    {
+        Some(name) => name,
+        None => return false,
+    };
+
+    // Get import context
+    let import_ctx = match state.document_manager.get(uri) {
+        Some(doc) => doc.import_context.clone(),
+        None => return false,
+    };
+
+    // Check if the object is an import alias
+    let (module_path, original_name) = match import_ctx.aliases.get(obj_name.as_str()) {
+        Some(alias) => alias.clone(),
+        None => return false,
+    };
+
+    // Only resolve relative imports
+    if !module_path.starts_with("./") && !module_path.starts_with("../") {
+        return false;
+    }
+
+    // Create CrossModuleResolver and check if the import resolves to an env object
+    let cross_resolver = CrossModuleResolver::new(
+        state.workspace_index.clone(),
+        state.module_resolver.clone(),
+        state.languages.clone(),
+    );
+
+    let is_default = original_name == module_path;
+
+    matches!(
+        cross_resolver.resolve_import(uri, &module_path, &original_name, is_default),
+        CrossModuleResolution::EnvObject { .. }
+    )
+}
+
+/// Get the identifier at a position in the document.
+async fn get_identifier_at_position(
+    state: &ServerState,
+    uri: &Url,
+    position: Position,
+) -> Option<(compact_str::CompactString, Range)> {
+    let doc = state.document_manager.get(uri)?;
+    let tree = doc.tree.as_ref()?;
+    let content = &doc.content;
+
+    // Convert LSP position to byte offset
+    let rope = ropey::Rope::from_str(content);
+    let line_start = rope.try_line_to_char(position.line as usize).ok()?;
+    let char_offset = line_start + position.character as usize;
+    let byte_offset = rope.try_char_to_byte(char_offset).ok()?;
+
+    // Find the node at position
+    let node = tree
+        .root_node()
+        .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+    // Check if it's an identifier
+    if node.kind() == "identifier"
+        || node.kind() == "property_identifier"
+        || node.kind() == "shorthand_property_identifier"
+    {
+        let name = node.utf8_text(content.as_bytes()).ok()?;
+        let range = Range::new(
+            Position::new(node.start_position().row as u32, node.start_position().column as u32),
+            Position::new(node.end_position().row as u32, node.end_position().column as u32),
+        );
+        return Some((compact_str::CompactString::from(name), range));
+    }
+
+    None
+}
+
 pub async fn handle_completion(
     params: CompletionParams,
     state: &ServerState,
@@ -202,8 +570,10 @@ pub async fn handle_completion(
     if is_strict {
         let position = params.text_document_position.position;
         if !state.document_manager.check_completion(uri, position).await {
-            // Not in valid context (e.g. process.env.|)
-            return None;
+            // Not in valid local context - check if it's an imported env object
+            if !check_imported_env_object_completion(uri, position, state).await {
+                return None;
+            }
         }
     }
 
@@ -299,7 +669,8 @@ pub async fn handle_definition(
     {
         usage.env_var_name
     } else {
-        return None;
+        // Fallback: Try cross-module resolution for imported symbols
+        return handle_definition_cross_module(&params, state).await;
     };
 
     // Resolve variable
@@ -337,6 +708,100 @@ pub async fn handle_definition(
         }
     } else {
         None
+    }
+}
+
+/// Handle go-to-definition for imported symbols using cross-module resolution.
+async fn handle_definition_cross_module(
+    params: &tower_lsp::lsp_types::GotoDefinitionParams,
+    state: &ServerState,
+) -> Option<tower_lsp::lsp_types::GotoDefinitionResponse> {
+    use tower_lsp::lsp_types::{GotoDefinitionResponse, Location};
+
+    let uri = &params.text_document_position_params.text_document.uri;
+    let position = params.text_document_position_params.position;
+
+    // Get document state for import context
+    let doc = state.document_manager.get(uri)?;
+    let import_ctx = doc.import_context.clone();
+    drop(doc);
+
+    // Get the identifier at position
+    let (identifier_name, _) = get_identifier_at_position(state, uri, position).await?;
+
+    // Check if this identifier is an import alias
+    let (module_path, original_name) = import_ctx.aliases.get(&identifier_name)?.clone();
+
+    // Only resolve relative imports
+    if !module_path.starts_with("./") && !module_path.starts_with("../") {
+        return None;
+    }
+
+    // Create CrossModuleResolver
+    let cross_resolver = CrossModuleResolver::new(
+        state.workspace_index.clone(),
+        state.module_resolver.clone(),
+        state.languages.clone(),
+    );
+
+    let is_default = original_name == identifier_name;
+
+    match cross_resolver.resolve_import(uri, &module_path, &original_name, is_default) {
+        CrossModuleResolution::EnvVar {
+            name: env_var_name,
+            defining_file,
+            declaration_range,
+        } => {
+            // Option 1: Jump to the export declaration in the source file
+            // Option 2: Jump to the .env file definition
+            // We'll prefer the .env file definition if it exists
+
+            let file_path = uri.to_file_path().ok()?;
+            let context = {
+                let workspace = state.core.workspace.read();
+                workspace.context_for_file(&file_path)?
+            };
+
+            let registry = &state.core.registry;
+            if let Ok(Some(variable)) = state
+                .core
+                .resolution
+                .resolve(&env_var_name, &context, registry)
+                .await
+            {
+                // If the env var is defined in a file, go there
+                if let VariableSource::File { path, offset } = &variable.source {
+                    let target_uri = Url::from_file_path(path).ok()?;
+                    let content = std::fs::read_to_string(path).ok()?;
+                    let (line, char) = crate::server::util::offset_to_linecol(&content, *offset);
+
+                    let range = Range::new(
+                        Position::new(line, char),
+                        Position::new(line, char + variable.key.len() as u32),
+                    );
+
+                    return Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: target_uri,
+                        range,
+                    }));
+                }
+            }
+
+            // Fall back to the export declaration
+            Some(GotoDefinitionResponse::Scalar(Location {
+                uri: defining_file,
+                range: declaration_range,
+            }))
+        }
+        CrossModuleResolution::EnvObject { defining_file, .. } => {
+            // Go to the export declaration
+            // We don't have the exact range, so use a default range
+            Some(GotoDefinitionResponse::Scalar(Location {
+                uri: defining_file,
+                range: Range::default(),
+            }))
+        }
+        CrossModuleResolution::Unresolved => None,
     }
 }
 
@@ -797,8 +1262,8 @@ pub async fn handle_references(
     let position = params.text_document_position.position;
     let include_declaration = params.context.include_declaration;
 
-    // Step 1: Get env var name at position
-    let env_var_name = get_env_var_at_position(state, uri, position)?;
+    // Step 1: Get env var name at position (now includes cross-module resolution)
+    let env_var_name = get_env_var_at_position(state, uri, position).await?;
 
     // Step 2: Query workspace index for files that reference this env var
     let files = state.workspace_index.files_for_env_var(&env_var_name);
@@ -843,7 +1308,11 @@ pub async fn handle_references(
 }
 
 /// Get the environment variable name at a position in a document.
-fn get_env_var_at_position(state: &ServerState, uri: &Url, position: Position) -> Option<String> {
+async fn get_env_var_at_position(
+    state: &ServerState,
+    uri: &Url,
+    position: Position,
+) -> Option<String> {
     // Try direct reference first
     if let Some(reference) = state.document_manager.get_env_reference_cloned(uri, position) {
         return Some(reference.name.to_string());
@@ -859,7 +1328,51 @@ fn get_env_var_at_position(state: &ServerState, uri: &Url, position: Position) -
         return Some(usage.env_var_name.to_string());
     }
 
+    // Fallback: Try cross-module resolution for imported symbols
+    if let Some(env_var_name) =
+        get_env_var_from_cross_module(state, uri, position).await
+    {
+        return Some(env_var_name);
+    }
+
     None
+}
+
+/// Try to resolve an imported symbol to an env var via cross-module resolution.
+async fn get_env_var_from_cross_module(
+    state: &ServerState,
+    uri: &Url,
+    position: Position,
+) -> Option<String> {
+    // Get document state for import context
+    let doc = state.document_manager.get(uri)?;
+    let import_ctx = doc.import_context.clone();
+    drop(doc);
+
+    // Get the identifier at position
+    let (identifier_name, _) = get_identifier_at_position(state, uri, position).await?;
+
+    // Check if this identifier is an import alias
+    let (module_path, original_name) = import_ctx.aliases.get(&identifier_name)?.clone();
+
+    // Only resolve relative imports
+    if !module_path.starts_with("./") && !module_path.starts_with("../") {
+        return None;
+    }
+
+    // Create CrossModuleResolver
+    let cross_resolver = CrossModuleResolver::new(
+        state.workspace_index.clone(),
+        state.module_resolver.clone(),
+        state.languages.clone(),
+    );
+
+    let is_default = original_name == identifier_name;
+
+    match cross_resolver.resolve_import(uri, &module_path, &original_name, is_default) {
+        CrossModuleResolution::EnvVar { name, .. } => Some(name.to_string()),
+        _ => None,
+    }
 }
 
 /// Get all usages of an env var in a file.
@@ -1104,7 +1617,7 @@ pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<
         let (name, range) = get_env_var_in_env_file(state, uri, position).await?;
         (name, Some(range))
     } else {
-        (get_env_var_at_position(state, uri, position)?, None)
+        (get_env_var_at_position(state, uri, position).await?, None)
     };
 
     // Collect all edits

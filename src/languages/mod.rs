@@ -90,6 +90,25 @@ pub trait LanguageSupport: Send + Sync {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // Cross-Module Export Detection
+    // ─────────────────────────────────────────────────────────────
+
+    /// Query for detecting export statements.
+    /// Language-agnostic interface - each language implements its own patterns.
+    ///
+    /// Expected captures (language-dependent):
+    /// - @export_name: The exported identifier name
+    /// - @export_value: The value being exported (optional)
+    /// - @local_name: The local name if aliased (optional)
+    /// - @reexport_source: Module specifier for re-exports (optional)
+    /// - @wildcard_source: Module specifier for wildcard re-exports (optional)
+    /// - @export_stmt: The entire export statement node
+    /// - @default_export: Marks a default export
+    fn export_query(&self) -> Option<&Query> {
+        None
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // Extraction
     // ─────────────────────────────────────────────────────────────
 

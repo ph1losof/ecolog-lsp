@@ -1,5 +1,7 @@
 use abundantis::Abundantis;
-use ecolog_lsp::analysis::{DocumentManager, QueryEngine, WorkspaceIndex, WorkspaceIndexer};
+use ecolog_lsp::analysis::{
+    DocumentManager, ModuleResolver, QueryEngine, WorkspaceIndex, WorkspaceIndexer,
+};
 use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::{ConfigManager, EcologConfig};
 use ecolog_lsp::server::state::ServerState;
@@ -71,6 +73,7 @@ impl TestFixture {
 
         // Setup workspace index and indexer
         let workspace_index = Arc::new(WorkspaceIndex::new());
+        let module_resolver = Arc::new(ModuleResolver::new(temp_dir.clone()));
         let indexer = Arc::new(WorkspaceIndexer::new(
             Arc::clone(&workspace_index),
             query_engine,
@@ -86,6 +89,7 @@ impl TestFixture {
             config_manager,
             workspace_index,
             indexer,
+            module_resolver,
         );
 
         Self { temp_dir, state }

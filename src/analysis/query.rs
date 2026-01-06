@@ -1,9 +1,12 @@
 use crate::languages::LanguageSupport;
-use crate::types::{AccessType, EnvReference, ImportContext};
+use crate::types::{
+    AccessType, EnvReference, ExportResolution, FileExportEntry, ImportContext, ModuleExport,
+};
 use compact_str::CompactString;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tower_lsp::lsp_types::Range as LspRange;
 use tree_sitter::{Parser, Query, QueryCursor, QueryMatch, Tree};
 
 /// Pool of parsers to reuse allocations
@@ -751,5 +754,212 @@ impl QueryEngine {
             }
         })
         .await
+    }
+
+    /// Extract exports from a code file using the language's export query.
+    ///
+    /// Returns a FileExportEntry containing all detected exports.
+    /// The resolution field of each export will initially be Unknown;
+    /// the caller should resolve it using the BindingGraph if needed.
+    pub async fn extract_exports(
+        &self,
+        language: &dyn LanguageSupport,
+        tree: &Tree,
+        source: &[u8],
+    ) -> FileExportEntry {
+        let query = match language.export_query() {
+            Some(q) => q,
+            None => return FileExportEntry::new(),
+        };
+
+        // Get capture indices - not all may be present in every query
+        let idx_export_name = query.capture_index_for_name("export_name");
+        let idx_export_value = query.capture_index_for_name("export_value");
+        let idx_local_name = query.capture_index_for_name("local_name");
+        let idx_reexport_source = query.capture_index_for_name("reexport_source");
+        let idx_wildcard_source = query.capture_index_for_name("wildcard_source");
+        let idx_export_stmt = query.capture_index_for_name("export_stmt");
+        let idx_default_export = query.capture_index_for_name("default_export");
+        let idx_cjs_default_export = query.capture_index_for_name("cjs_default_export");
+        let idx_cjs_named_export = query.capture_index_for_name("cjs_named_export");
+
+        #[derive(Debug)]
+        struct RawExport {
+            export_name: Option<CompactString>,
+            local_name: Option<CompactString>,
+            reexport_source: Option<CompactString>,
+            wildcard_source: Option<CompactString>,
+            declaration_range: Option<LspRange>,
+            is_default: bool,
+        }
+
+        let raw_exports: Vec<RawExport> = self
+            .execute_query(query, tree, source, |m, src| {
+                let mut export_name: Option<CompactString> = None;
+                let mut local_name: Option<CompactString> = None;
+                let mut reexport_source: Option<CompactString> = None;
+                let mut wildcard_source: Option<CompactString> = None;
+                let mut declaration_range: Option<LspRange> = None;
+                let mut is_default = false;
+
+                for capture in m.captures {
+                    let idx = Some(capture.index);
+
+                    if idx == idx_export_name {
+                        export_name = language.extract_identifier(capture.node, src);
+                    } else if idx == idx_export_value {
+                        // Export value captured but we'll resolve it later via BindingGraph
+                        // If export_name is not set and this is an identifier, use it as export_name
+                        if export_name.is_none() && capture.node.kind() == "identifier" {
+                            export_name = language.extract_identifier(capture.node, src);
+                        }
+                    } else if idx == idx_local_name {
+                        local_name = language.extract_identifier(capture.node, src);
+                    } else if idx == idx_reexport_source {
+                        reexport_source = capture
+                            .node
+                            .utf8_text(src)
+                            .ok()
+                            .map(|s| CompactString::from(language.strip_quotes(s)));
+                    } else if idx == idx_wildcard_source {
+                        wildcard_source = capture
+                            .node
+                            .utf8_text(src)
+                            .ok()
+                            .map(|s| CompactString::from(language.strip_quotes(s)));
+                    } else if idx == idx_export_stmt {
+                        let range = capture.node.range();
+                        declaration_range = Some(LspRange::new(
+                            tower_lsp::lsp_types::Position::new(
+                                range.start_point.row as u32,
+                                range.start_point.column as u32,
+                            ),
+                            tower_lsp::lsp_types::Position::new(
+                                range.end_point.row as u32,
+                                range.end_point.column as u32,
+                            ),
+                        ));
+                    } else if idx == idx_default_export {
+                        is_default = true;
+                        let range = capture.node.range();
+                        declaration_range = Some(LspRange::new(
+                            tower_lsp::lsp_types::Position::new(
+                                range.start_point.row as u32,
+                                range.start_point.column as u32,
+                            ),
+                            tower_lsp::lsp_types::Position::new(
+                                range.end_point.row as u32,
+                                range.end_point.column as u32,
+                            ),
+                        ));
+                    } else if idx == idx_cjs_default_export {
+                        is_default = true;
+                        let range = capture.node.range();
+                        declaration_range = Some(LspRange::new(
+                            tower_lsp::lsp_types::Position::new(
+                                range.start_point.row as u32,
+                                range.start_point.column as u32,
+                            ),
+                            tower_lsp::lsp_types::Position::new(
+                                range.end_point.row as u32,
+                                range.end_point.column as u32,
+                            ),
+                        ));
+                    } else if idx == idx_cjs_named_export {
+                        let range = capture.node.range();
+                        declaration_range = Some(LspRange::new(
+                            tower_lsp::lsp_types::Position::new(
+                                range.start_point.row as u32,
+                                range.start_point.column as u32,
+                            ),
+                            tower_lsp::lsp_types::Position::new(
+                                range.end_point.row as u32,
+                                range.end_point.column as u32,
+                            ),
+                        ));
+                    }
+                }
+
+                // Only return if we have something useful
+                if export_name.is_some()
+                    || wildcard_source.is_some()
+                    || (is_default && declaration_range.is_some())
+                {
+                    Some(RawExport {
+                        export_name,
+                        local_name,
+                        reexport_source,
+                        wildcard_source,
+                        declaration_range,
+                        is_default,
+                    })
+                } else {
+                    None
+                }
+            })
+            .await;
+
+        // Convert raw exports to FileExportEntry
+        let mut entry = FileExportEntry::new();
+
+        for raw in raw_exports {
+            // Handle wildcard re-exports
+            if let Some(wildcard) = raw.wildcard_source {
+                entry.wildcard_reexports.push(wildcard);
+                continue;
+            }
+
+            // Must have an export name for named exports
+            let exported_name = match raw.export_name {
+                Some(name) => name,
+                None => {
+                    // Default export without a name - still valid
+                    if raw.is_default && raw.declaration_range.is_some() {
+                        let export = ModuleExport {
+                            exported_name: CompactString::from("default"),
+                            local_name: None,
+                            resolution: ExportResolution::Unknown,
+                            declaration_range: raw.declaration_range.unwrap(),
+                            is_default: true,
+                        };
+                        entry.default_export = Some(export);
+                    }
+                    continue;
+                }
+            };
+
+            let declaration_range = match raw.declaration_range {
+                Some(r) => r,
+                None => continue,
+            };
+
+            // Determine resolution
+            let resolution = if let Some(source_module) = raw.reexport_source {
+                // Re-export from another module
+                ExportResolution::ReExport {
+                    source_module,
+                    original_name: raw.local_name.clone().unwrap_or_else(|| exported_name.clone()),
+                }
+            } else {
+                // Local export - resolution will be determined by caller using BindingGraph
+                ExportResolution::Unknown
+            };
+
+            let export = ModuleExport {
+                exported_name: exported_name.clone(),
+                local_name: raw.local_name,
+                resolution,
+                declaration_range,
+                is_default: raw.is_default,
+            };
+
+            if raw.is_default {
+                entry.default_export = Some(export);
+            } else {
+                entry.named_exports.insert(exported_name, export);
+            }
+        }
+
+        entry
     }
 }

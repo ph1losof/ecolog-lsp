@@ -7,7 +7,7 @@ use crate::analysis::workspace_index::{FileIndexEntry, WorkspaceIndex};
 use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver, QueryEngine};
 use crate::languages::LanguageRegistry;
 use crate::server::config::EcologConfig;
-use crate::types::ImportContext;
+use crate::types::{ExportResolution, FileExportEntry, ImportContext, SymbolId, SymbolOrigin};
 use anyhow::Result;
 use compact_str::CompactString;
 use korni::ParseOptions;
@@ -197,16 +197,23 @@ impl WorkspaceIndexer {
 
         let is_env_file = self.is_env_file(path, config);
 
-        let env_vars = if is_env_file {
-            self.extract_env_vars_from_env_file(&content)
+        let (env_vars, exports) = if is_env_file {
+            (self.extract_env_vars_from_env_file(&content), None)
         } else {
-            self.extract_env_vars_from_code_file(&uri, &content).await?
+            let (vars, exports) = self
+                .extract_env_vars_and_exports_from_code_file(&uri, &content)
+                .await?;
+            (vars, Some(exports))
         };
 
         debug!(
-            "Indexed {:?}: {} env vars, is_env_file={}",
+            "Indexed {:?}: {} env vars, {} exports, is_env_file={}",
             path,
             env_vars.len(),
+            exports
+                .as_ref()
+                .map(|e| e.named_exports.len() + if e.default_export.is_some() { 1 } else { 0 })
+                .unwrap_or(0),
             is_env_file
         );
 
@@ -219,6 +226,11 @@ impl WorkspaceIndexer {
                 path: path.to_path_buf(),
             },
         );
+
+        // Update exports index for code files
+        if let Some(exports) = exports {
+            self.workspace_index.update_exports(&uri, exports);
+        }
 
         Ok(())
     }
@@ -250,12 +262,12 @@ impl WorkspaceIndexer {
             .collect()
     }
 
-    /// Extract env var names from a code file.
-    async fn extract_env_vars_from_code_file(
+    /// Extract env var names and exports from a code file.
+    async fn extract_env_vars_and_exports_from_code_file(
         &self,
         uri: &Url,
         content: &str,
-    ) -> Result<FxHashSet<CompactString>> {
+    ) -> Result<(FxHashSet<CompactString>, FileExportEntry)> {
         // Detect language
         let lang = self
             .languages
@@ -269,12 +281,14 @@ impl WorkspaceIndexer {
             .await
             .ok_or_else(|| anyhow::anyhow!("Failed to parse {:?}", uri))?;
 
-        // Analyze
+        let source = content.as_bytes();
+
+        // Analyze for env vars
         let binding_graph = AnalysisPipeline::analyze(
             &self.query_engine,
             lang.as_ref(),
             &tree,
-            content.as_bytes(),
+            source,
             &ImportContext::default(),
         )
         .await;
@@ -282,7 +296,16 @@ impl WorkspaceIndexer {
         // Extract env vars
         let env_vars = self.collect_env_vars(&binding_graph);
 
-        Ok(env_vars)
+        // Extract exports
+        let mut exports = self
+            .query_engine
+            .extract_exports(lang.as_ref(), &tree, source)
+            .await;
+
+        // Resolve export resolutions using the binding graph
+        self.resolve_export_resolutions(&mut exports, &binding_graph);
+
+        Ok((env_vars, exports))
     }
 
     /// Collect env var names from a binding graph.
@@ -291,12 +314,169 @@ impl WorkspaceIndexer {
         resolver.all_env_vars().into_iter().collect()
     }
 
+    /// Resolve export resolutions using the binding graph.
+    ///
+    /// For exports with Unknown resolution, checks if the exported symbol
+    /// resolves to an env var through the binding graph.
+    fn resolve_export_resolutions(&self, exports: &mut FileExportEntry, graph: &BindingGraph) {
+        // Helper to resolve a symbol to its final env var/object
+        // Returns (Option<env_var_name>, Option<canonical_name>) for EnvVar/EnvObject
+        fn resolve_symbol_chain(
+            graph: &BindingGraph,
+            symbol_id: SymbolId,
+            depth: usize,
+        ) -> Option<(Option<CompactString>, Option<CompactString>)> {
+            const MAX_DEPTH: usize = 20;
+            if depth >= MAX_DEPTH {
+                return None;
+            }
+
+            let symbol = graph.get_symbol(symbol_id)?;
+            match &symbol.origin {
+                SymbolOrigin::EnvVar { name } => Some((Some(name.clone()), None)),
+                SymbolOrigin::EnvObject { canonical_name } => {
+                    Some((None, Some(canonical_name.clone())))
+                }
+                SymbolOrigin::Symbol { target } => {
+                    resolve_symbol_chain(graph, *target, depth + 1)
+                }
+                SymbolOrigin::DestructuredProperty { source, key } => {
+                    // Resolve the source to see if it's an env object
+                    if let Some((_, Some(_canonical))) =
+                        resolve_symbol_chain(graph, *source, depth + 1)
+                    {
+                        // Source is an env object, so this destructured property
+                        // is the env var with the key name
+                        Some((Some(key.clone()), None))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        }
+
+        // Helper to find a symbol by name and resolve it
+        let resolve_symbol = |local_name: &str| -> ExportResolution {
+            let resolver = BindingResolver::new(graph);
+
+            // Check if it's an object binding (env object alias)
+            if let Some(kind) = resolver.get_binding_kind(local_name) {
+                if kind == crate::types::BindingKind::Object {
+                    // It's an env object alias - get the canonical name
+                    for symbol in graph.symbols() {
+                        if symbol.name.as_str() == local_name && symbol.is_valid {
+                            if let SymbolOrigin::EnvObject { canonical_name } = &symbol.origin {
+                                return ExportResolution::EnvObject {
+                                    canonical_name: canonical_name.clone(),
+                                };
+                            }
+                        }
+                    }
+                    // Fallback: use the local name as canonical
+                    return ExportResolution::EnvObject {
+                        canonical_name: local_name.into(),
+                    };
+                }
+            }
+
+            // Check symbol origins directly in the graph
+            for symbol in graph.symbols() {
+                if symbol.name.as_str() == local_name && symbol.is_valid {
+                    match &symbol.origin {
+                        SymbolOrigin::EnvVar { name } => {
+                            return ExportResolution::EnvVar { name: name.clone() };
+                        }
+                        SymbolOrigin::EnvObject { canonical_name } => {
+                            return ExportResolution::EnvObject {
+                                canonical_name: canonical_name.clone(),
+                            };
+                        }
+                        SymbolOrigin::Symbol { target } => {
+                            // Follow the chain to its final resolution
+                            if let Some((env_var, env_obj)) =
+                                resolve_symbol_chain(graph, *target, 0)
+                            {
+                                if let Some(name) = env_var {
+                                    return ExportResolution::EnvVar { name };
+                                }
+                                if let Some(canonical_name) = env_obj {
+                                    return ExportResolution::EnvObject { canonical_name };
+                                }
+                            }
+                        }
+                        SymbolOrigin::DestructuredProperty { source, key } => {
+                            // Resolve the source to see if it's an env object
+                            if let Some((_, Some(_canonical))) =
+                                resolve_symbol_chain(graph, *source, 0)
+                            {
+                                // Source is an env object, so this destructured property
+                                // is the env var with the key name
+                                return ExportResolution::EnvVar { name: key.clone() };
+                            }
+                        }
+                        SymbolOrigin::Unknown
+                        | SymbolOrigin::UnresolvedSymbol { .. }
+                        | SymbolOrigin::UnresolvedDestructure { .. }
+                        | SymbolOrigin::Unresolvable => {
+                            // Not env-related or not yet resolved
+                        }
+                    }
+                }
+            }
+
+            ExportResolution::Unknown
+        };
+
+        // Resolve named exports
+        for export in exports.named_exports.values_mut() {
+            if matches!(export.resolution, ExportResolution::Unknown) {
+                // For destructured exports with alias (e.g., `export const { DB_URL: something }`):
+                // - exported_name = "something" (the variable name in binding graph)
+                // - local_name = "DB_URL" (the destructure key)
+                // We need to look up by exported_name (the actual variable name).
+                //
+                // For regular aliased exports (e.g., `export { foo as bar }`):
+                // - exported_name = "bar"
+                // - local_name = "foo" (the original variable name)
+                // We need to look up by local_name.
+                //
+                // Try exported_name first (for destructured exports), then local_name.
+                let resolution = resolve_symbol(export.exported_name.as_str());
+                export.resolution = if matches!(resolution, ExportResolution::Unknown) {
+                    if let Some(ref local_name) = export.local_name {
+                        resolve_symbol(local_name.as_str())
+                    } else {
+                        resolution
+                    }
+                } else {
+                    resolution
+                };
+            }
+        }
+
+        // Resolve default export
+        if let Some(ref mut default) = exports.default_export {
+            if matches!(default.resolution, ExportResolution::Unknown) {
+                if let Some(ref local_name) = default.local_name {
+                    default.resolution = resolve_symbol(local_name.as_str());
+                } else if default.exported_name != "default" {
+                    // The exported_name might be the actual local name for default exports
+                    default.resolution = resolve_symbol(default.exported_name.as_str());
+                }
+            }
+        }
+    }
+
     // =========================================================================
     // Incremental Updates
     // =========================================================================
 
     /// Handle a file change notification.
     pub async fn on_file_changed(&self, uri: &Url, config: &EcologConfig) {
+        // Invalidate module resolution cache entries that might reference this file
+        self.workspace_index.invalidate_resolution_cache(uri);
+
         if let Ok(path) = uri.to_file_path() {
             if let Err(e) = self.index_file(&path, config).await {
                 debug!("Failed to re-index {:?}: {}", uri, e);
@@ -307,6 +487,11 @@ impl WorkspaceIndexer {
     /// Handle a file deletion notification.
     pub fn on_file_deleted(&self, uri: &Url) {
         debug!("Removing {:?} from index", uri);
+
+        // Invalidate module resolution cache
+        self.workspace_index.invalidate_resolution_cache(uri);
+
+        // Remove file from index (this also removes exports)
         self.workspace_index.remove_file(uri);
     }
 

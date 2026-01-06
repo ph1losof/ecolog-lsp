@@ -1,4 +1,6 @@
-use crate::analysis::{DocumentManager, QueryEngine, WorkspaceIndex, WorkspaceIndexer};
+use crate::analysis::{
+    DocumentManager, ModuleResolver, QueryEngine, WorkspaceIndex, WorkspaceIndexer,
+};
 use crate::languages::LanguageRegistry;
 use abundantis::Abundantis;
 use shelter::Masker;
@@ -17,6 +19,7 @@ pub struct ServerState {
     pub config: Arc<ConfigManager>,
     pub workspace_index: Arc<WorkspaceIndex>,
     pub indexer: Arc<WorkspaceIndexer>,
+    pub module_resolver: Arc<ModuleResolver>,
 }
 
 impl ServerState {
@@ -28,6 +31,7 @@ impl ServerState {
         config: Arc<ConfigManager>,
         workspace_index: Arc<WorkspaceIndex>,
         indexer: Arc<WorkspaceIndexer>,
+        module_resolver: Arc<ModuleResolver>,
     ) -> Self {
         Self {
             document_manager,
@@ -37,6 +41,7 @@ impl ServerState {
             config,
             workspace_index,
             indexer,
+            module_resolver,
         }
     }
 
@@ -51,6 +56,7 @@ impl ServerState {
         workspace_root: PathBuf,
     ) -> Self {
         let workspace_index = Arc::new(WorkspaceIndex::new());
+        let module_resolver = Arc::new(ModuleResolver::new(workspace_root.clone()));
         let indexer = Arc::new(WorkspaceIndexer::new(
             Arc::clone(&workspace_index),
             query_engine,
@@ -66,6 +72,7 @@ impl ServerState {
             config,
             workspace_index,
             indexer,
+            module_resolver,
         }
     }
 }

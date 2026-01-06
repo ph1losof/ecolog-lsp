@@ -17,6 +17,8 @@ static TSX_IMPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static TS_IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
+static TS_EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
+static TSX_EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for TypeScript {
     fn id(&self) -> &'static str {
@@ -124,6 +126,16 @@ impl LanguageSupport for TypeScript {
                 include_str!("../../queries/typescript/identifiers.scm"),
             )
             .expect("Failed to compile TypeScript identifier query")
+        }))
+    }
+
+    fn export_query(&self) -> Option<&Query> {
+        Some(TS_EXPORT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/exports.scm"),
+            )
+            .expect("Failed to compile TypeScript export query")
         }))
     }
 
@@ -243,6 +255,16 @@ impl LanguageSupport for TypeScriptReact {
                 include_str!("../../queries/typescript/identifiers.scm"),
             )
             .expect("Failed to compile TypeScriptReact identifier query")
+        }))
+    }
+
+    fn export_query(&self) -> Option<&Query> {
+        Some(TSX_EXPORT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/exports.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact export query")
         }))
     }
 

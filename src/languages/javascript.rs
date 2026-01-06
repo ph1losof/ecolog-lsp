@@ -15,6 +15,7 @@ static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
+static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for JavaScript {
     fn id(&self) -> &'static str {
@@ -154,6 +155,16 @@ impl LanguageSupport for JavaScript {
                 include_str!("../../queries/javascript/scopes.scm"),
             )
             .expect("Failed to compile JavaScript scope query")
+        }))
+    }
+
+    fn export_query(&self) -> Option<&Query> {
+        Some(EXPORT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/javascript/exports.scm"),
+            )
+            .expect("Failed to compile JavaScript export query")
         }))
     }
 
