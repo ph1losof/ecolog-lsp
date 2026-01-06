@@ -689,6 +689,36 @@ pub async fn handle_execute_command(
                 Err(e) => Some(json!({ "error": format!("Failed to list variables: {}", e) })),
             }
         }
+        "ecolog.generateEnvExample" => {
+            // Generate .env.example content from all env vars used in the workspace
+            // Returns buffer contents - the client decides what to do with it
+            let mut env_vars: Vec<String> = state
+                .workspace_index
+                .all_env_vars()
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect();
+            env_vars.sort();
+
+            if env_vars.is_empty() {
+                return Some(json!({
+                    "content": "# No environment variables found in workspace\n",
+                    "count": 0
+                }));
+            }
+
+            // Generate .env.example content
+            let content = env_vars
+                .iter()
+                .map(|var| format!("{}=", var))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            Some(json!({
+                "content": format!("{}\n", content),
+                "count": env_vars.len()
+            }))
+        }
         "ecolog.file.list" => {
             // Check if file source is enabled
             {
@@ -1097,7 +1127,9 @@ pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<
         }
     }
 
-    // Step 3: Rename in other .env file(s) - skip if already added as source
+    // Step 3: Rename in .env file(s) if the var is project-defined
+    // For system/shell variables (e.g., PATH, HOME), this will return None,
+    // so only code references are renamed - we never modify system environment.
     if let Some(def_location) = find_env_definition(state, &old_name).await {
         // Only add if not already in changes (avoid duplicate edits due to path differences)
         if !changes.contains_key(&def_location.uri) {

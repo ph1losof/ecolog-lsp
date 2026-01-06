@@ -236,6 +236,7 @@ impl LanguageServer for LspServer {
                     commands: vec![
                         "ecolog.file.setActive".to_string(),
                         "ecolog.listEnvVariables".to_string(),
+                        "ecolog.generateEnvExample".to_string(),
                         "ecolog.file.list".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
