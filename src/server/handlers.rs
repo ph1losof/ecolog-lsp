@@ -1,7 +1,6 @@
 use crate::analysis::{
     AnalysisPipeline, BindingGraph, BindingResolver, CrossModuleResolution, CrossModuleResolver,
 };
-use crate::server::semantic_tokens::SemanticTokenProvider;
 use crate::server::state::ServerState;
 use crate::types::ImportContext;
 use abundantis::source::VariableSource;
@@ -13,8 +12,7 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, Diagnostic, DiagnosticSeverity,
     Documentation, ExecuteCommandParams, Hover, HoverContents, HoverParams, Location,
     MarkupContent, MarkupKind, NumberOrString, Position, PrepareRenameResponse, Range,
-    ReferenceParams, RenameParams, SemanticTokens, SemanticTokensParams, SemanticTokensResult,
-    TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
+    ReferenceParams, RenameParams, TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
 };
 
 fn format_source(source: &VariableSource, root: &Path) -> String {
@@ -770,49 +768,6 @@ async fn handle_definition_cross_module(
         }
         CrossModuleResolution::Unresolved => None,
     }
-}
-
-pub async fn handle_semantic_tokens_full(
-    params: SemanticTokensParams,
-    state: &ServerState,
-) -> Option<SemanticTokensResult> {
-    let uri = &params.text_document.uri;
-
-    let file_name = uri
-        .to_file_path()
-        .ok()?
-        .file_name()?
-        .to_string_lossy()
-        .to_string();
-
-    // Fast check: must be an env file pattern
-    let is_env_file = {
-        let config = state.config.get_config();
-        let config = config.read().await;
-        config.workspace.env_files.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches(&file_name))
-                .unwrap_or(false)
-        })
-    };
-
-    if !is_env_file {
-        return None;
-    }
-
-    let doc_ref = state.document_manager.get(uri)?;
-    let content = doc_ref.content.clone();
-    drop(doc_ref);
-
-    let entries = korni::parse_with_options(&content, ParseOptions::full());
-
-    let rope = ropey::Rope::from_str(&content);
-    let tokens = SemanticTokenProvider::extract_tokens(&rope, &content, &entries);
-
-    Some(SemanticTokensResult::Tokens(SemanticTokens {
-        result_id: None,
-        data: tokens,
-    }))
 }
 
 pub async fn compute_diagnostics(

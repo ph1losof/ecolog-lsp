@@ -2,7 +2,6 @@ pub mod config;
 pub mod env_resolution;
 pub mod error;
 pub mod handlers;
-pub mod semantic_tokens;
 pub mod state;
 pub mod util;
 
@@ -218,24 +217,6 @@ impl LanguageServer for LspServer {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
-                semantic_tokens_provider: Some(
-                    SemanticTokensServerCapabilities::SemanticTokensOptions(
-                        SemanticTokensOptions {
-                            legend: SemanticTokensLegend {
-                                token_types: semantic_tokens::SemanticTokenProvider::LEGEND_TYPES
-                                    .to_vec(),
-                                token_modifiers:
-                                    semantic_tokens::SemanticTokenProvider::LEGEND_MODIFIERS
-                                        .to_vec(),
-                            },
-                            full: Some(SemanticTokensFullOptions::Bool(true)),
-                            range: None,
-                            work_done_progress_options: WorkDoneProgressOptions {
-                                work_done_progress: None,
-                            },
-                        },
-                    ),
-                ),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "ecolog.file.setActive".to_string(),
@@ -459,13 +440,6 @@ impl LanguageServer for LspServer {
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         Ok(handlers::handle_definition(params, &self.state).await)
-    }
-
-    async fn semantic_tokens_full(
-        &self,
-        params: SemanticTokensParams,
-    ) -> Result<Option<SemanticTokensResult>> {
-        Ok(handlers::handle_semantic_tokens_full(params, &self.state).await)
     }
 
     async fn execute_command(
