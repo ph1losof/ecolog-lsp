@@ -1,6 +1,5 @@
 use ecolog_lsp::server::LspServer;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tower_lsp::{LspService, Server};
 
 #[tokio::main]
@@ -9,7 +8,7 @@ async fn main() {
 
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    let mut config_manager = ecolog_lsp::server::config::ConfigManager::new();
+    let config_manager = ecolog_lsp::server::config::ConfigManager::new();
 
     let config = config_manager
         .load_from_workspace(&root)
@@ -31,16 +30,12 @@ async fn main() {
         .await
         .expect("Failed to initialize Ecolog core");
 
-    let shelter_config = config.masking.to_shelter_config();
-    let masker = Arc::new(Mutex::new(shelter::Masker::new(shelter_config)));
-
-    config_manager.set_masker(masker.clone());
     let config_arc = Arc::new(config_manager);
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
     let (service, socket) =
-        LspService::new(|client| LspServer::new_with_config(client, core, masker, config_arc));
+        LspService::new(|client| LspServer::new_with_config(client, core, config_arc));
     Server::new(stdin, stdout, socket).serve(service).await;
 }

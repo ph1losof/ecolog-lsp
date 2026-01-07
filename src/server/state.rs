@@ -3,10 +3,8 @@ use crate::analysis::{
 };
 use crate::languages::LanguageRegistry;
 use abundantis::Abundantis;
-use shelter::Masker;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::server::config::ConfigManager;
 
@@ -15,7 +13,6 @@ pub struct ServerState {
     pub document_manager: Arc<DocumentManager>,
     pub languages: Arc<LanguageRegistry>,
     pub core: Arc<Abundantis>,
-    pub masker: Arc<Mutex<Masker>>,
     pub config: Arc<ConfigManager>,
     pub workspace_index: Arc<WorkspaceIndex>,
     pub indexer: Arc<WorkspaceIndexer>,
@@ -27,7 +24,6 @@ impl ServerState {
         document_manager: Arc<DocumentManager>,
         languages: Arc<LanguageRegistry>,
         core: Arc<Abundantis>,
-        masker: Arc<Mutex<Masker>>,
         config: Arc<ConfigManager>,
         workspace_index: Arc<WorkspaceIndex>,
         indexer: Arc<WorkspaceIndexer>,
@@ -37,7 +33,6 @@ impl ServerState {
             document_manager,
             languages,
             core,
-            masker,
             config,
             workspace_index,
             indexer,
@@ -58,7 +53,6 @@ impl ServerState {
         document_manager: Arc<DocumentManager>,
         languages: Arc<LanguageRegistry>,
         core: Arc<Abundantis>,
-        masker: Arc<Mutex<Masker>>,
         config: Arc<ConfigManager>,
         query_engine: Arc<QueryEngine>,
         workspace_root: PathBuf,
@@ -76,7 +70,6 @@ impl ServerState {
             document_manager,
             languages,
             core,
-            masker,
             config,
             workspace_index,
             indexer,

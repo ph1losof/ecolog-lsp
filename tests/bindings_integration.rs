@@ -6,13 +6,10 @@ use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::ConfigManager;
 use ecolog_lsp::server::handlers::{compute_diagnostics, handle_hover};
 use ecolog_lsp::server::state::ServerState;
-use shelter::masker::Masker;
-use shelter::MaskingConfig;
 use std::fs::{self, File};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{
     HoverParams, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
 };
@@ -51,7 +48,6 @@ async fn test_bindings_integration() {
             .await
             .expect("Failed to build Abundantis"),
     );
-    let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
     let workspace_index = Arc::new(WorkspaceIndex::new());
     let module_resolver = Arc::new(ModuleResolver::new(temp_dir.clone()));
     let indexer = Arc::new(WorkspaceIndexer::new(
@@ -65,7 +61,6 @@ async fn test_bindings_integration() {
         document_manager,
         languages,
         core,
-        masker,
         config_manager,
         workspace_index,
         indexer,
@@ -314,7 +309,6 @@ async fn test_destructuring_diagnostics() {
             .await
             .expect("Failed to build Abundantis"),
     );
-    let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
     let workspace_index = Arc::new(WorkspaceIndex::new());
     let module_resolver = Arc::new(ModuleResolver::new(temp_dir.clone()));
     let indexer = Arc::new(WorkspaceIndexer::new(
@@ -328,7 +322,6 @@ async fn test_destructuring_diagnostics() {
         document_manager,
         languages,
         core,
-        masker,
         config_manager,
         workspace_index,
         indexer,

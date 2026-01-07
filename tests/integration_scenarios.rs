@@ -415,52 +415,6 @@ async fn test_feature_completion_disabled() {
     assert!(completion.is_none());
 }
 
-#[tokio::test]
-async fn test_masking_hover() {
-    let fixture = TestFixture::new().await;
-    {
-        let config_arc = fixture.state.config.get_config();
-        let mut config = config_arc.write().await;
-        config.masking.hover = true;
-    }
-
-    let uri = fixture.create_file("test.js", "process.env.API_KEY");
-    fixture
-        .state
-        .document_manager
-        .open(
-            uri.clone(),
-            "javascript".to_string(),
-            "process.env.API_KEY".to_string(),
-            0,
-        )
-        .await;
-
-    let hover = handle_hover(
-        HoverParams {
-            text_document_position_params: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 15),
-            },
-            work_done_progress_params: Default::default(),
-        },
-        &fixture.state,
-    )
-    .await;
-
-    assert!(hover.is_some());
-    let h_str = format!("{:?}", hover.unwrap());
-    // API_KEY should be masked (default mode) - value "secret_key" -> "**********"
-    assert!(
-        h_str.contains("**********") || h_str.contains("*****"),
-        "API_KEY should be masked"
-    );
-    assert!(
-        !h_str.contains("secret_key"),
-        "API_KEY actual value should not be visible"
-    );
-}
-
 // Tests case sensitivity behavior of env var lookup
 // db_url (lowercase) should NOT match DB_URL (uppercase)
 #[tokio::test]

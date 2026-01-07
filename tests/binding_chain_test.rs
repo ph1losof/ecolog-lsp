@@ -14,13 +14,10 @@ use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::ConfigManager;
 use ecolog_lsp::server::handlers::handle_hover;
 use ecolog_lsp::server::state::ServerState;
-use shelter::masker::Masker;
-use shelter::MaskingConfig;
 use std::fs::{self, File};
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{
     HoverParams, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
 };
@@ -41,7 +38,6 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
             .await
             .expect("Failed to build Abundantis"),
     );
-    let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
     let workspace_index = Arc::new(WorkspaceIndex::new());
     let module_resolver = Arc::new(ModuleResolver::new(temp_dir.to_path_buf()));
     let indexer = Arc::new(WorkspaceIndexer::new(
@@ -55,7 +51,6 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
         document_manager,
         languages,
         core,
-        masker,
         config_manager,
         workspace_index,
         indexer,

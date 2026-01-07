@@ -10,9 +10,7 @@ pub use error::LspError;
 use crate::analysis::{DocumentManager, QueryEngine};
 use crate::languages::LanguageRegistry;
 use crate::server::state::ServerState;
-use shelter::Masker;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -25,20 +23,15 @@ pub struct LspServer {
 
 impl LspServer {
     pub fn new(client: Client, core: abundantis::Abundantis) -> Self {
-        let masker = Arc::new(Mutex::new(shelter::Masker::new(
-            shelter::MaskingConfig::default(),
-        )));
-        let mut config_manager = crate::server::config::ConfigManager::new();
-        config_manager.set_masker(masker.clone());
+        let config_manager = crate::server::config::ConfigManager::new();
         let config = Arc::new(config_manager);
 
-        Self::new_with_config(client, core, masker, config)
+        Self::new_with_config(client, core, config)
     }
 
     pub fn new_with_config(
         client: Client,
         core: abundantis::Abundantis,
-        masker: Arc<Mutex<Masker>>,
         config: Arc<crate::server::config::ConfigManager>,
     ) -> Self {
         let mut registry = LanguageRegistry::new();
@@ -65,7 +58,6 @@ impl LspServer {
             document_manager,
             languages,
             Arc::new(core),
-            masker,
             config,
             query_engine,
             workspace_root,

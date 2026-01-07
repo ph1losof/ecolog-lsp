@@ -37,7 +37,6 @@ tracing-subscriber = "0.3"
 
 # Workspace
 abundantis = { path = "../abundantis", features = ["full"] }
-shelter = { path = "../shelter" }
 korni = { path = "../korni" }
 
 # Error Handling

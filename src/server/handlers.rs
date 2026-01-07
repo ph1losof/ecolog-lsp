@@ -48,7 +48,7 @@ struct ResolvedEnvVarValue {
     description: Option<compact_str::CompactString>,
 }
 
-/// Resolve an environment variable and apply masking based on config.
+/// Resolve an environment variable value.
 /// This is the core resolution logic used by all hover handlers.
 async fn resolve_env_var_value(
     env_var_name: &str,
@@ -68,28 +68,10 @@ async fn resolve_env_var_value(
         .await
         .ok()??;
 
-    let should_mask = {
-        let config_manager = state.config.get_config();
-        let config = config_manager.read().await;
-        config.masking.should_mask_hover()
-    };
-
-    let value = if should_mask {
-        let mut masker = state.masker.lock().await;
-        let source = resolved
-            .source
-            .file_path()
-            .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
-            .and_then(|p| p.to_str());
-        masker.mask(&resolved.resolved_value, source, Some(resolved.key.as_str()))
-    } else {
-        resolved.resolved_value.to_string()
-    };
-
     let source_str = format_source(&resolved.source, &context.workspace_root);
 
     Some(ResolvedEnvVarValue {
-        value,
+        value: resolved.resolved_value.to_string(),
         source: source_str,
         description: resolved.description.clone(),
     })
@@ -507,17 +489,14 @@ pub async fn handle_completion(
     params: CompletionParams,
     state: &ServerState,
 ) -> Option<Vec<CompletionItem>> {
-    let (is_strict, should_mask) = {
+    let is_strict = {
         let config_manager = state.config.get_config();
         let config = config_manager.read().await;
         if !config.features.completion {
             tracing::debug!("Completion feature disabled");
             return None;
         }
-        (
-            config.strict.completion,
-            config.masking.should_mask_completion(),
-        )
+        config.strict.completion
     };
 
     let uri = &params.text_document_position.text_document.uri;
@@ -548,26 +527,11 @@ pub async fn handle_completion(
         .all_variables(&context, registry)
         .await
     {
-        // Using pre-fetched config value
-
-        let mut masker = state.masker.lock().await;
-
         Some(
             all_vars
                 .into_iter()
                 .map(|var| {
-                    let value = if should_mask {
-                        let source = var
-                            .source
-                            .file_path()
-                            .and_then(|p| p.strip_prefix(&context.workspace_root).ok())
-                            .and_then(|p| p.to_str());
-                        let key = Some(var.key.as_str());
-                        masker.mask(&var.resolved_value, source, key)
-                    } else {
-                        var.resolved_value.to_string()
-                    };
-
+                    let value = var.resolved_value.to_string();
                     let source_str = format_source(&var.source, &context.workspace_root);
 
                     // Wrap each line in backticks - inline code doesn't interpret markdown
@@ -585,7 +549,7 @@ pub async fn handle_completion(
                     CompletionItem {
                         label: var.key.to_string(),
                         kind: Some(CompletionItemKind::VARIABLE),
-                        detail: None, // Removed "Sensitive Variable" as requested
+                        detail: None,
                         documentation: Some(Documentation::MarkupContent(MarkupContent {
                             kind: MarkupKind::Markdown,
                             value: doc,

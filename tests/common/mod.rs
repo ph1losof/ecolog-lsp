@@ -5,14 +5,11 @@ use ecolog_lsp::analysis::{
 use ecolog_lsp::languages::LanguageRegistry;
 use ecolog_lsp::server::config::{ConfigManager, EcologConfig};
 use ecolog_lsp::server::state::ServerState;
-use shelter::masker::Masker;
-use shelter::MaskingConfig;
 use std::fs::{self, File};
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
 use tower_lsp::lsp_types::Url;
 
 // Global atomic counter to ensure unique temp directory names
@@ -58,7 +55,7 @@ impl TestFixture {
         let query_engine = Arc::new(QueryEngine::new());
         let document_manager =
             Arc::new(DocumentManager::new(query_engine.clone(), languages.clone()));
-        let mut config_manager = ConfigManager::new();
+        let config_manager = ConfigManager::new();
         let core = Arc::new(
             Abundantis::builder()
                 .root(&temp_dir)
@@ -66,9 +63,7 @@ impl TestFixture {
                 .await
                 .expect("Failed to build Abundantis"),
         );
-        let masker = Arc::new(Mutex::new(Masker::new(MaskingConfig::default())));
 
-        config_manager.set_masker(masker.clone());
         let config_manager = Arc::new(config_manager);
 
         // Setup workspace index and indexer
@@ -85,7 +80,6 @@ impl TestFixture {
             document_manager,
             languages,
             core,
-            masker,
             config_manager,
             workspace_index,
             indexer,

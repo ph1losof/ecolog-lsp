@@ -1,9 +1,8 @@
 use serde::Deserialize;
-use shelter::Masker;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EcologConfig {
@@ -11,8 +10,6 @@ pub struct EcologConfig {
     pub features: FeatureConfig,
     #[serde(default)]
     pub strict: StrictConfig,
-    #[serde(default)]
-    pub masking: UnifiedMaskingConfig,
     #[serde(default)]
     pub workspace: abundantis::config::WorkspaceConfig,
     #[serde(default)]
@@ -43,16 +40,6 @@ pub struct StrictConfig {
     pub completion: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct UnifiedMaskingConfig {
-    #[serde(default = "false_bool")]
-    pub hover: bool,
-    #[serde(default = "false_bool")]
-    pub completion: bool,
-    #[serde(flatten)]
-    pub shelter: shelter::MaskingConfig,
-}
-
 impl Default for FeatureConfig {
     fn default() -> Self {
         Self {
@@ -73,36 +60,11 @@ impl Default for StrictConfig {
     }
 }
 
-impl Default for UnifiedMaskingConfig {
-    fn default() -> Self {
-        Self {
-            hover: false,
-            completion: false,
-            shelter: shelter::MaskingConfig::default(),
-        }
-    }
-}
-
-impl UnifiedMaskingConfig {
-    pub fn to_shelter_config(&self) -> shelter::MaskingConfig {
-        self.shelter.clone()
-    }
-
-    pub fn should_mask_hover(&self) -> bool {
-        self.hover
-    }
-
-    pub fn should_mask_completion(&self) -> bool {
-        self.completion
-    }
-}
-
 impl Default for EcologConfig {
     fn default() -> Self {
         Self {
             features: FeatureConfig::default(),
             strict: StrictConfig::default(),
-            masking: UnifiedMaskingConfig::default(),
             workspace: abundantis::config::WorkspaceConfig::default(),
             resolution: abundantis::config::ResolutionConfig::default(),
             interpolation: abundantis::config::InterpolationConfig::default(),
@@ -124,19 +86,13 @@ impl EcologConfig {
 
 pub struct ConfigManager {
     config: Arc<RwLock<EcologConfig>>,
-    masker: Option<Arc<Mutex<Masker>>>,
 }
 
 impl ConfigManager {
     pub fn new() -> Self {
         Self {
             config: Arc::new(RwLock::new(EcologConfig::default())),
-            masker: None,
         }
-    }
-
-    pub fn set_masker(&mut self, masker: Arc<Mutex<Masker>>) {
-        self.masker = Some(masker);
     }
 
     pub fn get_config(&self) -> Arc<RwLock<EcologConfig>> {
@@ -159,13 +115,6 @@ impl ConfigManager {
         let mut lock = self.config.write().await;
         *lock = new_config.clone();
 
-        if let Some(ref masker_arc) = self.masker {
-            let mut masker = masker_arc.lock().await;
-            let shelter_config = new_config.masking.to_shelter_config();
-            *masker = Masker::new(shelter_config);
-            tracing::info!("Updated masker with new configuration");
-        }
-
         Ok(new_config)
     }
 
@@ -177,7 +126,4 @@ impl ConfigManager {
 
 fn true_bool() -> bool {
     true
-}
-fn false_bool() -> bool {
-    false
 }
