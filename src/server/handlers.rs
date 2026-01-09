@@ -1130,6 +1130,85 @@ pub async fn handle_execute_command(
 
             Some(json!({ "files": env_files, "count": env_files.len() }))
         }
+        "ecolog.variable.get" => {
+            // Get a specific variable by name
+            // Arguments: [variable_name: string]
+            let var_name = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str())
+                .map(|s| s.to_string());
+
+            let Some(name) = var_name else {
+                return Some(json!({ "error": "Variable name required" }));
+            };
+
+            let root = {
+                let workspace = state.core.workspace.read();
+                workspace.root().to_path_buf()
+            };
+
+            // Resolve the variable
+            if let Some(resolved) = resolve_env_var_value(&name, &root, state).await {
+                Some(json!({
+                    "name": name,
+                    "value": resolved.value,
+                    "source": resolved.source,
+                    "description": resolved.description
+                }))
+            } else {
+                Some(json!({ "error": format!("Variable '{}' not found", name) }))
+            }
+        }
+        "ecolog.workspace.list" => {
+            // List all workspaces (for monorepo support)
+            // Returns the current workspace info - full monorepo detection would require
+            // more integration with abundantis workspace detection
+            let workspace_info = {
+                let workspace = state.core.workspace.read();
+                json!({
+                    "name": workspace.root().file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("workspace"),
+                    "path": workspace.root().display().to_string(),
+                    "isActive": true
+                })
+            };
+
+            Some(json!({
+                "workspaces": [workspace_info],
+                "count": 1
+            }))
+        }
+        "ecolog.workspace.switch" => {
+            // Switch workspace (for monorepo support)
+            // Arguments: [workspace_path: string]
+            // Note: Full workspace switching would require reloading the workspace context
+            // For now, we just acknowledge the request
+            let workspace_path = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str())
+                .map(|s| s.to_string());
+
+            let Some(path) = workspace_path else {
+                return Some(json!({ "error": "Workspace path required" }));
+            };
+
+            // Validate the path exists
+            let path_buf = std::path::PathBuf::from(&path);
+            if !path_buf.exists() {
+                return Some(json!({ "error": format!("Workspace path does not exist: {}", path) }));
+            }
+
+            // TODO: Actually switch workspace context in abundantis
+            // For now, just return success as a placeholder
+            Some(json!({
+                "success": true,
+                "workspace": path,
+                "message": "Workspace switch acknowledged (full implementation pending)"
+            }))
+        }
         _ => None,
     }
 }

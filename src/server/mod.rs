@@ -212,9 +212,12 @@ impl LanguageServer for LspServer {
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "ecolog.file.setActive".to_string(),
+                        "ecolog.file.list".to_string(),
                         "ecolog.listEnvVariables".to_string(),
                         "ecolog.generateEnvExample".to_string(),
-                        "ecolog.file.list".to_string(),
+                        "ecolog.variable.get".to_string(),
+                        "ecolog.workspace.list".to_string(),
+                        "ecolog.workspace.switch".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
