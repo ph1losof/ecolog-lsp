@@ -1180,35 +1180,6 @@ pub async fn handle_execute_command(
                 "count": 1
             }))
         }
-        "ecolog.workspace.switch" => {
-            // Switch workspace (for monorepo support)
-            // Arguments: [workspace_path: string]
-            // Note: Full workspace switching would require reloading the workspace context
-            // For now, we just acknowledge the request
-            let workspace_path = params
-                .arguments
-                .first()
-                .and_then(|arg| arg.as_str())
-                .map(|s| s.to_string());
-
-            let Some(path) = workspace_path else {
-                return Some(json!({ "error": "Workspace path required" }));
-            };
-
-            // Validate the path exists
-            let path_buf = std::path::PathBuf::from(&path);
-            if !path_buf.exists() {
-                return Some(json!({ "error": format!("Workspace path does not exist: {}", path) }));
-            }
-
-            // TODO: Actually switch workspace context in abundantis
-            // For now, just return success as a placeholder
-            Some(json!({
-                "success": true,
-                "workspace": path,
-                "message": "Workspace switch acknowledged (full implementation pending)"
-            }))
-        }
         _ => None,
     }
 }

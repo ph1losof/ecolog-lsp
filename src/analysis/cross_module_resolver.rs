@@ -162,54 +162,31 @@ impl CrossModuleResolver {
             None => return CrossModuleResolution::Unresolved,
         };
 
-        // Find the export
+        // Find the export directly
         let export = if is_default {
             exports.default_export.as_ref()
         } else {
             exports.get_export(name)
         };
 
-        // If not found directly, check wildcard re-exports
-        let export = export.or_else(|| {
-            for wildcard_source in &exports.wildcard_reexports {
-                if let Some(wildcard_uri) =
-                    self.resolve_module_specifier(source_uri, wildcard_source)
-                {
-                    // Recursively check in the wildcard source
-                    match self.resolve_recursive(&wildcard_uri, name, false, visited, depth + 1) {
-                        CrossModuleResolution::Unresolved => continue,
-                        _resolved => {
-                            // Found it through wildcard - return the resolution
-                            // But we can't return export here, so we return directly
-                            return None; // Signal to use the recursive result
-                        }
-                    }
+        // If found directly, resolve it
+        if let Some(export) = export {
+            return self.resolve_export(export, source_uri, visited, depth);
+        }
+
+        // Not found directly - check wildcard re-exports (single pass)
+        // This avoids the previous bug where we called resolve_recursive twice,
+        // corrupting the visited set and causing false cycle detection.
+        for wildcard_source in &exports.wildcard_reexports {
+            if let Some(wildcard_uri) = self.resolve_module_specifier(source_uri, wildcard_source) {
+                let result = self.resolve_recursive(&wildcard_uri, name, false, visited, depth + 1);
+                if !matches!(result, CrossModuleResolution::Unresolved) {
+                    return result;
                 }
             }
-            None
-        });
+        }
 
-        let export = match export {
-            Some(e) => e,
-            None => {
-                // Check wildcard re-exports again for direct return
-                for wildcard_source in &exports.wildcard_reexports {
-                    if let Some(wildcard_uri) =
-                        self.resolve_module_specifier(source_uri, wildcard_source)
-                    {
-                        let result =
-                            self.resolve_recursive(&wildcard_uri, name, false, visited, depth + 1);
-                        if !matches!(result, CrossModuleResolution::Unresolved) {
-                            return result;
-                        }
-                    }
-                }
-                return CrossModuleResolution::Unresolved;
-            }
-        };
-
-        // Resolve based on export type
-        self.resolve_export(export, source_uri, visited, depth)
+        CrossModuleResolution::Unresolved
     }
 
     /// Resolve an individual export to its final env var.

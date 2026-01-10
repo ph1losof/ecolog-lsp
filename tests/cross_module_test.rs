@@ -854,3 +854,258 @@ env."#;
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+/// Test wildcard re-export resolution.
+/// index.ts: export * from "./config"
+/// config.ts: export const dbUrl = process.env.DATABASE_URL;
+/// app.ts: import { dbUrl } from "./index"; dbUrl;
+///
+/// This test verifies the fix for the wildcard re-export bug where the
+/// visited set was corrupted by a double-loop pattern, causing false
+/// cycle detection.
+#[tokio::test]
+async fn test_wildcard_reexport_env_var() {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("ecolog_wildcard_reexport_{}", timestamp));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Create .env file
+    let env_path = temp_dir.join(".env");
+    let mut env_file = File::create(&env_path).unwrap();
+    writeln!(env_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+
+    // Create the config file with env var export
+    let config_path = temp_dir.join("config.ts");
+    let config_content = "export const dbUrl = process.env.DATABASE_URL;";
+    let mut f = File::create(&config_path).unwrap();
+    write!(f, "{}", config_content).unwrap();
+
+    // Create index file with wildcard re-export
+    let index_path = temp_dir.join("index.ts");
+    let index_content = r#"export * from "./config";"#;
+    let mut f = File::create(&index_path).unwrap();
+    write!(f, "{}", index_content).unwrap();
+
+    // Create the importing file that imports through the wildcard
+    let app_path = temp_dir.join("app.ts");
+    let app_content = r#"import { dbUrl } from './index';
+dbUrl;"#;
+    let mut f = File::create(&app_path).unwrap();
+    write!(f, "{}", app_content).unwrap();
+
+    let state = setup_test_state(&temp_dir).await;
+
+    // Run workspace indexing
+    let config = default_config();
+    state.indexer.index_workspace(&config).await.unwrap();
+
+    // Verify config exports were indexed
+    let config_uri = Url::from_file_path(&config_path).unwrap();
+    let exports = state.workspace_index.get_exports(&config_uri);
+    assert!(exports.is_some(), "Should have exports for config file");
+    let exports = exports.unwrap();
+    assert!(
+        exports.named_exports.contains_key("dbUrl"),
+        "Config should have 'dbUrl' export"
+    );
+
+    // Verify index has wildcard re-exports
+    let index_uri = Url::from_file_path(&index_path).unwrap();
+    let index_exports = state.workspace_index.get_exports(&index_uri);
+    assert!(index_exports.is_some(), "Should have exports for index file");
+    let index_exports = index_exports.unwrap();
+    assert!(
+        !index_exports.wildcard_reexports.is_empty(),
+        "Index should have wildcard re-exports, got: {:?}",
+        index_exports.wildcard_reexports
+    );
+
+    // Open the app file
+    let app_uri = Url::from_file_path(&app_path).unwrap();
+    state
+        .document_manager
+        .open(
+            app_uri.clone(),
+            "typescript".to_string(),
+            app_content.to_string(),
+            0,
+        )
+        .await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Hover on 'dbUrl' (line 1, col 0) - should resolve through wildcard
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: app_uri.clone() },
+                position: Position::new(1, 0),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &state,
+    )
+    .await;
+
+    assert!(
+        hover.is_some(),
+        "Should show hover info for env var imported through wildcard re-export"
+    );
+
+    let hover_str = format!("{:?}", hover.unwrap());
+    assert!(
+        hover_str.contains("DATABASE_URL") || hover_str.contains("postgres"),
+        "Hover should contain env var info, got: {}",
+        hover_str
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// Test wildcard re-export chain resolution.
+/// a.ts: export * from "./b"
+/// b.ts: export * from "./c"
+/// c.ts: export const x = process.env.X
+/// app.ts: import { x } from "./a"; x;
+#[tokio::test]
+async fn test_wildcard_reexport_chain() {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("ecolog_wildcard_chain_{}", timestamp));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Create .env file
+    let env_path = temp_dir.join(".env");
+    let mut env_file = File::create(&env_path).unwrap();
+    writeln!(env_file, "X=chain_value").unwrap();
+
+    // Create the chain: a -> b -> c
+    let c_path = temp_dir.join("c.ts");
+    let c_content = "export const x = process.env.X;";
+    let mut f = File::create(&c_path).unwrap();
+    write!(f, "{}", c_content).unwrap();
+
+    let b_path = temp_dir.join("b.ts");
+    let b_content = r#"export * from "./c";"#;
+    let mut f = File::create(&b_path).unwrap();
+    write!(f, "{}", b_content).unwrap();
+
+    let a_path = temp_dir.join("a.ts");
+    let a_content = r#"export * from "./b";"#;
+    let mut f = File::create(&a_path).unwrap();
+    write!(f, "{}", a_content).unwrap();
+
+    // Create the importing file
+    let app_path = temp_dir.join("app.ts");
+    let app_content = r#"import { x } from './a';
+x;"#;
+    let mut f = File::create(&app_path).unwrap();
+    write!(f, "{}", app_content).unwrap();
+
+    let state = setup_test_state(&temp_dir).await;
+
+    // Run workspace indexing
+    let config = default_config();
+    state.indexer.index_workspace(&config).await.unwrap();
+
+    // Open the app file
+    let app_uri = Url::from_file_path(&app_path).unwrap();
+    state
+        .document_manager
+        .open(
+            app_uri.clone(),
+            "typescript".to_string(),
+            app_content.to_string(),
+            0,
+        )
+        .await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Hover on 'x' (line 1, col 0) - should resolve through chain
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: app_uri.clone() },
+                position: Position::new(1, 0),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &state,
+    )
+    .await;
+
+    assert!(
+        hover.is_some(),
+        "Should show hover info for env var imported through wildcard re-export chain"
+    );
+
+    let hover_str = format!("{:?}", hover.unwrap());
+    assert!(
+        hover_str.contains("X") || hover_str.contains("chain_value"),
+        "Hover should contain env var info, got: {}",
+        hover_str
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// Test that wildcard re-export cycle detection works correctly.
+/// a.ts: export * from "./b"
+/// b.ts: export * from "./a"  (cycle)
+///
+/// This should not hang and should return Unresolved gracefully.
+#[tokio::test]
+async fn test_wildcard_reexport_cycle_detection() {
+    use ecolog_lsp::analysis::CrossModuleResolver;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let temp_dir = std::env::temp_dir().join(format!("ecolog_wildcard_cycle_{}", timestamp));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    // Create circular wildcard re-exports
+    let a_path = temp_dir.join("a.ts");
+    let a_content = r#"export * from "./b";"#;
+    let mut f = File::create(&a_path).unwrap();
+    write!(f, "{}", a_content).unwrap();
+
+    let b_path = temp_dir.join("b.ts");
+    let b_content = r#"export * from "./a";"#;
+    let mut f = File::create(&b_path).unwrap();
+    write!(f, "{}", b_content).unwrap();
+
+    let state = setup_test_state(&temp_dir).await;
+
+    // Run workspace indexing
+    let config = default_config();
+    state.indexer.index_workspace(&config).await.unwrap();
+
+    // Create cross-module resolver
+    let resolver = CrossModuleResolver::new(
+        Arc::clone(&state.workspace_index),
+        Arc::clone(&state.module_resolver),
+        Arc::clone(&state.languages),
+    );
+
+    let a_uri = Url::from_file_path(&a_path).unwrap();
+
+    // This should not hang - cycle detection should kick in
+    let result = resolver.resolve_import(&a_uri, "./b", "nonexistent", false);
+
+    // Should return Unresolved, not hang
+    assert!(
+        matches!(result, ecolog_lsp::analysis::CrossModuleResolution::Unresolved),
+        "Should return Unresolved for cyclic wildcard re-exports, got: {:?}",
+        result
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

@@ -10,6 +10,7 @@ use crate::types::{
 };
 use compact_str::CompactString;
 use tower_lsp::lsp_types::{Position, Range};
+use tracing::error;
 
 /// Result of looking up an env var at a position using the new binding graph.
 #[derive(Debug, Clone)]
@@ -514,7 +515,24 @@ impl<'a> BindingResolver<'a> {
                 };
 
                 // Get scope range from the symbol's scope
-                let scope = self.graph.get_scope(symbol.scope)?;
+                // INVARIANT: scope_at_position always returns valid scopes during analysis,
+                // so this should never fail. If it does, we have a data consistency bug.
+                let scope = match self.graph.get_scope(symbol.scope) {
+                    Some(s) => s,
+                    None => {
+                        debug_assert!(
+                            false,
+                            "Symbol '{}' references non-existent scope {:?} - data consistency error",
+                            symbol.name, symbol.scope
+                        );
+                        error!(
+                            symbol_name = %symbol.name,
+                            scope_id = ?symbol.scope,
+                            "Symbol references non-existent scope - data consistency error"
+                        );
+                        return None;
+                    }
+                };
 
                 Some(EnvBinding {
                     binding_name: symbol.name.clone(),
