@@ -1,4 +1,5 @@
 use crate::languages::LanguageSupport;
+use crate::types::EnvSourceKind;
 use compact_str::CompactString;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
@@ -20,6 +21,13 @@ static TS_IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static TS_EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
+// New statics for enhanced binding resolution
+static TS_ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static TS_DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
+static TS_SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
+static TSX_ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static TSX_DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
+static TSX_SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for TypeScript {
     fn id(&self) -> &'static str {
@@ -138,6 +146,88 @@ impl LanguageSupport for TypeScript {
             )
             .expect("Failed to compile TypeScript export query")
         }))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Enhanced Binding Resolution Queries
+    // ─────────────────────────────────────────────────────────────
+
+    fn assignment_query(&self) -> Option<&Query> {
+        Some(TS_ASSIGNMENT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/assignments.scm"),
+            )
+            .expect("Failed to compile TypeScript assignment query")
+        }))
+    }
+
+    fn destructure_query(&self) -> Option<&Query> {
+        Some(TS_DESTRUCTURE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/destructures.scm"),
+            )
+            .expect("Failed to compile TypeScript destructure query")
+        }))
+    }
+
+    fn scope_query(&self) -> Option<&Query> {
+        Some(TS_SCOPE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/scopes.scm"),
+            )
+            .expect("Failed to compile TypeScript scope query")
+        }))
+    }
+
+    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+        // Check for member_expression like process.env
+        if node.kind() == "member_expression" {
+            let object = node.child_by_field_name("object")?;
+            let property = node.child_by_field_name("property")?;
+
+            let object_text = object.utf8_text(source).ok()?;
+            let property_text = property.utf8_text(source).ok()?;
+
+            // process.env
+            if object_text == "process" && property_text == "env" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "process.env".into(),
+                });
+            }
+
+            // import.meta.env (for Vite, etc.)
+            if object.kind() == "member_expression" {
+                let inner_object = object.child_by_field_name("object")?;
+                let inner_property = object.child_by_field_name("property")?;
+                let inner_object_text = inner_object.utf8_text(source).ok()?;
+                let inner_property_text = inner_property.utf8_text(source).ok()?;
+
+                if inner_object_text == "import"
+                    && inner_property_text == "meta"
+                    && property_text == "env"
+                {
+                    return Some(EnvSourceKind::Object {
+                        canonical_name: "import.meta.env".into(),
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
+        // For pair_pattern like { KEY: alias }, the key is a property_identifier
+        if node.kind() == "pair_pattern" {
+            if let Some(key_node) = node.child_by_field_name("key") {
+                return key_node.utf8_text(source).ok().map(|s| s.into());
+            }
+        }
+        // For shorthand like { KEY }, the node itself is the key
+        node.utf8_text(source).ok().map(|s| s.into())
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
@@ -299,6 +389,88 @@ impl LanguageSupport for TypeScriptReact {
             )
             .expect("Failed to compile TypeScriptReact export query")
         }))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Enhanced Binding Resolution Queries
+    // ─────────────────────────────────────────────────────────────
+
+    fn assignment_query(&self) -> Option<&Query> {
+        Some(TSX_ASSIGNMENT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/assignments.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact assignment query")
+        }))
+    }
+
+    fn destructure_query(&self) -> Option<&Query> {
+        Some(TSX_DESTRUCTURE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/destructures.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact destructure query")
+        }))
+    }
+
+    fn scope_query(&self) -> Option<&Query> {
+        Some(TSX_SCOPE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/typescript/scopes.scm"),
+            )
+            .expect("Failed to compile TypeScriptReact scope query")
+        }))
+    }
+
+    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+        // Check for member_expression like process.env
+        if node.kind() == "member_expression" {
+            let object = node.child_by_field_name("object")?;
+            let property = node.child_by_field_name("property")?;
+
+            let object_text = object.utf8_text(source).ok()?;
+            let property_text = property.utf8_text(source).ok()?;
+
+            // process.env
+            if object_text == "process" && property_text == "env" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "process.env".into(),
+                });
+            }
+
+            // import.meta.env (for Vite, etc.)
+            if object.kind() == "member_expression" {
+                let inner_object = object.child_by_field_name("object")?;
+                let inner_property = object.child_by_field_name("property")?;
+                let inner_object_text = inner_object.utf8_text(source).ok()?;
+                let inner_property_text = inner_property.utf8_text(source).ok()?;
+
+                if inner_object_text == "import"
+                    && inner_property_text == "meta"
+                    && property_text == "env"
+                {
+                    return Some(EnvSourceKind::Object {
+                        canonical_name: "import.meta.env".into(),
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
+        // For pair_pattern like { KEY: alias }, the key is a property_identifier
+        if node.kind() == "pair_pattern" {
+            if let Some(key_node) = node.child_by_field_name("key") {
+                return key_node.utf8_text(source).ok().map(|s| s.into());
+            }
+        }
+        // For shorthand like { KEY }, the node itself is the key
+        node.utf8_text(source).ok().map(|s| s.into())
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {

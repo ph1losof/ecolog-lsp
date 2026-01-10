@@ -1,4 +1,5 @@
 use crate::languages::LanguageSupport;
+use crate::types::EnvSourceKind;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
 
@@ -11,6 +12,9 @@ static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
+// Enhanced binding resolution queries
+static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Python {
     fn id(&self) -> &'static str {
@@ -119,6 +123,60 @@ impl LanguageSupport for Python {
             )
             .expect("Failed to compile Python export query")
         }))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Enhanced Binding Resolution Queries
+    // ─────────────────────────────────────────────────────────────
+
+    fn assignment_query(&self) -> Option<&Query> {
+        Some(ASSIGNMENT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/python/assignments.scm"),
+            )
+            .expect("Failed to compile Python assignment query")
+        }))
+    }
+
+    fn scope_query(&self) -> Option<&Query> {
+        Some(SCOPE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/python/scopes.scm"),
+            )
+            .expect("Failed to compile Python scope query")
+        }))
+    }
+
+    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+        // Check for attribute like os.environ
+        if node.kind() == "attribute" {
+            let object = node.child_by_field_name("object")?;
+            let attribute = node.child_by_field_name("attribute")?;
+
+            let object_text = object.utf8_text(source).ok()?;
+            let attribute_text = attribute.utf8_text(source).ok()?;
+
+            // os.environ
+            if object_text == "os" && attribute_text == "environ" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "os.environ".into(),
+                });
+            }
+        }
+
+        // Check for just `environ` (from `from os import environ`)
+        if node.kind() == "identifier" {
+            let text = node.utf8_text(source).ok()?;
+            if text == "environ" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "os.environ".into(),
+                });
+            }
+        }
+
+        None
     }
 
     fn known_env_modules(&self) -> &'static [&'static str] {

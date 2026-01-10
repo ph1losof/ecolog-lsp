@@ -1,6 +1,7 @@
 use crate::languages::LanguageSupport;
+use crate::types::EnvSourceKind;
 use std::sync::OnceLock;
-use tree_sitter::{Language, Query};
+use tree_sitter::{Language, Node, Query};
 
 pub struct Rust;
 
@@ -11,6 +12,9 @@ static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
+// Enhanced binding resolution queries
+static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Rust {
     fn id(&self) -> &'static str {
@@ -101,6 +105,56 @@ impl LanguageSupport for Rust {
             )
             .expect("Failed to compile Rust export query")
         }))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Enhanced Binding Resolution Queries
+    // ─────────────────────────────────────────────────────────────
+
+    fn assignment_query(&self) -> Option<&Query> {
+        Some(ASSIGNMENT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/rust/assignments.scm"),
+            )
+            .expect("Failed to compile Rust assignment query")
+        }))
+    }
+
+    fn scope_query(&self) -> Option<&Query> {
+        Some(SCOPE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/rust/scopes.scm"),
+            )
+            .expect("Failed to compile Rust scope query")
+        }))
+    }
+
+    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+        // Check for std::env or env module references
+        // Rust env vars are typically accessed via function calls, not object access
+        // But we can detect if someone does: let env = std::env; and then uses env.var()
+        if node.kind() == "scoped_identifier" {
+            let text = node.utf8_text(source).ok()?;
+            if text == "std::env" || text == "env" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "std::env".into(),
+                });
+            }
+        }
+
+        if node.kind() == "identifier" {
+            let text = node.utf8_text(source).ok()?;
+            // Just "env" might be from a use statement
+            if text == "env" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "std::env".into(),
+                });
+            }
+        }
+
+        None
     }
 
     fn known_env_modules(&self) -> &'static [&'static str] {

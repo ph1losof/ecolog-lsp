@@ -1,6 +1,7 @@
 use crate::languages::LanguageSupport;
+use crate::types::EnvSourceKind;
 use std::sync::OnceLock;
-use tree_sitter::{Language, Query};
+use tree_sitter::{Language, Node, Query};
 
 pub struct Go;
 
@@ -11,6 +12,9 @@ static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
+// Enhanced binding resolution queries
+static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Go {
     fn id(&self) -> &'static str {
@@ -101,6 +105,44 @@ impl LanguageSupport for Go {
             )
             .expect("Failed to compile Go export query")
         }))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Enhanced Binding Resolution Queries
+    // ─────────────────────────────────────────────────────────────
+
+    fn assignment_query(&self) -> Option<&Query> {
+        Some(ASSIGNMENT_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/go/assignments.scm"),
+            )
+            .expect("Failed to compile Go assignment query")
+        }))
+    }
+
+    fn scope_query(&self) -> Option<&Query> {
+        Some(SCOPE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/go/scopes.scm"),
+            )
+            .expect("Failed to compile Go scope query")
+        }))
+    }
+
+    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+        // Check for os package reference
+        if node.kind() == "identifier" {
+            let text = node.utf8_text(source).ok()?;
+            if text == "os" {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "os".into(),
+                });
+            }
+        }
+
+        None
     }
 
     fn known_env_modules(&self) -> &'static [&'static str] {
