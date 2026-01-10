@@ -253,3 +253,225 @@ impl LanguageSupport for JavaScript {
         Some((object_name.into(), property_name.into()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get_js() -> JavaScript {
+        JavaScript
+    }
+
+    #[test]
+    fn test_id() {
+        assert_eq!(get_js().id(), "javascript");
+    }
+
+    #[test]
+    fn test_extensions() {
+        let exts = get_js().extensions();
+        assert!(exts.contains(&"js"));
+        assert!(exts.contains(&"jsx"));
+        assert!(exts.contains(&"mjs"));
+        assert!(exts.contains(&"cjs"));
+    }
+
+    #[test]
+    fn test_language_ids() {
+        let ids = get_js().language_ids();
+        assert!(ids.contains(&"javascript"));
+        assert!(ids.contains(&"javascriptreact"));
+    }
+
+    #[test]
+    fn test_is_standard_env_object() {
+        let js = get_js();
+        assert!(js.is_standard_env_object("process.env"));
+        assert!(js.is_standard_env_object("process"));
+        assert!(js.is_standard_env_object("import.meta"));
+        assert!(!js.is_standard_env_object("something.else"));
+    }
+
+    #[test]
+    fn test_default_env_object_name() {
+        assert_eq!(get_js().default_env_object_name(), Some("process.env"));
+    }
+
+    #[test]
+    fn test_known_env_modules() {
+        let modules = get_js().known_env_modules();
+        assert!(modules.contains(&"process"));
+    }
+
+    #[test]
+    fn test_grammar_compiles() {
+        let js = get_js();
+        let _grammar = js.grammar();
+        // If we get here without panic, grammar is valid
+    }
+
+    #[test]
+    fn test_reference_query_compiles() {
+        let js = get_js();
+        let _query = js.reference_query();
+    }
+
+    #[test]
+    fn test_binding_query_compiles() {
+        let js = get_js();
+        assert!(js.binding_query().is_some());
+    }
+
+    #[test]
+    fn test_completion_query_compiles() {
+        let js = get_js();
+        assert!(js.completion_query().is_some());
+    }
+
+    #[test]
+    fn test_import_query_compiles() {
+        let js = get_js();
+        assert!(js.import_query().is_some());
+    }
+
+    #[test]
+    fn test_reassignment_query_compiles() {
+        let js = get_js();
+        assert!(js.reassignment_query().is_some());
+    }
+
+    #[test]
+    fn test_identifier_query_compiles() {
+        let js = get_js();
+        assert!(js.identifier_query().is_some());
+    }
+
+    #[test]
+    fn test_assignment_query_compiles() {
+        let js = get_js();
+        assert!(js.assignment_query().is_some());
+    }
+
+    #[test]
+    fn test_destructure_query_compiles() {
+        let js = get_js();
+        assert!(js.destructure_query().is_some());
+    }
+
+    #[test]
+    fn test_scope_query_compiles() {
+        let js = get_js();
+        assert!(js.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_export_query_compiles() {
+        let js = get_js();
+        assert!(js.export_query().is_some());
+    }
+
+    #[test]
+    fn test_strip_quotes() {
+        let js = get_js();
+        assert_eq!(js.strip_quotes("\"hello\""), "hello");
+        assert_eq!(js.strip_quotes("'world'"), "world");
+        assert_eq!(js.strip_quotes("`template`"), "template");
+        assert_eq!(js.strip_quotes("noquotes"), "noquotes");
+    }
+
+    #[test]
+    fn test_is_env_source_node_process_env() {
+        let js = get_js();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&js.grammar()).unwrap();
+
+        let code = "const x = process.env;";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        // Find member_expression node
+        let mut cursor = root.walk();
+
+        fn walk_tree(cursor: &mut tree_sitter::TreeCursor, js: &JavaScript, code: &str) -> bool {
+            loop {
+                let node = cursor.node();
+                if node.kind() == "member_expression" {
+                    if let Some(kind) = js.is_env_source_node(node, code.as_bytes()) {
+                        if let EnvSourceKind::Object { canonical_name } = kind {
+                            if canonical_name == "process.env" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if cursor.goto_first_child() {
+                    if walk_tree(cursor, js, code) {
+                        return true;
+                    }
+                    cursor.goto_parent();
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            false
+        }
+
+        let found_env_source = walk_tree(&mut cursor, &js, code);
+        assert!(found_env_source, "Should detect process.env as env source");
+    }
+
+    #[test]
+    fn test_extract_property_access() {
+        let js = get_js();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&js.grammar()).unwrap();
+
+        let code = "const x = env.DATABASE_URL;";
+        let tree = parser.parse(code, None).unwrap();
+
+        // Offset for 'D' in DATABASE_URL
+        let offset = code.find("DATABASE_URL").unwrap();
+
+        let result = js.extract_property_access(&tree, code, offset);
+        assert!(result.is_some());
+        let (obj, prop) = result.unwrap();
+        assert_eq!(obj.as_str(), "env");
+        assert_eq!(prop.as_str(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn test_extract_destructure_key_shorthand() {
+        let js = get_js();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&js.grammar()).unwrap();
+
+        let code = "const { VAR } = process.env;";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        // Find shorthand_property_identifier_pattern node
+        fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        let shorthand = find_node(root, "shorthand_property_identifier_pattern");
+        assert!(shorthand.is_some());
+
+        let key = js.extract_destructure_key(shorthand.unwrap(), code.as_bytes());
+        assert!(key.is_some());
+        assert_eq!(key.unwrap().as_str(), "VAR");
+    }
+}

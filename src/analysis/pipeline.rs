@@ -607,8 +607,11 @@ impl AnalysisPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::QueryEngine;
     use crate::languages::javascript::JavaScript;
-    use crate::types::ScopeKind;
+    use crate::languages::typescript::TypeScript;
+    use crate::languages::LanguageSupport;
+    use crate::types::{ScopeKind, ResolvedEnv};
 
     #[test]
     fn test_ts_to_lsp_range() {
@@ -647,5 +650,406 @@ mod tests {
             ScopeKind::Conditional
         );
         assert_eq!(js.node_to_scope_kind("statement_block"), ScopeKind::Block);
+    }
+
+    fn parse_with_lang<L: LanguageSupport>(lang: &L, code: &str) -> Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang.grammar()).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_analyze_direct_reference() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const db = process.env.DATABASE_URL;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have one direct reference
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "DATABASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_multiple_references() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const db = process.env.DATABASE_URL;
+const api = process.env.API_KEY;
+const secret = process.env.SECRET;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        assert_eq!(graph.direct_references().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_object_binding() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const env = process.env;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have a symbol for 'env'
+        assert!(!graph.symbols().is_empty());
+        let env_symbol = graph.symbols().iter().find(|s| s.name == "env");
+        assert!(env_symbol.is_some());
+
+        // Should resolve to env object
+        let env_symbol = env_symbol.unwrap();
+        let resolved = graph.resolve_to_env(env_symbol.id);
+        assert!(matches!(resolved, Some(ResolvedEnv::Object(_))));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_destructuring() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const { DATABASE_URL } = process.env;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have a symbol for DATABASE_URL
+        let db_symbol = graph.symbols().iter().find(|s| s.name == "DATABASE_URL");
+        assert!(db_symbol.is_some());
+
+        // Should resolve to env var
+        let db_symbol = db_symbol.unwrap();
+        let resolved = graph.resolve_to_env(db_symbol.id);
+        assert!(matches!(resolved, Some(ResolvedEnv::Variable(name)) if name == "DATABASE_URL"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_chain_binding() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const config = env;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have symbols for both env and config
+        let env_symbol = graph.symbols().iter().find(|s| s.name == "env");
+        let config_symbol = graph.symbols().iter().find(|s| s.name == "config");
+        assert!(env_symbol.is_some());
+        assert!(config_symbol.is_some());
+
+        // config should resolve through chain to env object
+        let config_symbol = config_symbol.unwrap();
+        let resolved = graph.resolve_to_env(config_symbol.id);
+        assert!(matches!(resolved, Some(ResolvedEnv::Object(_))));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_destructure_from_chain() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const { API_KEY } = env;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have symbol for API_KEY
+        let api_symbol = graph.symbols().iter().find(|s| s.name == "API_KEY");
+        assert!(api_symbol.is_some());
+
+        // Should resolve to env var
+        let api_symbol = api_symbol.unwrap();
+        let resolved = graph.resolve_to_env(api_symbol.id);
+        assert!(matches!(resolved, Some(ResolvedEnv::Variable(name)) if name == "API_KEY"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_scopes() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"function test() {
+    const db = process.env.DATABASE_URL;
+}
+const api = process.env.API_KEY;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have multiple scopes (root + function)
+        assert!(graph.scopes().len() >= 2);
+
+        // Should have references
+        assert_eq!(graph.direct_references().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_usages() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+console.log(env.DATABASE_URL);"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have usages for property access on env
+        assert!(!graph.usages().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_reassignment_invalidates() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"let db = process.env.DATABASE_URL;
+db = "new_value";"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // The db binding should be invalidated by reassignment
+        // (Check the is_valid flag)
+        let db_symbol = graph.symbols().iter().find(|s| s.name == "db");
+        // Depending on implementation, the binding may or may not exist in symbols
+        // What we're testing is that reassignment tracking works
+        assert!(db_symbol.is_none() || !db_symbol.unwrap().is_valid);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_typescript() {
+        let query_engine = QueryEngine::new();
+        let ts = TypeScript;
+        let code = "const db: string = process.env.DATABASE_URL || '';";
+        let tree = parse_with_lang(&ts, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &ts,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "DATABASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_empty_source() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        assert!(graph.direct_references().is_empty());
+        assert!(graph.symbols().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_no_env_vars() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const x = 1 + 2; const y = 'hello';";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        assert!(graph.direct_references().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_nested_functions() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"function outer() {
+    const env = process.env;
+    function inner() {
+        const db = env.DATABASE_URL;
+    }
+}"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have multiple scopes
+        assert!(graph.scopes().len() >= 3); // root + outer + inner
+
+        // Should have env binding
+        let env_symbol = graph.symbols().iter().find(|s| s.name == "env");
+        assert!(env_symbol.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_destructure_with_rename() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const { DATABASE_URL: dbUrl } = process.env;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have symbol for dbUrl
+        let db_symbol = graph.symbols().iter().find(|s| s.name == "dbUrl");
+        assert!(db_symbol.is_some());
+
+        // Should resolve to DATABASE_URL env var
+        let db_symbol = db_symbol.unwrap();
+        let resolved = graph.resolve_to_env(db_symbol.id);
+        assert!(matches!(resolved, Some(ResolvedEnv::Variable(name)) if name == "DATABASE_URL"));
+
+        // Should have destructured key range
+        assert!(db_symbol.destructured_key_range.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_subscript_access() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const db = env["DATABASE_URL"];"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph = AnalysisPipeline::analyze(
+            &query_engine,
+            &js,
+            &tree,
+            code.as_bytes(),
+            &import_ctx,
+        ).await;
+
+        // Should have usages for subscript access
+        assert!(!graph.usages().is_empty());
+        let usage = graph.usages().iter().find(|u| u.property_access.is_some());
+        assert!(usage.is_some());
+        assert_eq!(usage.unwrap().property_access.as_ref().unwrap(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn test_is_scope_visible() {
+        let mut graph = BindingGraph::new();
+        graph.set_root_range(Range::new(Position::new(0, 0), Position::new(100, 0)));
+
+        // Add nested scopes
+        let func_scope = graph.add_scope(Scope {
+            id: ScopeId::root(),
+            parent: Some(ScopeId::root()),
+            range: Range::new(Position::new(1, 0), Position::new(10, 0)),
+            kind: ScopeKind::Function,
+        });
+
+        let inner_scope = graph.add_scope(Scope {
+            id: ScopeId::root(),
+            parent: Some(func_scope),
+            range: Range::new(Position::new(2, 0), Position::new(8, 0)),
+            kind: ScopeKind::Block,
+        });
+
+        // Root is visible from any scope
+        assert!(AnalysisPipeline::is_scope_visible(&graph, inner_scope, ScopeId::root()));
+        assert!(AnalysisPipeline::is_scope_visible(&graph, func_scope, ScopeId::root()));
+
+        // Parent scopes are visible from child
+        assert!(AnalysisPipeline::is_scope_visible(&graph, inner_scope, func_scope));
+
+        // Scope is visible from itself
+        assert!(AnalysisPipeline::is_scope_visible(&graph, func_scope, func_scope));
     }
 }

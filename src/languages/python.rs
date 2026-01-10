@@ -228,3 +228,207 @@ impl LanguageSupport for Python {
         Some((object_name.into(), property_name.into()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get_python() -> Python {
+        Python
+    }
+
+    #[test]
+    fn test_id() {
+        assert_eq!(get_python().id(), "python");
+    }
+
+    #[test]
+    fn test_extensions() {
+        let exts = get_python().extensions();
+        assert!(exts.contains(&"py"));
+    }
+
+    #[test]
+    fn test_language_ids() {
+        let ids = get_python().language_ids();
+        assert!(ids.contains(&"python"));
+    }
+
+    #[test]
+    fn test_is_standard_env_object() {
+        let py = get_python();
+        assert!(py.is_standard_env_object("os"));
+        assert!(py.is_standard_env_object("os.environ"));
+        assert!(!py.is_standard_env_object("process"));
+    }
+
+    #[test]
+    fn test_default_env_object_name() {
+        assert_eq!(get_python().default_env_object_name(), Some("os.environ"));
+    }
+
+    #[test]
+    fn test_known_env_modules() {
+        let modules = get_python().known_env_modules();
+        assert!(modules.contains(&"os"));
+    }
+
+    #[test]
+    fn test_grammar_compiles() {
+        let py = get_python();
+        let _grammar = py.grammar();
+    }
+
+    #[test]
+    fn test_reference_query_compiles() {
+        let py = get_python();
+        let _query = py.reference_query();
+    }
+
+    #[test]
+    fn test_binding_query_compiles() {
+        let py = get_python();
+        assert!(py.binding_query().is_some());
+    }
+
+    #[test]
+    fn test_import_query_compiles() {
+        let py = get_python();
+        assert!(py.import_query().is_some());
+    }
+
+    #[test]
+    fn test_completion_query_compiles() {
+        let py = get_python();
+        assert!(py.completion_query().is_some());
+    }
+
+    #[test]
+    fn test_reassignment_query_compiles() {
+        let py = get_python();
+        assert!(py.reassignment_query().is_some());
+    }
+
+    #[test]
+    fn test_identifier_query_compiles() {
+        let py = get_python();
+        assert!(py.identifier_query().is_some());
+    }
+
+    #[test]
+    fn test_export_query_compiles() {
+        let py = get_python();
+        assert!(py.export_query().is_some());
+    }
+
+    #[test]
+    fn test_assignment_query_compiles() {
+        let py = get_python();
+        assert!(py.assignment_query().is_some());
+    }
+
+    #[test]
+    fn test_scope_query_compiles() {
+        let py = get_python();
+        assert!(py.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_strip_quotes() {
+        let py = get_python();
+        assert_eq!(py.strip_quotes("\"hello\""), "hello");
+        assert_eq!(py.strip_quotes("'world'"), "world");
+        assert_eq!(py.strip_quotes("noquotes"), "noquotes");
+    }
+
+    #[test]
+    fn test_is_env_source_node_os_environ() {
+        let py = get_python();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&py.grammar()).unwrap();
+
+        let code = "import os\nx = os.environ";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn walk_tree(cursor: &mut tree_sitter::TreeCursor, py: &Python, code: &str) -> bool {
+            loop {
+                let node = cursor.node();
+                if node.kind() == "attribute" {
+                    if let Some(kind) = py.is_env_source_node(node, code.as_bytes()) {
+                        if let EnvSourceKind::Object { canonical_name } = kind {
+                            if canonical_name == "os.environ" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if cursor.goto_first_child() {
+                    if walk_tree(cursor, py, code) {
+                        return true;
+                    }
+                    cursor.goto_parent();
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            false
+        }
+
+        let mut cursor = root.walk();
+        let found = walk_tree(&mut cursor, &py, code);
+        assert!(found, "Should detect os.environ as env source");
+    }
+
+    #[test]
+    fn test_extract_property_access() {
+        let py = get_python();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&py.grammar()).unwrap();
+
+        let code = "x = env.DATABASE_URL";
+        let tree = parser.parse(code, None).unwrap();
+
+        let offset = code.find("DATABASE_URL").unwrap();
+        let result = py.extract_property_access(&tree, code, offset);
+        assert!(result.is_some());
+        let (obj, prop) = result.unwrap();
+        assert_eq!(obj.as_str(), "env");
+        assert_eq!(prop.as_str(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn test_is_scope_node() {
+        let py = get_python();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&py.grammar()).unwrap();
+
+        let code = "def test():\n    pass";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn find_node_of_kind<'a>(
+            node: tree_sitter::Node<'a>,
+            kind: &str,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node_of_kind(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        if let Some(func) = find_node_of_kind(root, "function_definition") {
+            assert!(py.is_scope_node(func));
+        }
+    }
+}

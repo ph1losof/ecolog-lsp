@@ -25,7 +25,7 @@
 ;; Conditionals
 ;; ───────────────────────────────────────────────────────────────────
 (if_statement) @scope_node
-(switch_statement) @scope_node
+;; Go has expression_switch_statement and type_switch_statement, not generic switch_statement
 (expression_switch_statement) @scope_node
 (type_switch_statement) @scope_node
 

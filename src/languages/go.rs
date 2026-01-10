@@ -218,3 +218,237 @@ impl LanguageSupport for Go {
         Some((object_name.into(), property_name.into()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get_go() -> Go {
+        Go
+    }
+
+    #[test]
+    fn test_id() {
+        assert_eq!(get_go().id(), "go");
+    }
+
+    #[test]
+    fn test_extensions() {
+        let exts = get_go().extensions();
+        assert!(exts.contains(&"go"));
+    }
+
+    #[test]
+    fn test_language_ids() {
+        let ids = get_go().language_ids();
+        assert!(ids.contains(&"go"));
+    }
+
+    #[test]
+    fn test_is_standard_env_object() {
+        let go = get_go();
+        assert!(go.is_standard_env_object("os"));
+        assert!(!go.is_standard_env_object("process"));
+        assert!(!go.is_standard_env_object("something.else"));
+    }
+
+    #[test]
+    fn test_known_env_modules() {
+        let modules = get_go().known_env_modules();
+        assert!(modules.contains(&"os"));
+    }
+
+    #[test]
+    fn test_grammar_compiles() {
+        let go = get_go();
+        let _grammar = go.grammar();
+    }
+
+    #[test]
+    fn test_reference_query_compiles() {
+        let go = get_go();
+        let _query = go.reference_query();
+    }
+
+    #[test]
+    fn test_binding_query_compiles() {
+        let go = get_go();
+        assert!(go.binding_query().is_some());
+    }
+
+    #[test]
+    fn test_import_query_compiles() {
+        let go = get_go();
+        assert!(go.import_query().is_some());
+    }
+
+    #[test]
+    fn test_completion_query_compiles() {
+        let go = get_go();
+        assert!(go.completion_query().is_some());
+    }
+
+    #[test]
+    fn test_reassignment_query_compiles() {
+        let go = get_go();
+        assert!(go.reassignment_query().is_some());
+    }
+
+    #[test]
+    fn test_identifier_query_compiles() {
+        let go = get_go();
+        assert!(go.identifier_query().is_some());
+    }
+
+    #[test]
+    fn test_export_query_compiles() {
+        let go = get_go();
+        assert!(go.export_query().is_some());
+    }
+
+    #[test]
+    fn test_assignment_query_compiles() {
+        let go = get_go();
+        assert!(go.assignment_query().is_some());
+    }
+
+    #[test]
+    fn test_scope_query_compiles() {
+        let go = get_go();
+        assert!(go.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_strip_quotes() {
+        let go = get_go();
+        assert_eq!(go.strip_quotes("\"hello\""), "hello");
+        assert_eq!(go.strip_quotes("'a'"), "a");
+        assert_eq!(go.strip_quotes("`raw`"), "raw");
+        assert_eq!(go.strip_quotes("noquotes"), "noquotes");
+    }
+
+    #[test]
+    fn test_is_env_source_node_os() {
+        let go = get_go();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&go.grammar()).unwrap();
+
+        let code = "package main\nimport \"os\"\nfunc main() { os.Getenv(\"VAR\") }";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn walk_tree(cursor: &mut tree_sitter::TreeCursor, go: &Go, code: &str) -> bool {
+            loop {
+                let node = cursor.node();
+                if node.kind() == "identifier" {
+                    if let Some(kind) = go.is_env_source_node(node, code.as_bytes()) {
+                        if let EnvSourceKind::Object { canonical_name } = kind {
+                            if canonical_name == "os" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if cursor.goto_first_child() {
+                    if walk_tree(cursor, go, code) {
+                        return true;
+                    }
+                    cursor.goto_parent();
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            false
+        }
+
+        let mut cursor = root.walk();
+        let found = walk_tree(&mut cursor, &go, code);
+        assert!(found, "Should detect os as env source");
+    }
+
+    #[test]
+    fn test_extract_property_access() {
+        let go = get_go();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&go.grammar()).unwrap();
+
+        let code = "package main\nfunc main() { env.DATABASE_URL }";
+        let tree = parser.parse(code, None).unwrap();
+
+        let offset = code.find("DATABASE_URL").unwrap();
+        let result = go.extract_property_access(&tree, code, offset);
+        assert!(result.is_some());
+        let (obj, prop) = result.unwrap();
+        assert_eq!(obj.as_str(), "env");
+        assert_eq!(prop.as_str(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn test_is_scope_node() {
+        let go = get_go();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&go.grammar()).unwrap();
+
+        let code = "package main\nfunc test() {}";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn find_node_of_kind<'a>(
+            node: tree_sitter::Node<'a>,
+            kind: &str,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node_of_kind(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        if let Some(func) = find_node_of_kind(root, "function_declaration") {
+            assert!(go.is_scope_node(func));
+        }
+    }
+
+    #[test]
+    fn test_extract_var_name() {
+        let go = get_go();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&go.grammar()).unwrap();
+
+        let code = "package main\nconst VAR = \"value\"";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn find_node_of_kind<'a>(
+            node: tree_sitter::Node<'a>,
+            kind: &str,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node_of_kind(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        if let Some(str_lit) = find_node_of_kind(root, "interpreted_string_literal") {
+            let name = go.extract_var_name(str_lit, code.as_bytes());
+            assert!(name.is_some());
+            assert_eq!(name.unwrap().as_str(), "value");
+        }
+    }
+}

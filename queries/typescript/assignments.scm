@@ -37,9 +37,6 @@
     (identifier) @assignment_source)) @assignment
 
 ;; ───────────────────────────────────────────────────────────────────
-;; TypeScript-specific: const b = <SomeType>a (legacy type assertion)
+;; Note: Legacy angle-bracket type assertion syntax (<Type>value) not tracked
+;; as it conflicts with JSX in TSX files and uses a different node structure
 ;; ───────────────────────────────────────────────────────────────────
-(variable_declarator
-  name: (identifier) @assignment_target
-  value: (type_assertion
-    (identifier) @assignment_source)) @assignment

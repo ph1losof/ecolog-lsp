@@ -510,3 +510,472 @@ impl LanguageSupport for TypeScriptReact {
         Some((object_name.into(), property_name.into()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ═══════════════════════════════════════════════════════════════
+    // TypeScript Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    fn get_ts() -> TypeScript {
+        TypeScript
+    }
+
+    #[test]
+    fn test_ts_id() {
+        assert_eq!(get_ts().id(), "typescript");
+    }
+
+    #[test]
+    fn test_ts_extensions() {
+        let exts = get_ts().extensions();
+        assert!(exts.contains(&"ts"));
+        assert!(exts.contains(&"mts"));
+        assert!(exts.contains(&"cts"));
+    }
+
+    #[test]
+    fn test_ts_language_ids() {
+        let ids = get_ts().language_ids();
+        assert!(ids.contains(&"typescript"));
+    }
+
+    #[test]
+    fn test_ts_is_standard_env_object() {
+        let ts = get_ts();
+        assert!(ts.is_standard_env_object("process.env"));
+        assert!(ts.is_standard_env_object("process"));
+        assert!(ts.is_standard_env_object("import.meta"));
+        assert!(!ts.is_standard_env_object("something.else"));
+    }
+
+    #[test]
+    fn test_ts_default_env_object_name() {
+        assert_eq!(get_ts().default_env_object_name(), Some("process.env"));
+    }
+
+    #[test]
+    fn test_ts_known_env_modules() {
+        let modules = get_ts().known_env_modules();
+        assert!(modules.contains(&"process"));
+    }
+
+    #[test]
+    fn test_ts_grammar_compiles() {
+        let ts = get_ts();
+        let _grammar = ts.grammar();
+    }
+
+    #[test]
+    fn test_ts_reference_query_compiles() {
+        let ts = get_ts();
+        let _query = ts.reference_query();
+    }
+
+    #[test]
+    fn test_ts_binding_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.binding_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_completion_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.completion_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_import_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.import_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_reassignment_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.reassignment_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_identifier_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.identifier_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_export_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.export_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_assignment_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.assignment_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_destructure_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.destructure_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_scope_query_compiles() {
+        let ts = get_ts();
+        assert!(ts.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_ts_strip_quotes() {
+        let ts = get_ts();
+        assert_eq!(ts.strip_quotes("\"hello\""), "hello");
+        assert_eq!(ts.strip_quotes("'world'"), "world");
+        assert_eq!(ts.strip_quotes("`template`"), "template");
+        assert_eq!(ts.strip_quotes("noquotes"), "noquotes");
+    }
+
+    #[test]
+    fn test_ts_is_env_source_node_process_env() {
+        let ts = get_ts();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts.grammar()).unwrap();
+
+        let code = "const x = process.env;";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn walk_tree(cursor: &mut tree_sitter::TreeCursor, ts: &TypeScript, code: &str) -> bool {
+            loop {
+                let node = cursor.node();
+                if node.kind() == "member_expression" {
+                    if let Some(kind) = ts.is_env_source_node(node, code.as_bytes()) {
+                        if let EnvSourceKind::Object { canonical_name } = kind {
+                            if canonical_name == "process.env" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if cursor.goto_first_child() {
+                    if walk_tree(cursor, ts, code) {
+                        return true;
+                    }
+                    cursor.goto_parent();
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            false
+        }
+
+        let mut cursor = root.walk();
+        let found = walk_tree(&mut cursor, &ts, code);
+        assert!(found, "Should detect process.env as env source");
+    }
+
+    #[test]
+    fn test_ts_extract_property_access() {
+        let ts = get_ts();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts.grammar()).unwrap();
+
+        let code = "const x = env.DATABASE_URL;";
+        let tree = parser.parse(code, None).unwrap();
+
+        let offset = code.find("DATABASE_URL").unwrap();
+        let result = ts.extract_property_access(&tree, code, offset);
+        assert!(result.is_some());
+        let (obj, prop) = result.unwrap();
+        assert_eq!(obj.as_str(), "env");
+        assert_eq!(prop.as_str(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn test_ts_extract_destructure_key_shorthand() {
+        let ts = get_ts();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts.grammar()).unwrap();
+
+        let code = "const { VAR } = process.env;";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn find_node<'a>(
+            node: tree_sitter::Node<'a>,
+            kind: &str,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        let shorthand = find_node(root, "shorthand_property_identifier_pattern");
+        assert!(shorthand.is_some());
+
+        let key = ts.extract_destructure_key(shorthand.unwrap(), code.as_bytes());
+        assert!(key.is_some());
+        assert_eq!(key.unwrap().as_str(), "VAR");
+    }
+
+    #[test]
+    fn test_ts_is_scope_node() {
+        let ts = get_ts();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&ts.grammar()).unwrap();
+
+        let code = "function test() {}";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn find_node_of_kind<'a>(
+            node: tree_sitter::Node<'a>,
+            kind: &str,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node_of_kind(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        if let Some(func) = find_node_of_kind(root, "function_declaration") {
+            assert!(ts.is_scope_node(func));
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TypeScriptReact Tests
+    // ═══════════════════════════════════════════════════════════════
+
+    fn get_tsx() -> TypeScriptReact {
+        TypeScriptReact
+    }
+
+    #[test]
+    fn test_tsx_id() {
+        assert_eq!(get_tsx().id(), "typescriptreact");
+    }
+
+    #[test]
+    fn test_tsx_extensions() {
+        let exts = get_tsx().extensions();
+        assert!(exts.contains(&"tsx"));
+    }
+
+    #[test]
+    fn test_tsx_language_ids() {
+        let ids = get_tsx().language_ids();
+        assert!(ids.contains(&"typescriptreact"));
+    }
+
+    #[test]
+    fn test_tsx_is_standard_env_object() {
+        let tsx = get_tsx();
+        assert!(tsx.is_standard_env_object("process.env"));
+        assert!(tsx.is_standard_env_object("process"));
+        assert!(tsx.is_standard_env_object("import.meta"));
+        assert!(!tsx.is_standard_env_object("something.else"));
+    }
+
+    #[test]
+    fn test_tsx_default_env_object_name() {
+        assert_eq!(get_tsx().default_env_object_name(), Some("process.env"));
+    }
+
+    #[test]
+    fn test_tsx_known_env_modules() {
+        let modules = get_tsx().known_env_modules();
+        assert!(modules.contains(&"process"));
+    }
+
+    #[test]
+    fn test_tsx_grammar_compiles() {
+        let tsx = get_tsx();
+        let _grammar = tsx.grammar();
+    }
+
+    #[test]
+    fn test_tsx_reference_query_compiles() {
+        let tsx = get_tsx();
+        let _query = tsx.reference_query();
+    }
+
+    #[test]
+    fn test_tsx_binding_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.binding_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_completion_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.completion_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_import_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.import_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_reassignment_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.reassignment_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_identifier_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.identifier_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_export_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.export_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_assignment_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.assignment_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_destructure_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.destructure_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_scope_query_compiles() {
+        let tsx = get_tsx();
+        assert!(tsx.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_tsx_strip_quotes() {
+        let tsx = get_tsx();
+        assert_eq!(tsx.strip_quotes("\"hello\""), "hello");
+        assert_eq!(tsx.strip_quotes("'world'"), "world");
+        assert_eq!(tsx.strip_quotes("`template`"), "template");
+        assert_eq!(tsx.strip_quotes("noquotes"), "noquotes");
+    }
+
+    #[test]
+    fn test_tsx_is_env_source_node_process_env() {
+        let tsx = get_tsx();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tsx.grammar()).unwrap();
+
+        let code = "const x = process.env;";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn walk_tree(
+            cursor: &mut tree_sitter::TreeCursor,
+            tsx: &TypeScriptReact,
+            code: &str,
+        ) -> bool {
+            loop {
+                let node = cursor.node();
+                if node.kind() == "member_expression" {
+                    if let Some(kind) = tsx.is_env_source_node(node, code.as_bytes()) {
+                        if let EnvSourceKind::Object { canonical_name } = kind {
+                            if canonical_name == "process.env" {
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                if cursor.goto_first_child() {
+                    if walk_tree(cursor, tsx, code) {
+                        return true;
+                    }
+                    cursor.goto_parent();
+                }
+
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            false
+        }
+
+        let mut cursor = root.walk();
+        let found = walk_tree(&mut cursor, &tsx, code);
+        assert!(found, "Should detect process.env as env source");
+    }
+
+    #[test]
+    fn test_tsx_extract_property_access() {
+        let tsx = get_tsx();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tsx.grammar()).unwrap();
+
+        let code = "const x = env.API_KEY;";
+        let tree = parser.parse(code, None).unwrap();
+
+        let offset = code.find("API_KEY").unwrap();
+        let result = tsx.extract_property_access(&tree, code, offset);
+        assert!(result.is_some());
+        let (obj, prop) = result.unwrap();
+        assert_eq!(obj.as_str(), "env");
+        assert_eq!(prop.as_str(), "API_KEY");
+    }
+
+    #[test]
+    fn test_tsx_is_scope_node_jsx_element() {
+        let tsx = get_tsx();
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tsx.grammar()).unwrap();
+
+        let code = "const App = () => <div>Hello</div>;";
+        let tree = parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        fn find_node_of_kind<'a>(
+            node: tree_sitter::Node<'a>,
+            kind: &str,
+        ) -> Option<tree_sitter::Node<'a>> {
+            if node.kind() == kind {
+                return Some(node);
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if let Some(found) = find_node_of_kind(child, kind) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+
+        // jsx_element is a scope node in TSX
+        if let Some(jsx) = find_node_of_kind(root, "jsx_element") {
+            assert!(tsx.is_scope_node(jsx));
+        }
+    }
+}

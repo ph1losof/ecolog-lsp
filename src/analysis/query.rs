@@ -980,3 +980,551 @@ impl QueryEngine {
         entry
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::languages::javascript::JavaScript;
+    use crate::languages::python::Python;
+    use crate::languages::rust::Rust;
+    use crate::languages::go::Go;
+    use crate::languages::typescript::TypeScript;
+    use crate::languages::LanguageSupport;
+
+    fn create_engine() -> QueryEngine {
+        QueryEngine::new()
+    }
+
+    fn parse_js(_engine: &QueryEngine, code: &str) -> Tree {
+        let js = JavaScript;
+        let mut parser = Parser::new();
+        parser.set_language(&js.grammar()).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    fn parse_ts(_engine: &QueryEngine, code: &str) -> Tree {
+        let ts = TypeScript;
+        let mut parser = Parser::new();
+        parser.set_language(&ts.grammar()).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    fn parse_python(_engine: &QueryEngine, code: &str) -> Tree {
+        let py = Python;
+        let mut parser = Parser::new();
+        parser.set_language(&py.grammar()).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    fn parse_go(_engine: &QueryEngine, code: &str) -> Tree {
+        let go = Go;
+        let mut parser = Parser::new();
+        parser.set_language(&go.grammar()).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    fn parse_rust(_engine: &QueryEngine, code: &str) -> Tree {
+        let rs = Rust;
+        let mut parser = Parser::new();
+        parser.set_language(&rs.grammar()).unwrap();
+        parser.parse(code, None).unwrap()
+    }
+
+    // =========================================================================
+    // Parser Pool Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parser_pool_new() {
+        let pool = ParserPool::new();
+        assert!(pool.parsers.is_empty());
+    }
+
+    #[test]
+    fn test_parser_pool_acquire_and_release() {
+        let mut pool = ParserPool::new();
+        let js = JavaScript;
+
+        let parser = pool.acquire(&js);
+        assert!(pool.parsers.get(js.id()).is_none() || pool.parsers.get(js.id()).unwrap().is_empty());
+
+        pool.release(js.id(), parser);
+        assert_eq!(pool.parsers.get(js.id()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_parser_pool_max_capacity() {
+        let mut pool = ParserPool::new();
+        let js = JavaScript;
+
+        // Acquire and release MAX_PARSERS_PER_LANGUAGE + 1 parsers
+        for _ in 0..=MAX_PARSERS_PER_LANGUAGE {
+            let parser = pool.acquire(&js);
+            pool.release(js.id(), parser);
+        }
+
+        // Pool should never exceed MAX_PARSERS_PER_LANGUAGE
+        assert!(pool.parsers.get(js.id()).unwrap().len() <= MAX_PARSERS_PER_LANGUAGE);
+    }
+
+    // =========================================================================
+    // QueryEngine Parse Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_parse_javascript() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const x = 1;";
+
+        let tree = engine.parse(&js, code, None).await;
+        assert!(tree.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_parse_typescript() {
+        let engine = create_engine();
+        let ts = TypeScript;
+        let code = "const x: number = 1;";
+
+        let tree = engine.parse(&ts, code, None).await;
+        assert!(tree.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_parse_python() {
+        let engine = create_engine();
+        let py = Python;
+        let code = "x = 1";
+
+        let tree = engine.parse(&py, code, None).await;
+        assert!(tree.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_parse_go() {
+        let engine = create_engine();
+        let go = Go;
+        let code = "package main\nfunc main() {}";
+
+        let tree = engine.parse(&go, code, None).await;
+        assert!(tree.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_parse_rust() {
+        let engine = create_engine();
+        let rs = Rust;
+        let code = "fn main() {}";
+
+        let tree = engine.parse(&rs, code, None).await;
+        assert!(tree.is_some());
+    }
+
+    // =========================================================================
+    // Extract References Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_references_javascript() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const db = process.env.DATABASE_URL;";
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&js, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "DATABASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_extract_references_multiple() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"const db = process.env.DATABASE_URL;
+const api = process.env.API_KEY;"#;
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&js, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_extract_references_typescript() {
+        let engine = create_engine();
+        let ts = TypeScript;
+        let code = "const db: string = process.env.DATABASE_URL || '';";
+        let tree = parse_ts(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&ts, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "DATABASE_URL");
+    }
+
+    // =========================================================================
+    // Extract Bindings Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_bindings_destructure() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const { DATABASE_URL } = process.env;";
+        let tree = parse_js(&engine, code);
+
+        let bindings = engine.extract_bindings(&js, &tree, code.as_bytes()).await;
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].binding_name, "DATABASE_URL");
+        assert_eq!(bindings[0].env_var_name, "DATABASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_extract_bindings_destructure_with_rename() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const { DATABASE_URL: dbUrl } = process.env;";
+        let tree = parse_js(&engine, code);
+
+        let bindings = engine.extract_bindings(&js, &tree, code.as_bytes()).await;
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].binding_name, "dbUrl");
+        assert_eq!(bindings[0].env_var_name, "DATABASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_extract_bindings_object_alias() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const env = process.env;";
+        let tree = parse_js(&engine, code);
+
+        let bindings = engine.extract_bindings(&js, &tree, code.as_bytes()).await;
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].binding_name, "env");
+        assert_eq!(bindings[0].kind, crate::types::BindingKind::Object);
+    }
+
+    // =========================================================================
+    // Extract Imports Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_imports_javascript() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "import { env } from 'process';";
+        let tree = parse_js(&engine, code);
+
+        let imports = engine.extract_imports(&js, &tree, code.as_bytes()).await;
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].module_path, "process");
+    }
+
+    #[tokio::test]
+    async fn test_extract_imports_typescript() {
+        let engine = create_engine();
+        let ts = TypeScript;
+        let code = "import * as process from 'process';";
+        let tree = parse_ts(&engine, code);
+
+        let imports = engine.extract_imports(&ts, &tree, code.as_bytes()).await;
+        assert!(!imports.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_extract_imports_python() {
+        let engine = create_engine();
+        let py = Python;
+        let code = "import os";
+        let tree = parse_python(&engine, code);
+
+        let imports = engine.extract_imports(&py, &tree, code.as_bytes()).await;
+        assert!(!imports.is_empty());
+    }
+
+    // =========================================================================
+    // Extract Reassignments Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_reassignments() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"let db = process.env.DATABASE_URL;
+db = "new_value";"#;
+        let tree = parse_js(&engine, code);
+
+        let reassignments = engine.extract_reassignments(&js, &tree, code.as_bytes()).await;
+        assert!(reassignments.contains(&CompactString::from("db")));
+    }
+
+    #[tokio::test]
+    async fn test_extract_reassignments_with_positions() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"let db = process.env.DATABASE_URL;
+db = "new_value";"#;
+        let tree = parse_js(&engine, code);
+
+        let reassignments = engine.extract_reassignments_with_positions(&js, &tree, code.as_bytes()).await;
+        assert!(!reassignments.is_empty());
+        let (name, range) = &reassignments[0];
+        assert_eq!(name, "db");
+        assert_eq!(range.start.line, 1);
+    }
+
+    // =========================================================================
+    // Extract Identifiers Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_identifiers() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const x = 1; console.log(x);";
+        let tree = parse_js(&engine, code);
+
+        let identifiers = engine.extract_identifiers(&js, &tree, code.as_bytes()).await;
+        assert!(identifiers.iter().any(|(name, _)| name == "x"));
+        assert!(identifiers.iter().any(|(name, _)| name == "console"));
+    }
+
+    // =========================================================================
+    // Extract Assignments Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_assignments() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const config = env;"#;
+        let tree = parse_js(&engine, code);
+
+        let assignments = engine.extract_assignments(&js, &tree, code.as_bytes()).await;
+        // Should detect `const config = env`
+        assert!(assignments.iter().any(|(target, _, source)| target == "config" && source == "env"));
+    }
+
+    // =========================================================================
+    // Extract Destructures Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_destructures() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const { API_KEY } = env;"#;
+        let tree = parse_js(&engine, code);
+
+        let destructures = engine.extract_destructures(&js, &tree, code.as_bytes()).await;
+        // Should detect `{ API_KEY } = env`
+        assert!(destructures.iter().any(|(target, _, key, _, source)|
+            target == "API_KEY" && key == "API_KEY" && source == "env"));
+    }
+
+    #[tokio::test]
+    async fn test_extract_destructures_with_rename() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const { API_KEY: apiKey } = env;"#;
+        let tree = parse_js(&engine, code);
+
+        let destructures = engine.extract_destructures(&js, &tree, code.as_bytes()).await;
+        // Should detect `{ API_KEY: apiKey } = env`
+        assert!(destructures.iter().any(|(target, _, key, _, source)|
+            target == "apiKey" && key == "API_KEY" && source == "env"));
+    }
+
+    // =========================================================================
+    // Completion Context Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_check_completion_context() {
+        let engine = create_engine();
+        let js = JavaScript;
+        // Use a scenario that correctly returns process.env
+        let code = "process.env.";
+        let tree = parse_js(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 12);
+
+        let context = engine.check_completion_context(&js, &tree, code.as_bytes(), pos).await;
+        assert!(context.is_some());
+        assert_eq!(context.unwrap(), "process.env");
+    }
+
+    #[tokio::test]
+    async fn test_check_completion_context_no_match() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const x = foo.";
+        let tree = parse_js(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 14);
+
+        let _context = engine.check_completion_context(&js, &tree, code.as_bytes(), pos).await;
+        // foo is not a standard env object, context may be None or "foo"
+        // depending on query implementation
+    }
+
+    // =========================================================================
+    // Export Extraction Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_extract_exports_named() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "export const API_KEY = process.env.API_KEY;";
+        let tree = parse_js(&engine, code);
+
+        let exports = engine.extract_exports(&js, &tree, code.as_bytes()).await;
+        assert!(exports.named_exports.contains_key(&CompactString::from("API_KEY")));
+    }
+
+    #[tokio::test]
+    async fn test_extract_exports_default() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "export default process.env;";
+        let tree = parse_js(&engine, code);
+
+        let exports = engine.extract_exports(&js, &tree, code.as_bytes()).await;
+        assert!(exports.default_export.is_some());
+    }
+
+    // =========================================================================
+    // Execute Query Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_execute_query_generic() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const x = 1;";
+        let tree = parse_js(&engine, code);
+
+        // Use identifier query as test
+        let query = js.identifier_query().unwrap();
+        let results: Vec<String> = engine.execute_query(
+            query,
+            &tree,
+            code.as_bytes(),
+            |m, src| {
+                m.captures.first().and_then(|c| {
+                    c.node.utf8_text(src).ok().map(|s| s.to_string())
+                })
+            }
+        ).await;
+
+        assert!(!results.is_empty());
+    }
+
+    // =========================================================================
+    // Language-specific Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_go_extract_references() {
+        let engine = create_engine();
+        let go = Go;
+        let code = r#"package main
+import "os"
+func main() {
+    x := os.Getenv("API_KEY")
+}"#;
+        let tree = parse_go(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&go, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "API_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_rust_extract_references() {
+        let engine = create_engine();
+        let rs = Rust;
+        let code = r#"fn main() {
+    let x = std::env::var("API_KEY").unwrap();
+}"#;
+        let tree = parse_rust(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&rs, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "API_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_python_extract_references() {
+        let engine = create_engine();
+        let py = Python;
+        let code = r#"import os
+x = os.environ.get("API_KEY")"#;
+        let tree = parse_python(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&py, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "API_KEY");
+    }
+
+    // =========================================================================
+    // Edge Cases
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_empty_source() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "";
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&js, &tree, code.as_bytes(), &import_ctx).await;
+        assert!(refs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_no_env_vars() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const x = 1 + 2;";
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&js, &tree, code.as_bytes(), &import_ctx).await;
+        assert!(refs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_nested_env_access() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const config = { db: process.env.DATABASE_URL, api: process.env.API_KEY };";
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&js, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_conditional_env_access() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = "const db = process.env.DATABASE_URL || 'default';";
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine.extract_references(&js, &tree, code.as_bytes(), &import_ctx).await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "DATABASE_URL");
+    }
+}

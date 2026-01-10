@@ -715,4 +715,587 @@ mod tests {
             Position::new(6, 15)
         ));
     }
+
+    #[test]
+    fn test_set_root_range() {
+        let mut graph = BindingGraph::new();
+        let range = make_range(0, 0, 100, 0);
+        graph.set_root_range(range);
+
+        let root = graph.get_scope(ScopeId::root()).unwrap();
+        assert_eq!(root.range, range);
+    }
+
+    #[test]
+    fn test_get_symbol_mut() {
+        let mut graph = BindingGraph::new();
+
+        let symbol = Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "test".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "TEST".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        };
+
+        let id = graph.add_symbol(symbol);
+
+        // Mutate the symbol
+        if let Some(sym) = graph.get_symbol_mut(id) {
+            sym.is_valid = false;
+        }
+
+        // Verify mutation
+        let sym = graph.get_symbol(id).unwrap();
+        assert!(!sym.is_valid);
+    }
+
+    #[test]
+    fn test_symbols_mut() {
+        let mut graph = BindingGraph::new();
+
+        let symbol = Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "test".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "TEST".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        };
+
+        graph.add_symbol(symbol);
+
+        // Mutate all symbols
+        for sym in graph.symbols_mut() {
+            sym.is_valid = false;
+        }
+
+        // Verify
+        assert!(!graph.symbols()[0].is_valid);
+    }
+
+    #[test]
+    fn test_symbol_at_position() {
+        let mut graph = BindingGraph::new();
+
+        let symbol = Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "test".into(),
+            declaration_range: make_range(0, 0, 0, 20),
+            name_range: make_range(0, 6, 0, 10),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "TEST".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        };
+
+        graph.add_symbol(symbol);
+
+        // Position within name_range
+        let found = graph.symbol_at_position(Position::new(0, 8));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "test");
+
+        // Position outside name_range
+        let not_found = graph.symbol_at_position(Position::new(0, 0));
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_symbol_at_destructure_key() {
+        let mut graph = BindingGraph::new();
+
+        let symbol = Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "dbUrl".into(),
+            declaration_range: make_range(0, 0, 0, 40),
+            name_range: make_range(0, 24, 0, 29),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "DATABASE_URL".into() },
+            kind: SymbolKind::DestructuredProperty,
+            is_valid: true,
+            destructured_key_range: Some(make_range(0, 8, 0, 20)),
+        };
+
+        let id = graph.add_symbol(symbol);
+        graph.rebuild_range_index();
+
+        // Position within destructured key range
+        let found = graph.symbol_at_destructure_key(Position::new(0, 10));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap(), id);
+
+        // Position outside range
+        let not_found = graph.symbol_at_destructure_key(Position::new(0, 30));
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_direct_references() {
+        use crate::types::AccessType;
+
+        let mut graph = BindingGraph::new();
+
+        let reference = EnvReference {
+            name: "DATABASE_URL".into(),
+            full_range: make_range(0, 0, 0, 22),
+            name_range: make_range(0, 10, 0, 22),
+            access_type: AccessType::Property,
+            has_default: false,
+            default_value: None,
+        };
+
+        graph.add_direct_reference(reference);
+
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "DATABASE_URL");
+
+        // Test mutable access
+        graph.direct_references_mut().clear();
+        assert!(graph.direct_references().is_empty());
+    }
+
+    #[test]
+    fn test_usages() {
+        let mut graph = BindingGraph::new();
+
+        let symbol_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "env".into(),
+            declaration_range: make_range(0, 0, 0, 25),
+            name_range: make_range(0, 6, 0, 9),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvObject { canonical_name: "process.env".into() },
+            kind: SymbolKind::EnvObject,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let usage = SymbolUsage {
+            symbol_id,
+            range: make_range(1, 10, 1, 23),
+            scope: ScopeId::root(),
+            property_access: Some("DATABASE_URL".into()),
+            property_access_range: Some(make_range(1, 14, 1, 26)),
+        };
+
+        graph.add_usage(usage);
+
+        assert_eq!(graph.usages().len(), 1);
+        assert_eq!(graph.usages()[0].property_access.as_ref().unwrap(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn test_usage_at_position() {
+        let mut graph = BindingGraph::new();
+
+        let symbol_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "env".into(),
+            declaration_range: make_range(0, 0, 0, 25),
+            name_range: make_range(0, 6, 0, 9),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvObject { canonical_name: "process.env".into() },
+            kind: SymbolKind::EnvObject,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let usage = SymbolUsage {
+            symbol_id,
+            range: make_range(1, 10, 1, 23),
+            scope: ScopeId::root(),
+            property_access: Some("DATABASE_URL".into()),
+            property_access_range: None,
+        };
+
+        graph.add_usage(usage);
+
+        // Position within usage range
+        let found = graph.usage_at_position(Position::new(1, 15));
+        assert!(found.is_some());
+
+        // Position outside range
+        let not_found = graph.usage_at_position(Position::new(2, 0));
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_resolve_with_max_depth() {
+        let mut graph = BindingGraph::new();
+
+        // Create a chain: a -> b -> c -> d
+        let a_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "a".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 6, 0, 7),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvObject { canonical_name: "process.env".into() },
+            kind: SymbolKind::EnvObject,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let b_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(2).unwrap(),
+            name: "b".into(),
+            declaration_range: make_range(1, 0, 1, 10),
+            name_range: make_range(1, 6, 1, 7),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::Symbol { target: a_id },
+            kind: SymbolKind::Variable,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let c_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(3).unwrap(),
+            name: "c".into(),
+            declaration_range: make_range(2, 0, 2, 10),
+            name_range: make_range(2, 6, 2, 7),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::Symbol { target: b_id },
+            kind: SymbolKind::Variable,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let d_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(4).unwrap(),
+            name: "d".into(),
+            declaration_range: make_range(3, 0, 3, 10),
+            name_range: make_range(3, 6, 3, 7),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::Symbol { target: c_id },
+            kind: SymbolKind::Variable,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        // Full depth resolves
+        assert!(graph.resolve_to_env(d_id).is_some());
+
+        // Limited depth may not resolve
+        assert!(graph.resolve_to_env_with_max(d_id, 2).is_none());
+        assert!(graph.resolve_to_env_with_max(d_id, 5).is_some());
+    }
+
+    #[test]
+    fn test_resolves_to_env_object() {
+        let mut graph = BindingGraph::new();
+
+        let env_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "env".into(),
+            declaration_range: make_range(0, 0, 0, 25),
+            name_range: make_range(0, 6, 0, 9),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvObject { canonical_name: "process.env".into() },
+            kind: SymbolKind::EnvObject,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let var_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(2).unwrap(),
+            name: "db".into(),
+            declaration_range: make_range(1, 0, 1, 25),
+            name_range: make_range(1, 6, 1, 8),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "DATABASE_URL".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        assert!(graph.resolves_to_env_object(env_id));
+        assert!(!graph.resolves_to_env_object(var_id));
+    }
+
+    #[test]
+    fn test_get_env_var_name() {
+        let mut graph = BindingGraph::new();
+
+        let env_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "env".into(),
+            declaration_range: make_range(0, 0, 0, 25),
+            name_range: make_range(0, 6, 0, 9),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvObject { canonical_name: "process.env".into() },
+            kind: SymbolKind::EnvObject,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        let var_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(2).unwrap(),
+            name: "db".into(),
+            declaration_range: make_range(1, 0, 1, 25),
+            name_range: make_range(1, 6, 1, 8),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "DATABASE_URL".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        // Object doesn't have a var name
+        assert!(graph.get_env_var_name(env_id).is_none());
+
+        // Variable has a name
+        assert_eq!(graph.get_env_var_name(var_id), Some("DATABASE_URL".into()));
+    }
+
+    #[test]
+    fn test_is_range_contained() {
+        let outer = make_range(0, 0, 10, 50);
+        let inner = make_range(2, 10, 5, 30);
+        let outside = make_range(15, 0, 20, 50);
+        let partial = make_range(0, 0, 15, 0);
+
+        assert!(BindingGraph::is_range_contained(inner, outer));
+        assert!(BindingGraph::is_range_contained(outer, outer)); // Same range
+        assert!(!BindingGraph::is_range_contained(outside, outer));
+        assert!(!BindingGraph::is_range_contained(partial, outer));
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut graph = BindingGraph::new();
+
+        // Add some data
+        graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "test".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "TEST".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        graph.add_scope(Scope {
+            id: ScopeId::root(),
+            parent: Some(ScopeId::root()),
+            range: make_range(5, 0, 10, 0),
+            kind: ScopeKind::Function,
+        });
+
+        graph.add_direct_reference(EnvReference {
+            name: "TEST".into(),
+            full_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            access_type: crate::types::AccessType::Property,
+            has_default: false,
+            default_value: None,
+        });
+
+        // Clear
+        graph.clear();
+
+        // Should have only root scope
+        assert!(graph.symbols().is_empty());
+        assert_eq!(graph.scopes().len(), 1);
+        assert!(graph.direct_references().is_empty());
+        assert!(graph.usages().is_empty());
+    }
+
+    #[test]
+    fn test_stats() {
+        let mut graph = BindingGraph::new();
+
+        graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "test".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "TEST".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        graph.add_direct_reference(EnvReference {
+            name: "TEST".into(),
+            full_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            access_type: crate::types::AccessType::Property,
+            has_default: false,
+            default_value: None,
+        });
+
+        let stats = graph.stats();
+        assert_eq!(stats.symbol_count, 1);
+        assert_eq!(stats.scope_count, 1);
+        assert_eq!(stats.usage_count, 0);
+        assert_eq!(stats.direct_reference_count, 1);
+    }
+
+    #[test]
+    fn test_invalid_symbol_not_found_in_lookup() {
+        let mut graph = BindingGraph::new();
+
+        let id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "test".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 4),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "TEST".into() },
+            kind: SymbolKind::Value,
+            is_valid: false, // Invalid!
+            destructured_key_range: None,
+        });
+
+        // Invalid symbol should not be found in lookup
+        let found = graph.lookup_symbol("test", ScopeId::root());
+        assert!(found.is_none());
+
+        // But can still be retrieved by ID
+        let by_id = graph.get_symbol(id);
+        assert!(by_id.is_some());
+    }
+
+    #[test]
+    fn test_multiple_symbols_same_name_different_scopes() {
+        let mut graph = BindingGraph::new();
+        graph.set_root_range(make_range(0, 0, 20, 0));
+
+        // Add function scope
+        let func_scope = graph.add_scope(Scope {
+            id: ScopeId::root(),
+            parent: Some(ScopeId::root()),
+            range: make_range(5, 0, 15, 0),
+            kind: ScopeKind::Function,
+        });
+
+        // Symbol in root scope
+        let root_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "db".into(),
+            declaration_range: make_range(0, 0, 0, 30),
+            name_range: make_range(0, 6, 0, 8),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvVar { name: "ROOT_DB".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        // Symbol with same name in function scope (shadows root)
+        let func_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(2).unwrap(),
+            name: "db".into(),
+            declaration_range: make_range(6, 0, 6, 30),
+            name_range: make_range(6, 6, 6, 8),
+            scope: func_scope,
+            origin: SymbolOrigin::EnvVar { name: "FUNC_DB".into() },
+            kind: SymbolKind::Value,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        // Lookup from func scope should find func symbol (shadowing)
+        let found = graph.lookup_symbol("db", func_scope).unwrap();
+        assert_eq!(found.id, func_id);
+
+        // Lookup from root should find root symbol
+        let found = graph.lookup_symbol("db", ScopeId::root()).unwrap();
+        assert_eq!(found.id, root_id);
+    }
+
+    #[test]
+    fn test_resolve_unresolvable_origins() {
+        let mut graph = BindingGraph::new();
+
+        // Unknown origin
+        let unknown_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "unknown".into(),
+            declaration_range: make_range(0, 0, 0, 10),
+            name_range: make_range(0, 0, 0, 7),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::Unknown,
+            kind: SymbolKind::Variable,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        // Unresolvable origin
+        let unresolvable_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(2).unwrap(),
+            name: "unresolvable".into(),
+            declaration_range: make_range(1, 0, 1, 15),
+            name_range: make_range(1, 0, 1, 12),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::Unresolvable,
+            kind: SymbolKind::Variable,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        assert!(graph.resolve_to_env(unknown_id).is_none());
+        assert!(graph.resolve_to_env(unresolvable_id).is_none());
+    }
+
+    #[test]
+    fn test_usages_mut() {
+        let mut graph = BindingGraph::new();
+
+        let symbol_id = graph.add_symbol(Symbol {
+            id: SymbolId::new(1).unwrap(),
+            name: "env".into(),
+            declaration_range: make_range(0, 0, 0, 25),
+            name_range: make_range(0, 6, 0, 9),
+            scope: ScopeId::root(),
+            origin: SymbolOrigin::EnvObject { canonical_name: "process.env".into() },
+            kind: SymbolKind::EnvObject,
+            is_valid: true,
+            destructured_key_range: None,
+        });
+
+        graph.add_usage(SymbolUsage {
+            symbol_id,
+            range: make_range(1, 0, 1, 10),
+            scope: ScopeId::root(),
+            property_access: None,
+            property_access_range: None,
+        });
+
+        // Test mutable access
+        graph.usages_mut().clear();
+        assert!(graph.usages().is_empty());
+    }
+
+    #[test]
+    fn test_contains_position_multiline() {
+        let range = make_range(5, 10, 8, 20);
+
+        // Start line
+        assert!(BindingGraph::contains_position(range, Position::new(5, 10)));
+        assert!(BindingGraph::contains_position(range, Position::new(5, 50)));
+        assert!(!BindingGraph::contains_position(range, Position::new(5, 9)));
+
+        // Middle lines
+        assert!(BindingGraph::contains_position(range, Position::new(6, 0)));
+        assert!(BindingGraph::contains_position(range, Position::new(7, 100)));
+
+        // End line
+        assert!(BindingGraph::contains_position(range, Position::new(8, 20)));
+        assert!(BindingGraph::contains_position(range, Position::new(8, 0)));
+        assert!(!BindingGraph::contains_position(range, Position::new(8, 21)));
+    }
 }

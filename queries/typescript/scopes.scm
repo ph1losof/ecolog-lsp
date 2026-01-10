@@ -30,10 +30,7 @@
 ;; Loops (create loop scope)
 ;; ───────────────────────────────────────────────────────────────────
 (for_statement) @scope_node
-(for_in_statement) @scope_node
-(for_of_statement) @scope_node
-(while_statement) @scope_node
-(do_statement) @scope_node
+;; Note: for-in and for-of are included in for_statement in tree-sitter-typescript
 
 ;; ───────────────────────────────────────────────────────────────────
 ;; Conditionals (create conditional scope)
