@@ -6,18 +6,26 @@ use tower_lsp::{LspService, Server};
 async fn main() {
     tracing_subscriber::fmt().init();
 
-    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let initial_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     let config_manager = ecolog_lsp::server::config::ConfigManager::new();
 
     let config = config_manager
-        .load_from_workspace(&root)
+        .load_from_workspace(&initial_root)
         .await
         .expect("Failed to load configuration");
 
+    // Use configured workspace.root if provided, otherwise use current_dir
+    let workspace_root = config
+        .workspace
+        .root
+        .as_ref()
+        .and_then(|p| p.canonicalize().ok())
+        .unwrap_or(initial_root);
+
     let abundantis_config = config.to_abundantis_config();
     let core = abundantis::Abundantis::builder()
-        .root(&root)
+        .root(&workspace_root)
         .precedence(abundantis_config.resolution.precedence)
         .env_files(abundantis_config.workspace.env_files)
         .interpolation(abundantis_config.interpolation.enabled)

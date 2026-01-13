@@ -1255,6 +1255,46 @@ pub async fn handle_execute_command(
                 "precedence": enabled_names
             }))
         }
+        "ecolog.workspace.setRoot" => {
+            // Change the workspace root at runtime
+            // Args: [path: string]
+            let path = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str())
+                .map(|s| s.to_string());
+
+            let Some(path_str) = path else {
+                return Some(json!({ "error": "Path argument required" }));
+            };
+
+            let new_root = std::path::PathBuf::from(&path_str);
+
+            // Validate path exists
+            if !new_root.exists() {
+                return Some(json!({ "error": format!("Path does not exist: {}", path_str) }));
+            }
+
+            if !new_root.is_dir() {
+                return Some(json!({ "error": format!("Path is not a directory: {}", path_str) }));
+            }
+
+            // Set the new root
+            match state.core.set_root(&new_root).await {
+                Ok(()) => {
+                    let canonical = new_root.canonicalize().unwrap_or(new_root);
+                    tracing::info!("Workspace root changed to: {:?}", canonical);
+                    Some(json!({
+                        "success": true,
+                        "root": canonical.display().to_string()
+                    }))
+                }
+                Err(e) => {
+                    tracing::error!("Failed to set workspace root: {}", e);
+                    Some(json!({ "error": format!("Failed to set root: {}", e) }))
+                }
+            }
+        }
         _ => None,
     }
 }

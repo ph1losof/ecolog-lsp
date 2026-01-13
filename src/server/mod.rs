@@ -217,6 +217,7 @@ impl LanguageServer for LspServer {
                         "ecolog.generateEnvExample".to_string(),
                         "ecolog.variable.get".to_string(),
                         "ecolog.workspace.list".to_string(),
+                        "ecolog.workspace.setRoot".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
