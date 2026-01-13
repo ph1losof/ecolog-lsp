@@ -1072,12 +1072,19 @@ pub async fn handle_execute_command(
                 }
             }
 
-            // Get file path from arguments (passed from Lua for package scoping)
+            // Parse arguments: [file_path?: string, all?: bool]
             let file_path = params
                 .arguments
                 .first()
                 .and_then(|arg| arg.as_str())
-                .map(std::path::PathBuf::from);
+                .map(|s| s.to_string());
+
+            // Check for "all" parameter - second positional arg
+            let return_all = params
+                .arguments
+                .get(1)
+                .and_then(|arg| arg.as_bool())
+                .unwrap_or(false);
 
             // Get workspace root for making paths relative
             let root = {
@@ -1085,9 +1092,40 @@ pub async fn handle_execute_command(
                 workspace.root().to_path_buf()
             };
 
-            // Use active_env_files if file context provided (scoped to package),
-            // otherwise return all discovered env files
-            let env_file_paths: Vec<std::path::PathBuf> = if let Some(ref fp) = file_path {
+            // Get env files based on mode:
+            // - all=true with file_path: return all files for current PACKAGE (for pickers in monorepo)
+            // - all=true without file_path: return all registered files (fallback)
+            // - all=false with file_path: return ACTIVE files only (for statusline)
+            // - all=false without file_path: return all registered (fallback)
+            let env_file_paths: Vec<std::path::PathBuf> = if return_all {
+                let all_files = state.core.registry.registered_file_paths();
+
+                // If file_path provided, filter to current package's files only
+                if let Some(ref fp) = file_path {
+                    let workspace = state.core.workspace.read();
+
+                    // Get package context for the file
+                    if let Some(context) = workspace.context_for_file(std::path::Path::new(fp)) {
+                        let package_root = &context.package_root;
+                        let workspace_root = &context.workspace_root;
+
+                        // Filter to files under package root OR workspace root (for cascading)
+                        all_files
+                            .into_iter()
+                            .filter(|path| {
+                                path.starts_with(package_root)
+                                    || (path.parent() == Some(workspace_root.as_path()))
+                            })
+                            .collect()
+                    } else {
+                        // Fallback: couldn't determine package, return all
+                        all_files
+                    }
+                } else {
+                    // No file path, return all files
+                    all_files
+                }
+            } else if let Some(ref fp) = file_path {
                 state.core.active_env_files(fp)
             } else {
                 state.core.registry.registered_file_paths()
