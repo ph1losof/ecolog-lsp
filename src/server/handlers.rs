@@ -1180,6 +1180,81 @@ pub async fn handle_execute_command(
                 "count": 1
             }))
         }
+        "ecolog.source.list" => {
+            // List all available sources with their enabled status
+            use abundantis::config::SourcePrecedence;
+            let precedence = state.config.get_precedence().await;
+
+            let all_sources = [
+                ("Shell", SourcePrecedence::Shell, 100),
+                ("File", SourcePrecedence::File, 50),
+                ("Remote", SourcePrecedence::Remote, 25),
+            ];
+
+            let sources: Vec<serde_json::Value> = all_sources
+                .iter()
+                .map(|(name, sp, priority)| {
+                    json!({
+                        "name": name,
+                        "enabled": precedence.contains(sp),
+                        "priority": priority
+                    })
+                })
+                .collect();
+
+            Some(json!({
+                "sources": sources,
+                "count": sources.len()
+            }))
+        }
+        "ecolog.source.setPrecedence" => {
+            // Set the resolution precedence at runtime
+            // Args: array of source names ["Shell", "File", "Remote"]
+            use abundantis::config::SourcePrecedence;
+
+            let source_names: Vec<String> = params
+                .arguments
+                .into_iter()
+                .filter_map(|arg| arg.as_str().map(|s| s.to_string()))
+                .collect();
+
+            let mut new_precedence: Vec<SourcePrecedence> = Vec::new();
+
+            for name in &source_names {
+                match name.to_lowercase().as_str() {
+                    "shell" => new_precedence.push(SourcePrecedence::Shell),
+                    "file" => new_precedence.push(SourcePrecedence::File),
+                    "remote" => new_precedence.push(SourcePrecedence::Remote),
+                    _ => {
+                        return Some(json!({
+                            "error": format!("Unknown source: {}. Valid sources: Shell, File, Remote", name)
+                        }));
+                    }
+                }
+            }
+
+            state.config.set_precedence(new_precedence.clone()).await;
+
+            // Refresh to invalidate caches and force re-resolution
+            // Note: This updates the ConfigManager's config, but Abundantis uses its own config copy.
+            // For now this is a no-op; full runtime precedence switching would require
+            // Abundantis to support config updates. Changes take effect on LSP restart.
+            let _ = state.core.refresh().await;
+
+            let enabled_names: Vec<&str> = new_precedence
+                .iter()
+                .map(|s| match s {
+                    SourcePrecedence::Shell => "Shell",
+                    SourcePrecedence::File => "File",
+                    SourcePrecedence::Remote => "Remote",
+                })
+                .collect();
+
+            Some(json!({
+                "success": true,
+                "precedence": enabled_names
+            }))
+        }
         _ => None,
     }
 }

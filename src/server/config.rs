@@ -122,6 +122,18 @@ impl ConfigManager {
         let mut lock = self.config.write().await;
         *lock = new_config;
     }
+
+    /// Set the resolution precedence at runtime
+    pub async fn set_precedence(&self, precedence: Vec<abundantis::config::SourcePrecedence>) {
+        let mut lock = self.config.write().await;
+        lock.resolution.precedence = precedence;
+    }
+
+    /// Get the current resolution precedence
+    pub async fn get_precedence(&self) -> Vec<abundantis::config::SourcePrecedence> {
+        let lock = self.config.read().await;
+        lock.resolution.precedence.clone()
+    }
 }
 
 fn true_bool() -> bool {

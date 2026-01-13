@@ -36,8 +36,8 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 
 # Workspace crates (local paths for now, will use crates.io when abundantis is published)
-abundantis = { path = "../abundantis", features = ["full"] }
-korni = { path = "../korni" }
+abundantis = { version = "0.1.0", features = ["full"] }
+korni = "0.1.4"
 
 # Error Handling
 anyhow = "1.0"
