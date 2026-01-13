@@ -165,6 +165,18 @@ impl ConfigManager {
         let lock = self.config.read().await;
         lock.resolution.precedence.clone()
     }
+
+    /// Set interpolation enabled state at runtime
+    pub async fn set_interpolation_enabled(&self, enabled: bool) {
+        let mut lock = self.config.write().await;
+        lock.interpolation.enabled = enabled;
+    }
+
+    /// Get interpolation enabled state
+    pub async fn get_interpolation_enabled(&self) -> bool {
+        let lock = self.config.read().await;
+        lock.interpolation.enabled
+    }
 }
 
 /// Convert toml::Value to serde_json::Value

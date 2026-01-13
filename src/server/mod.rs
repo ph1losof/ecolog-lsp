@@ -224,6 +224,8 @@ impl LanguageServer for LspServer {
                         "ecolog.variable.get".to_string(),
                         "ecolog.workspace.list".to_string(),
                         "ecolog.workspace.setRoot".to_string(),
+                        "ecolog.interpolation.set".to_string(),
+                        "ecolog.interpolation.get".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
@@ -450,9 +452,9 @@ impl LanguageServer for LspServer {
         let command = params.command.clone();
         let result = handlers::handle_execute_command(params, &self.state).await;
 
-        // Republish diagnostics after source precedence changes
+        // Republish diagnostics after configuration changes
         // This ensures hover/completion/diagnostics immediately reflect the new configuration
-        if command == "ecolog.source.setPrecedence" {
+        if command == "ecolog.source.setPrecedence" || command == "ecolog.interpolation.set" {
             for uri in self.state.document_manager.all_uris() {
                 let diagnostics = handlers::compute_diagnostics(&uri, &self.state).await;
                 self.client.publish_diagnostics(uri, diagnostics, None).await;

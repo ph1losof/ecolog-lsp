@@ -233,7 +233,11 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
     // Get document state for import context (scoped to drop MappedRef before await)
     let (import_ctx, tree, content) = {
         let doc = state.document_manager.get(uri)?;
-        (doc.import_context.clone(), doc.tree.clone(), doc.content.clone())
+        (
+            doc.import_context.clone(),
+            doc.tree.clone(),
+            doc.content.clone(),
+        )
     };
 
     // Get the identifier at position from the syntax tree
@@ -280,8 +284,7 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
 
     match cross_resolver.resolve_import(uri, &module_path, &original_name, is_default) {
         CrossModuleResolution::EnvVar {
-            name: env_var_name,
-            ..
+            name: env_var_name, ..
         } => {
             let file_path = uri.to_file_path().ok()?;
             let resolved = resolve_env_var_value(&env_var_name, &file_path, state).await?;
@@ -350,7 +353,8 @@ async fn handle_hover_on_imported_env_object_property(
     // - Python: attribute node
     // - Rust: field_expression → field_identifier
     // - Go: selector_expression
-    let (object_name, _extracted_property) = language.extract_property_access(tree, content, byte_offset)?;
+    let (object_name, _extracted_property) =
+        language.extract_property_access(tree, content, byte_offset)?;
 
     // Check if the object is an imported env object
     let (module_path, original_name) = import_ctx.aliases.get(object_name.as_str())?;
@@ -477,8 +481,14 @@ async fn get_identifier_at_position(
     {
         let name = node.utf8_text(content.as_bytes()).ok()?;
         let range = Range::new(
-            Position::new(node.start_position().row as u32, node.start_position().column as u32),
-            Position::new(node.end_position().row as u32, node.end_position().column as u32),
+            Position::new(
+                node.start_position().row as u32,
+                node.start_position().column as u32,
+            ),
+            Position::new(
+                node.end_position().row as u32,
+                node.end_position().column as u32,
+            ),
         );
         return Some((compact_str::CompactString::from(name), range));
     }
@@ -537,7 +547,10 @@ pub async fn handle_completion(
                         format!("`{}`", value)
                     };
 
-                    let mut doc = format!("**Value**: {}\n\n**Source**: `{}`", value_formatted, source_str);
+                    let mut doc = format!(
+                        "**Value**: {}\n\n**Source**: `{}`",
+                        value_formatted, source_str
+                    );
                     if let Some(desc) = &var.description {
                         doc.push_str(&format!("\n\n*{}*", desc));
                     }
@@ -889,10 +902,7 @@ pub async fn compute_diagnostics(
                     severity: Some(DiagnosticSeverity::WARNING),
                     code: Some(NumberOrString::String("undefined-env-var".to_string())),
                     source: Some("ecolog".to_string()),
-                    message: format!(
-                        "Environment variable '{}' is not defined.",
-                        reference.name
-                    ),
+                    message: format!("Environment variable '{}' is not defined.", reference.name),
                     ..Default::default()
                 });
             }
@@ -1210,7 +1220,10 @@ pub async fn handle_execute_command(
             // This enables immediate source precedence changes without LSP restart
             let mut new_resolution_config = abundantis::config::ResolutionConfig::default();
             new_resolution_config.precedence = new_precedence.clone();
-            state.core.resolution.update_resolution_config(new_resolution_config);
+            state
+                .core
+                .resolution
+                .update_resolution_config(new_resolution_config);
 
             // Also refresh to clear caches
             let _ = state.core.refresh().await;
@@ -1268,6 +1281,43 @@ pub async fn handle_execute_command(
                     Some(json!({ "error": format!("Failed to set root: {}", e) }))
                 }
             }
+        }
+        "ecolog.interpolation.set" => {
+            // Set interpolation enabled state at runtime
+            // Args: [enabled: bool]
+            let enabled = params
+                .arguments
+                .first()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            // Update config manager
+            state.config.set_interpolation_enabled(enabled).await;
+
+            // Update abundantis resolution engine at runtime
+            let mut new_interpolation_config = abundantis::config::InterpolationConfig::default();
+            new_interpolation_config.enabled = enabled;
+            state
+                .core
+                .resolution
+                .update_interpolation_config(new_interpolation_config);
+
+            // Clear caches to ensure fresh resolution
+            let _ = state.core.refresh().await;
+
+            tracing::info!("Interpolation set to: {}", enabled);
+
+            Some(json!({
+                "success": true,
+                "enabled": enabled
+            }))
+        }
+        "ecolog.interpolation.get" => {
+            // Get current interpolation enabled state
+            let enabled = state.core.resolution.interpolation_enabled();
+            Some(json!({
+                "enabled": enabled
+            }))
         }
         _ => None,
     }
@@ -1341,7 +1391,10 @@ async fn get_env_var_at_position(
     position: Position,
 ) -> Option<String> {
     // Try direct reference first
-    if let Some(reference) = state.document_manager.get_env_reference_cloned(uri, position) {
+    if let Some(reference) = state
+        .document_manager
+        .get_env_reference_cloned(uri, position)
+    {
         return Some(reference.name.to_string());
     }
 
@@ -1351,14 +1404,15 @@ async fn get_env_var_at_position(
     }
 
     // Try binding usage
-    if let Some(usage) = state.document_manager.get_binding_usage_cloned(uri, position) {
+    if let Some(usage) = state
+        .document_manager
+        .get_binding_usage_cloned(uri, position)
+    {
         return Some(usage.env_var_name.to_string());
     }
 
     // Fallback: Try cross-module resolution for imported symbols
-    if let Some(env_var_name) =
-        get_env_var_from_cross_module(state, uri, position).await
-    {
+    if let Some(env_var_name) = get_env_var_from_cross_module(state, uri, position).await {
         return Some(env_var_name);
     }
 
@@ -1481,8 +1535,7 @@ async fn find_env_definition(state: &ServerState, env_var_name: &str) -> Option<
                             if let Some(key_span) = kv.key_span {
                                 // Convert korni span to LSP range
                                 let range = korni_span_to_range(&content, key_span);
-                                let uri =
-                                    Url::from_file_path(&env_path).ok()?;
+                                let uri = Url::from_file_path(&env_path).ok()?;
                                 return Some(Location { uri, range });
                             }
                         }
@@ -1536,10 +1589,11 @@ fn offset_to_line_col(content: &str, offset: usize) -> (u32, u32) {
 
 /// Check if a URI points to an env file based on config patterns.
 async fn is_env_file_uri(state: &ServerState, uri: &Url) -> bool {
-    let file_name = match uri.to_file_path().ok().and_then(|p| {
-        p.file_name()
-            .map(|s| s.to_string_lossy().to_string())
-    }) {
+    let file_name = match uri
+        .to_file_path()
+        .ok()
+        .and_then(|p| p.file_name().map(|s| s.to_string_lossy().to_string()))
+    {
         Some(name) => name,
         None => return false,
     };
@@ -1562,7 +1616,10 @@ async fn get_env_var_in_env_file(
     // Get content from document manager or read from disk
     // Note: We scope the document access to drop MappedRef before any potential await
     let content = {
-        let doc_content = state.document_manager.get(uri).map(|doc| doc.content.clone());
+        let doc_content = state
+            .document_manager
+            .get(uri)
+            .map(|doc| doc.content.clone());
         match doc_content {
             Some(c) => c,
             None => {
@@ -1708,7 +1765,10 @@ fn get_env_var_with_range(
     position: Position,
 ) -> Option<(String, Range)> {
     // Try direct reference first
-    if let Some(reference) = state.document_manager.get_env_reference_cloned(uri, position) {
+    if let Some(reference) = state
+        .document_manager
+        .get_env_reference_cloned(uri, position)
+    {
         return Some((reference.name.to_string(), reference.name_range));
     }
 
@@ -1723,7 +1783,10 @@ fn get_env_var_with_range(
 
     // Try binding usage - the usage refers to a binding, not the env var directly
     // We can't rename the env var from here, but return info for validation
-    if let Some(usage) = state.document_manager.get_binding_usage_cloned(uri, position) {
+    if let Some(usage) = state
+        .document_manager
+        .get_binding_usage_cloned(uri, position)
+    {
         return Some((usage.env_var_name.to_string(), usage.range));
     }
 
