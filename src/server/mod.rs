@@ -193,7 +193,13 @@ impl LspServer {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for LspServer {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Store initialization options for later merging with ecolog.toml
+        self.state
+            .config
+            .set_init_settings(params.initialization_options)
+            .await;
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
@@ -441,7 +447,19 @@ impl LanguageServer for LspServer {
         &self,
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
-        Ok(handlers::handle_execute_command(params, &self.state).await)
+        let command = params.command.clone();
+        let result = handlers::handle_execute_command(params, &self.state).await;
+
+        // Republish diagnostics after source precedence changes
+        // This ensures hover/completion/diagnostics immediately reflect the new configuration
+        if command == "ecolog.source.setPrecedence" {
+            for uri in self.state.document_manager.all_uris() {
+                let diagnostics = handlers::compute_diagnostics(&uri, &self.state).await;
+                self.client.publish_diagnostics(uri, diagnostics, None).await;
+            }
+        }
+
+        Ok(result)
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {

@@ -50,25 +50,26 @@ struct ResolvedEnvVarValue {
 
 /// Resolve an environment variable value.
 /// This is the core resolution logic used by all hover handlers.
+/// Uses get_for_file which respects package boundaries and active file filtering.
 async fn resolve_env_var_value(
     env_var_name: &str,
     file_path: &Path,
     state: &ServerState,
 ) -> Option<ResolvedEnvVarValue> {
-    let context = {
-        let workspace = state.core.workspace.read();
-        workspace.context_for_file(file_path)?
-    };
-
-    let registry = &state.core.registry;
+    // Use get_for_file which respects package boundaries and active file filtering
     let resolved = state
         .core
-        .resolution
-        .resolve(env_var_name, &context, registry)
+        .get_for_file(env_var_name, file_path)
         .await
         .ok()??;
 
-    let source_str = format_source(&resolved.source, &context.workspace_root);
+    // Get workspace root for formatting source
+    let workspace_root = {
+        let workspace = state.core.workspace.read();
+        workspace.root().to_path_buf()
+    };
+
+    let source_str = format_source(&resolved.source, &workspace_root);
 
     Some(ResolvedEnvVarValue {
         value: resolved.resolved_value.to_string(),
@@ -514,25 +515,20 @@ pub async fn handle_completion(
 
     let file_path = uri.to_file_path().ok()?;
 
-    let context = {
+    // Get workspace root for formatting source paths
+    let workspace_root = {
         let workspace = state.core.workspace.read();
-        workspace.context_for_file(&file_path)?
+        workspace.root().to_path_buf()
     };
 
-    let registry = &state.core.registry;
-
-    if let Ok(all_vars) = state
-        .core
-        .resolution
-        .all_variables(&context, registry)
-        .await
-    {
+    // Use all_for_file which respects package boundaries and active file filtering
+    if let Ok(all_vars) = state.core.all_for_file(&file_path).await {
         Some(
             all_vars
                 .into_iter()
                 .map(|var| {
                     let value = var.resolved_value.to_string();
-                    let source_str = format_source(&var.source, &context.workspace_root);
+                    let source_str = format_source(&var.source, &workspace_root);
 
                     // Wrap each line in backticks - inline code doesn't interpret markdown
                     let value_formatted = if value.contains('\n') {
@@ -601,20 +597,10 @@ pub async fn handle_definition(
         return handle_definition_cross_module(&params, state).await;
     };
 
-    // Resolve variable
+    // Resolve variable using filtered resolution (respects active files AND source precedence)
     let file_path = uri.to_file_path().ok()?;
-    let context = {
-        let workspace = state.core.workspace.read();
-        workspace.context_for_file(&file_path)?
-    };
 
-    let registry = &state.core.registry;
-    if let Ok(Some(variable)) = state
-        .core
-        .resolution
-        .resolve(&env_var_name, &context, registry)
-        .await
-    {
+    if let Ok(Some(variable)) = state.core.get_for_file(&env_var_name, &file_path).await {
         match &variable.source {
             VariableSource::File { path, offset } => {
                 let target_uri = Url::from_file_path(path).ok()?;
@@ -892,75 +878,55 @@ pub async fn compute_diagnostics(
     // Part B: Undefined Variable Diagnostics (For code files)
     // Only if NOT .env file (references usually are in code)
     if !is_env_file {
-        let context_opt = {
-            let workspace = state.core.workspace.read();
-            workspace.context_for_file(&file_path)
-        };
+        // Use get_for_file for filtered resolution (respects active files AND source precedence)
+        // Check direct references
+        for reference in references {
+            let resolved_result = state.core.get_for_file(&reference.name, &file_path).await;
 
-        if let Some(context) = context_opt {
-            let registry = &state.core.registry;
-
-            // Check direct references
-            for reference in references {
-                let resolved_result = state
-                    .core
-                    .resolution
-                    .resolve(&reference.name, &context, registry)
-                    .await;
-
-                if let Ok(None) = resolved_result {
-                    diagnostics.push(Diagnostic {
-                        range: reference.name_range,
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        code: Some(NumberOrString::String("undefined-env-var".to_string())),
-                        source: Some("ecolog".to_string()),
-                        message: format!(
-                            "Environment variable '{}' is not defined.",
-                            reference.name
-                        ),
-                        ..Default::default()
-                    });
-                }
+            if matches!(resolved_result, Ok(None)) {
+                diagnostics.push(Diagnostic {
+                    range: reference.name_range,
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String("undefined-env-var".to_string())),
+                    source: Some("ecolog".to_string()),
+                    message: format!(
+                        "Environment variable '{}' is not defined.",
+                        reference.name
+                    ),
+                    ..Default::default()
+                });
             }
+        }
 
-            // Check symbols that resolve to env vars (e.g., destructured patterns)
-            for (env_name, range) in env_var_symbols {
-                let resolved_result = state
-                    .core
-                    .resolution
-                    .resolve(&env_name, &context, registry)
-                    .await;
+        // Check symbols that resolve to env vars (e.g., destructured patterns)
+        for (env_name, range) in env_var_symbols {
+            let resolved_result = state.core.get_for_file(&env_name, &file_path).await;
 
-                if let Ok(None) = resolved_result {
-                    diagnostics.push(Diagnostic {
-                        range,
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        code: Some(NumberOrString::String("undefined-env-var".to_string())),
-                        source: Some("ecolog".to_string()),
-                        message: format!("Environment variable '{}' is not defined.", env_name),
-                        ..Default::default()
-                    });
-                }
+            if matches!(resolved_result, Ok(None)) {
+                diagnostics.push(Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String("undefined-env-var".to_string())),
+                    source: Some("ecolog".to_string()),
+                    message: format!("Environment variable '{}' is not defined.", env_name),
+                    ..Default::default()
+                });
             }
+        }
 
-            // Check property accesses on env object aliases (e.g., env.DEBUG2)
-            for (env_name, range) in property_accesses {
-                let resolved_result = state
-                    .core
-                    .resolution
-                    .resolve(&env_name, &context, registry)
-                    .await;
+        // Check property accesses on env object aliases (e.g., env.DEBUG2)
+        for (env_name, range) in property_accesses {
+            let resolved_result = state.core.get_for_file(&env_name, &file_path).await;
 
-                if let Ok(None) = resolved_result {
-                    diagnostics.push(Diagnostic {
-                        range,
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        code: Some(NumberOrString::String("undefined-env-var".to_string())),
-                        source: Some("ecolog".to_string()),
-                        message: format!("Environment variable '{}' is not defined.", env_name),
-                        ..Default::default()
-                    });
-                }
+            if matches!(resolved_result, Ok(None)) {
+                diagnostics.push(Diagnostic {
+                    range,
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String("undefined-env-var".to_string())),
+                    source: Some("ecolog".to_string()),
+                    message: format!("Environment variable '{}' is not defined.", env_name),
+                    ..Default::default()
+                });
             }
         }
     }
@@ -1018,13 +984,23 @@ pub async fn handle_execute_command(
             }
         }
         "ecolog.listEnvVariables" => {
-            // Get all variables for the current workspace
+            // Get file path from arguments for package scoping
+            let file_path = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str())
+                .map(std::path::PathBuf::from);
+
             let root = {
                 let workspace = state.core.workspace.read();
                 workspace.root().to_path_buf()
             };
 
-            match state.core.all_for_file(&root).await {
+            // Use all_for_file if file context provided (scoped to package),
+            // otherwise use workspace root for resolution
+            let resolve_path = file_path.as_ref().unwrap_or(&root);
+
+            match state.core.all_for_file(resolve_path).await {
                 Ok(vars) => {
                     let var_list: Vec<serde_json::Value> = vars
                         .iter()
@@ -1086,47 +1062,42 @@ pub async fn handle_execute_command(
                 }
             }
 
-            // List available .env files in the workspace
+            // Get file path from arguments (passed from Lua for package scoping)
+            let file_path = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str())
+                .map(std::path::PathBuf::from);
+
+            // Get workspace root for making paths relative
             let root = {
                 let workspace = state.core.workspace.read();
                 workspace.root().to_path_buf()
             };
 
-            // Use configured env file patterns to discover files
-            let env_files_patterns = {
-                let config = state.config.get_config();
-                let config = config.read().await;
-                config.workspace.env_files.clone()
+            // Use active_env_files if file context provided (scoped to package),
+            // otherwise return all discovered env files
+            let env_file_paths: Vec<std::path::PathBuf> = if let Some(ref fp) = file_path {
+                state.core.active_env_files(fp)
+            } else {
+                state.core.registry.registered_file_paths()
             };
 
-            let mut env_files: Vec<String> = Vec::new();
-
-            // Walk directory looking for matching files (limited depth?)
-            // Abundantis has discover_file_sources logic, but that is private/internal to build?
-            // We can replicate simple discovery here or just walkdir.
-            // Using walkdir to match abundantis behavior roughly. Or just list root files if simple.
-            // User request implies full discovery?
-            // Let's stick to root level for now to avoid deep scans in command handler, unless needed.
-            // Previous impl just read_dir. Let's keep reading dir but use patterns.
-
-            if let Ok(entries) = std::fs::read_dir(&root) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            let matches = env_files_patterns.iter().any(|pattern| {
-                                glob::Pattern::new(pattern)
-                                    .map(|p| p.matches(name))
-                                    .unwrap_or(false)
-                            });
-
-                            if matches {
-                                env_files.push(name.to_string());
-                            }
-                        }
+            // Convert to relative paths for display (more user-friendly)
+            let env_files: Vec<String> = env_file_paths
+                .iter()
+                .filter_map(|path| {
+                    // Make relative to workspace root for display
+                    if let Ok(relative) = path.strip_prefix(&root) {
+                        Some(relative.to_string_lossy().to_string())
+                    } else {
+                        // Fallback to filename if not under root
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
                     }
-                }
-            }
+                })
+                .collect();
 
             Some(json!({ "files": env_files, "count": env_files.len() }))
         }
@@ -1235,10 +1206,13 @@ pub async fn handle_execute_command(
 
             state.config.set_precedence(new_precedence.clone()).await;
 
-            // Refresh to invalidate caches and force re-resolution
-            // Note: This updates the ConfigManager's config, but Abundantis uses its own config copy.
-            // For now this is a no-op; full runtime precedence switching would require
-            // Abundantis to support config updates. Changes take effect on LSP restart.
+            // Update abundantis resolution config at runtime
+            // This enables immediate source precedence changes without LSP restart
+            let mut new_resolution_config = abundantis::config::ResolutionConfig::default();
+            new_resolution_config.precedence = new_precedence.clone();
+            state.core.resolution.update_resolution_config(new_resolution_config);
+
+            // Also refresh to clear caches
             let _ = state.core.refresh().await;
 
             let enabled_names: Vec<&str> = new_precedence
