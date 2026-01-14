@@ -4,7 +4,9 @@ use tower_lsp::{LspService, Server};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
 
     let initial_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
