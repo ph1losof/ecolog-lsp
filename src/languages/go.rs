@@ -149,6 +149,12 @@ impl LanguageSupport for Go {
         &["os"]
     }
 
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        // Go uses os.Getenv("KEY") and os.LookupEnv("KEY")
+        // Server-side context validation ensures completions only appear in valid patterns
+        &["\""]
+    }
+
     fn is_scope_node(&self, node: tree_sitter::Node) -> bool {
         match node.kind() {
             "function_declaration"

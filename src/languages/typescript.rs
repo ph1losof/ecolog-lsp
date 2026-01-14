@@ -35,7 +35,7 @@ impl LanguageSupport for TypeScript {
     }
 
     fn is_standard_env_object(&self, name: &str) -> bool {
-        name == "process.env" || name == "process" || name == "import.meta"
+        name == "process.env" || name == "import.meta.env"
     }
 
     fn default_env_object_name(&self) -> Option<&'static str> {
@@ -44,6 +44,10 @@ impl LanguageSupport for TypeScript {
 
     fn known_env_modules(&self) -> &'static [&'static str] {
         &["process"]
+    }
+
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        &[".", "\"", "'"]
     }
 
     fn is_scope_node(&self, node: Node) -> bool {
@@ -274,7 +278,7 @@ impl LanguageSupport for TypeScriptReact {
     }
 
     fn is_standard_env_object(&self, name: &str) -> bool {
-        name == "process.env" || name == "process" || name == "import.meta"
+        name == "process.env" || name == "import.meta.env"
     }
 
     fn default_env_object_name(&self) -> Option<&'static str> {
@@ -283,6 +287,10 @@ impl LanguageSupport for TypeScriptReact {
 
     fn known_env_modules(&self) -> &'static [&'static str] {
         &["process"]
+    }
+
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        &[".", "\"", "'"]
     }
 
     fn is_scope_node(&self, node: Node) -> bool {
@@ -546,8 +554,9 @@ mod tests {
     fn test_ts_is_standard_env_object() {
         let ts = get_ts();
         assert!(ts.is_standard_env_object("process.env"));
-        assert!(ts.is_standard_env_object("process"));
-        assert!(ts.is_standard_env_object("import.meta"));
+        assert!(ts.is_standard_env_object("import.meta.env"));
+        assert!(!ts.is_standard_env_object("process"));
+        assert!(!ts.is_standard_env_object("import.meta"));
         assert!(!ts.is_standard_env_object("something.else"));
     }
 
@@ -792,8 +801,9 @@ mod tests {
     fn test_tsx_is_standard_env_object() {
         let tsx = get_tsx();
         assert!(tsx.is_standard_env_object("process.env"));
-        assert!(tsx.is_standard_env_object("process"));
-        assert!(tsx.is_standard_env_object("import.meta"));
+        assert!(tsx.is_standard_env_object("import.meta.env"));
+        assert!(!tsx.is_standard_env_object("process"));
+        assert!(!tsx.is_standard_env_object("import.meta"));
         assert!(!tsx.is_standard_env_object("something.else"));
     }
 

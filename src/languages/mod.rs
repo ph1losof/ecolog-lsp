@@ -180,6 +180,14 @@ pub trait LanguageSupport: Send + Sync {
         None
     }
 
+    /// Get the characters that should trigger completion for this language.
+    /// These are derived from the language's env access patterns:
+    /// - `.` for member access (e.g., `process.env.`)
+    /// - `"` and `'` for subscript access (e.g., `process.env["`)
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// Check if a node acts as a scope boundary (e.g. function, block)
     fn is_scope_node(&self, _node: Node) -> bool {
         // Default impl: program (whole file) is a scope

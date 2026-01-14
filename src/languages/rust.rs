@@ -161,6 +161,12 @@ impl LanguageSupport for Rust {
         &["std::env", "env"]
     }
 
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        // Rust uses std::env::var("KEY"), env::var("KEY"), env!("KEY"), option_env!("KEY")
+        // Server-side context validation ensures completions only appear in valid patterns
+        &["\""]
+    }
+
     fn is_scope_node(&self, node: tree_sitter::Node) -> bool {
         match node.kind() {
             "function_item" | "closure_expression" | "block" | "for_expression"

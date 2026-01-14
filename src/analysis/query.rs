@@ -272,11 +272,40 @@ impl QueryEngine {
                             is_target = true;
                         }
                     } else if idx == idx_object {
-                        obj_name = capture
-                            .node
-                            .utf8_text(src)
-                            .ok()
-                            .map(|s| CompactString::from(s));
+                        // First try the captured node's text
+                        let node_text = capture.node.utf8_text(src).ok();
+
+                        // Skip any captured text containing newlines - these are malformed
+                        // captures from tree-sitter error recovery spanning multiple lines.
+                        // Valid env object patterns like "process.env" never span lines.
+                        if let Some(text) = &node_text {
+                            if text.contains('\n') {
+                                continue;
+                            }
+                        }
+
+                        // If the captured node is an identifier, check if its parent
+                        // member_expression forms a standard env object (e.g., process -> process.env)
+                        if let Some(text) = &node_text {
+                            if !language.is_standard_env_object(text) {
+                                // Check parent member_expression
+                                if let Some(parent) = capture.node.parent() {
+                                    if parent.kind() == "member_expression" {
+                                        if let Some(parent_text) = parent.utf8_text(src).ok() {
+                                            // Also skip parent text with newlines
+                                            if !parent_text.contains('\n')
+                                                && language.is_standard_env_object(parent_text)
+                                            {
+                                                obj_name = Some(CompactString::from(parent_text));
+                                                continue;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        obj_name = node_text.map(|s| CompactString::from(s));
                     }
                 }
 

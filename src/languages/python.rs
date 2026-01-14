@@ -183,6 +183,12 @@ impl LanguageSupport for Python {
         &["os"]
     }
 
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        // Python uses os.environ.get() or os.environ["KEY"]
+        // Server-side context validation ensures completions only appear in valid patterns
+        &[".", "\"", "'"]
+    }
+
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
         // Python supports double quotes and single quotes
         // Note: triple-quoted strings (''' or """") would require more complex handling

@@ -23,7 +23,7 @@ impl LanguageSupport for JavaScript {
     }
 
     fn is_standard_env_object(&self, name: &str) -> bool {
-        name == "process.env" || name == "process" || name == "import.meta"
+        name == "process.env" || name == "import.meta.env"
     }
 
     fn default_env_object_name(&self) -> Option<&'static str> {
@@ -32,6 +32,14 @@ impl LanguageSupport for JavaScript {
 
     fn known_env_modules(&self) -> &'static [&'static str] {
         &["process"]
+    }
+
+    fn completion_trigger_characters(&self) -> &'static [&'static str] {
+        // Trigger on:
+        // - `.` for process.env. and import.meta.env.
+        // - `"` and `'` for process.env[" and process.env['
+        // Server-side context validation ensures completions only appear in valid patterns
+        &[".", "\"", "'"]
     }
 
     fn is_scope_node(&self, node: Node) -> bool {
@@ -287,8 +295,9 @@ mod tests {
     fn test_is_standard_env_object() {
         let js = get_js();
         assert!(js.is_standard_env_object("process.env"));
-        assert!(js.is_standard_env_object("process"));
-        assert!(js.is_standard_env_object("import.meta"));
+        assert!(js.is_standard_env_object("import.meta.env"));
+        assert!(!js.is_standard_env_object("process"));
+        assert!(!js.is_standard_env_object("import.meta"));
         assert!(!js.is_standard_env_object("something.else"));
     }
 

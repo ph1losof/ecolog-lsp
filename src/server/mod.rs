@@ -200,10 +200,28 @@ impl LanguageServer for LspServer {
             .set_init_settings(params.initialization_options)
             .await;
 
+        // Collect completion trigger characters from all registered languages
+        let trigger_characters: Vec<String> = {
+            let mut chars = std::collections::HashSet::new();
+            for lang in self.state.languages.all_languages() {
+                for ch in lang.completion_trigger_characters() {
+                    chars.insert(ch.to_string());
+                }
+            }
+            chars.into_iter().collect()
+        };
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                completion_provider: Some(CompletionOptions::default()),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: if trigger_characters.is_empty() {
+                        None
+                    } else {
+                        Some(trigger_characters)
+                    },
+                    ..Default::default()
+                }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Right(RenameOptions {
