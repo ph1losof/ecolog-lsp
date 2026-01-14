@@ -179,8 +179,8 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
                 format!("`{}`", resolved.value)
             };
             let mut md = format!(
-                "**Value**: {}\n\n**Source**: `{}`",
-                value_formatted, resolved.source
+                "**`{}`**\n\n**Value**: {}\n\n**Source**: `{}`",
+                env_var_name, value_formatted, resolved.source
             );
             if let Some(desc) = &resolved.description {
                 md.push_str(&format!("\n\n*{}*", desc));
