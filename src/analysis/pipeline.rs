@@ -51,7 +51,7 @@ impl AnalysisPipeline {
         let mut graph = BindingGraph::new();
 
         // Set root scope range to the entire document
-        let root_range = Self::ts_to_lsp_range(tree.root_node().range());
+        let root_range = ts_to_lsp_range(tree.root_node().range());
         graph.set_root_range(root_range);
 
         // Phase 1: Extract scopes AND collect property access candidates in a single tree walk
@@ -132,7 +132,7 @@ impl AnalysisPipeline {
             let scope = Scope {
                 id: ScopeId::root(), // Placeholder, will be overwritten by add_scope
                 parent: Some(parent_scope),
-                range: Self::ts_to_lsp_range(node.range()),
+                range: ts_to_lsp_range(node.range()),
                 kind: scope_kind,
             };
             graph.add_scope(scope)
@@ -182,8 +182,8 @@ impl AnalysisPipeline {
         Some(PropertyAccessCandidate {
             object_name: obj_name.into(),
             property_name: prop_name.into(),
-            usage_range: Self::ts_to_lsp_range(node.range()),
-            property_range: Self::ts_to_lsp_range(property.range()),
+            usage_range: ts_to_lsp_range(node.range()),
+            property_range: ts_to_lsp_range(property.range()),
             object_position: Position::new(
                 object.start_position().row as u32,
                 object.start_position().column as u32,
@@ -230,7 +230,7 @@ impl AnalysisPipeline {
         Some(PropertyAccessCandidate {
             object_name: obj_name.into(),
             property_name: prop_name.into(),
-            usage_range: Self::ts_to_lsp_range(node.range()),
+            usage_range: ts_to_lsp_range(node.range()),
             property_range: prop_range,
             object_position: Position::new(
                 object.start_position().row as u32,
@@ -587,21 +587,22 @@ impl AnalysisPipeline {
         false
     }
 
-    // =========================================================================
-    // Utilities
-    // =========================================================================
+}
 
-    /// Convert tree-sitter Range to LSP Range.
-    #[inline]
-    pub fn ts_to_lsp_range(range: tree_sitter::Range) -> Range {
-        Range::new(
-            Position::new(
-                range.start_point.row as u32,
-                range.start_point.column as u32,
-            ),
-            Position::new(range.end_point.row as u32, range.end_point.column as u32),
-        )
-    }
+// =============================================================================
+// Utilities
+// =============================================================================
+
+/// Convert tree-sitter Range to LSP Range.
+#[inline]
+pub fn ts_to_lsp_range(range: tree_sitter::Range) -> Range {
+    Range::new(
+        Position::new(
+            range.start_point.row as u32,
+            range.start_point.column as u32,
+        ),
+        Position::new(range.end_point.row as u32, range.end_point.column as u32),
+    )
 }
 
 #[cfg(test)]
@@ -622,7 +623,7 @@ mod tests {
             end_point: tree_sitter::Point { row: 5, column: 20 },
         };
 
-        let lsp_range = AnalysisPipeline::ts_to_lsp_range(ts_range);
+        let lsp_range = ts_to_lsp_range(ts_range);
 
         assert_eq!(lsp_range.start.line, 5);
         assert_eq!(lsp_range.start.character, 10);

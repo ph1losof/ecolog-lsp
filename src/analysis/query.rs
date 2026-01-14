@@ -1,3 +1,4 @@
+use crate::analysis::ts_to_lsp_range;
 use crate::languages::LanguageSupport;
 use crate::types::{
     AccessType, EnvReference, ExportResolution, FileExportEntry, ImportContext, ModuleExport,
@@ -190,26 +191,8 @@ impl QueryEngine {
                 }
 
                 // Convert tree-sitter Range to LSP Range
-                let full_lsp = tower_lsp::lsp_types::Range::new(
-                    tower_lsp::lsp_types::Position::new(
-                        full.start_point.row as u32,
-                        full.start_point.column as u32,
-                    ),
-                    tower_lsp::lsp_types::Position::new(
-                        full.end_point.row as u32,
-                        full.end_point.column as u32,
-                    ),
-                );
-                let name_lsp = tower_lsp::lsp_types::Range::new(
-                    tower_lsp::lsp_types::Position::new(
-                        name_r.start_point.row as u32,
-                        name_r.start_point.column as u32,
-                    ),
-                    tower_lsp::lsp_types::Position::new(
-                        name_r.end_point.row as u32,
-                        name_r.end_point.column as u32,
-                    ),
-                );
+                let full_lsp = ts_to_lsp_range(full);
+                let name_lsp = ts_to_lsp_range(name_r);
 
                 Some(EnvReference {
                     name,
@@ -387,28 +370,10 @@ impl QueryEngine {
             if let (Some(bind_name), Some(env_name), Some(bind_r), Some(decl_r)) =
                 (binding_name, env_var_name, binding_range, declaration_range)
             {
-                let binding_lsp = tower_lsp::lsp_types::Range::new(
-                    tower_lsp::lsp_types::Position::new(
-                        bind_r.start_point.row as u32,
-                        bind_r.start_point.column as u32,
-                    ),
-                    tower_lsp::lsp_types::Position::new(
-                        bind_r.end_point.row as u32,
-                        bind_r.end_point.column as u32,
-                    ),
-                );
-                let decl_lsp = tower_lsp::lsp_types::Range::new(
-                    tower_lsp::lsp_types::Position::new(
-                        decl_r.start_point.row as u32,
-                        decl_r.start_point.column as u32,
-                    ),
-                    tower_lsp::lsp_types::Position::new(
-                        decl_r.end_point.row as u32,
-                        decl_r.end_point.column as u32,
-                    ),
-                );
+                let binding_lsp = ts_to_lsp_range(bind_r);
+                let decl_lsp = ts_to_lsp_range(decl_r);
 
-                let mut scope_range = tower_lsp::lsp_types::Range::default();
+                let mut scope_range = LspRange::default();
                 let maybe_node = tree
                     .root_node()
                     .descendant_for_byte_range(bind_r.start_byte, bind_r.end_byte);
@@ -417,34 +382,14 @@ impl QueryEngine {
                     let mut found_scope = false;
                     while let Some(parent) = node.parent() {
                         if language.is_scope_node(parent) {
-                            let range = parent.range();
-                            scope_range = tower_lsp::lsp_types::Range::new(
-                                tower_lsp::lsp_types::Position::new(
-                                    range.start_point.row as u32,
-                                    range.start_point.column as u32,
-                                ),
-                                tower_lsp::lsp_types::Position::new(
-                                    range.end_point.row as u32,
-                                    range.end_point.column as u32,
-                                ),
-                            );
+                            scope_range = ts_to_lsp_range(parent.range());
                             found_scope = true;
                             break;
                         }
                         node = parent;
                     }
                     if !found_scope {
-                        let range = tree.root_node().range();
-                        scope_range = tower_lsp::lsp_types::Range::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        );
+                        scope_range = ts_to_lsp_range(tree.root_node().range());
                     }
                 }
 
@@ -460,18 +405,7 @@ impl QueryEngine {
                 // Convert the bound_env_var range to LSP range if present
                 // This is the range of the property key in destructured bindings
                 // (e.g., for `{ API_KEY: apiKey }`, this is the range of `API_KEY`)
-                let destructured_key_range = bound_env_var_range.map(|r| {
-                    tower_lsp::lsp_types::Range::new(
-                        tower_lsp::lsp_types::Position::new(
-                            r.start_point.row as u32,
-                            r.start_point.column as u32,
-                        ),
-                        tower_lsp::lsp_types::Position::new(
-                            r.end_point.row as u32,
-                            r.end_point.column as u32,
-                        ),
-                    )
-                });
+                let destructured_key_range = bound_env_var_range.map(ts_to_lsp_range);
 
                 Some(crate::types::EnvBinding {
                     binding_name: bind_name,
@@ -542,22 +476,11 @@ impl QueryEngine {
             let orig = original_name.or_else(|| module_path.clone());
 
             if let (Some(path), Some(orig_name), Some(range)) = (module_path, orig, stmt_range) {
-                let range_lsp = tower_lsp::lsp_types::Range::new(
-                    tower_lsp::lsp_types::Position::new(
-                        range.start_point.row as u32,
-                        range.start_point.column as u32,
-                    ),
-                    tower_lsp::lsp_types::Position::new(
-                        range.end_point.row as u32,
-                        range.end_point.column as u32,
-                    ),
-                );
-
                 Some(crate::types::ImportAlias {
                     module_path: path,
                     original_name: orig_name,
                     alias,
-                    range: range_lsp,
+                    range: ts_to_lsp_range(range),
                 })
             } else {
                 None
@@ -617,18 +540,7 @@ impl QueryEngine {
             for capture in m.captures {
                 if Some(capture.index) == idx_reassigned_name {
                     let name = capture.node.utf8_text(src).ok()?;
-                    let range = capture.node.range();
-                    let lsp_range = tower_lsp::lsp_types::Range::new(
-                        tower_lsp::lsp_types::Position::new(
-                            range.start_point.row as u32,
-                            range.start_point.column as u32,
-                        ),
-                        tower_lsp::lsp_types::Position::new(
-                            range.end_point.row as u32,
-                            range.end_point.column as u32,
-                        ),
-                    );
-                    return Some((CompactString::from(name), lsp_range));
+                    return Some((CompactString::from(name), ts_to_lsp_range(capture.node.range())));
                 }
             }
             None
@@ -654,18 +566,7 @@ impl QueryEngine {
             for capture in m.captures {
                 if Some(capture.index) == idx_identifier {
                     if let Some(name) = language.extract_identifier(capture.node, src) {
-                        let range = capture.node.range();
-                        let range_lsp = tower_lsp::lsp_types::Range::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        );
-                        return Some((name, range_lsp));
+                        return Some((name, ts_to_lsp_range(capture.node.range())));
                     }
                 }
             }
@@ -698,18 +599,8 @@ impl QueryEngine {
             for capture in m.captures {
                 if Some(capture.index) == idx_target {
                     if let Some(name) = language.extract_identifier(capture.node, src) {
-                        let range = capture.node.range();
                         target_name = Some(name);
-                        target_range = Some(tower_lsp::lsp_types::Range::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        ));
+                        target_range = Some(ts_to_lsp_range(capture.node.range()));
                     }
                 } else if Some(capture.index) == idx_source {
                     if let Some(name) = language.extract_identifier(capture.node, src) {
@@ -760,33 +651,13 @@ impl QueryEngine {
             for capture in m.captures {
                 if Some(capture.index) == idx_target {
                     if let Some(name) = language.extract_identifier(capture.node, src) {
-                        let range = capture.node.range();
                         target_name = Some(name);
-                        target_range = Some(tower_lsp::lsp_types::Range::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        ));
+                        target_range = Some(ts_to_lsp_range(capture.node.range()));
                     }
                 } else if Some(capture.index) == idx_key {
                     key_name = language.extract_destructure_key(capture.node, src);
                     // Capture the key range for hover on the property key
-                    let range = capture.node.range();
-                    key_range = Some(tower_lsp::lsp_types::Range::new(
-                        tower_lsp::lsp_types::Position::new(
-                            range.start_point.row as u32,
-                            range.start_point.column as u32,
-                        ),
-                        tower_lsp::lsp_types::Position::new(
-                            range.end_point.row as u32,
-                            range.end_point.column as u32,
-                        ),
-                    ));
+                    key_range = Some(ts_to_lsp_range(capture.node.range()));
                 } else if Some(capture.index) == idx_source {
                     if let Some(name) = language.extract_identifier(capture.node, src) {
                         source_name = Some(name);
@@ -874,55 +745,15 @@ impl QueryEngine {
                             .ok()
                             .map(|s| CompactString::from(language.strip_quotes(s)));
                     } else if idx == idx_export_stmt {
-                        let range = capture.node.range();
-                        declaration_range = Some(LspRange::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        ));
+                        declaration_range = Some(ts_to_lsp_range(capture.node.range()));
                     } else if idx == idx_default_export {
                         is_default = true;
-                        let range = capture.node.range();
-                        declaration_range = Some(LspRange::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        ));
+                        declaration_range = Some(ts_to_lsp_range(capture.node.range()));
                     } else if idx == idx_cjs_default_export {
                         is_default = true;
-                        let range = capture.node.range();
-                        declaration_range = Some(LspRange::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        ));
+                        declaration_range = Some(ts_to_lsp_range(capture.node.range()));
                     } else if idx == idx_cjs_named_export {
-                        let range = capture.node.range();
-                        declaration_range = Some(LspRange::new(
-                            tower_lsp::lsp_types::Position::new(
-                                range.start_point.row as u32,
-                                range.start_point.column as u32,
-                            ),
-                            tower_lsp::lsp_types::Position::new(
-                                range.end_point.row as u32,
-                                range.end_point.column as u32,
-                            ),
-                        ));
+                        declaration_range = Some(ts_to_lsp_range(capture.node.range()));
                     }
                 }
 
