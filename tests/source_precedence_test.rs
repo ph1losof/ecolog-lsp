@@ -19,13 +19,13 @@ use tower_lsp::lsp_types::{
 /// Helper to set shell environment variable and refresh core
 async fn set_shell_var(fixture: &TestFixture, name: &str, value: &str) {
     std::env::set_var(name, value);
-    fixture.state.core.refresh().await.expect("Refresh failed");
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.expect("Refresh failed");
 }
 
 /// Helper to remove shell environment variable and refresh core
 async fn remove_shell_var(fixture: &TestFixture, name: &str) {
     std::env::remove_var(name);
-    fixture.state.core.refresh().await.expect("Refresh failed");
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.expect("Refresh failed");
 }
 
 /// Helper to set precedence via command
@@ -411,7 +411,7 @@ async fn test_precedence_persists_after_refresh() {
     assert!(hover1.is_none(), "Hover should NOT work after disabling shell");
 
     // Trigger a refresh (simulating file change)
-    fixture.state.core.refresh().await.expect("Refresh failed");
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.expect("Refresh failed");
 
     // Verify shell is still disabled after refresh
     let hover2 = get_hover(&fixture, &uri, 0, 20).await;

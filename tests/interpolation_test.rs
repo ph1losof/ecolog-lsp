@@ -145,7 +145,7 @@ async fn test_interpolation_affects_hover_values() {
     }
 
     // Refresh to pick up new file
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     // Create JS file that uses the interpolated variable
     let uri = fixture.create_file("test.js", "process.env.DATA_PATH");
@@ -177,7 +177,7 @@ async fn test_interpolation_affects_hover_values() {
     set_interpolation(&fixture, false).await;
 
     // Force cache clear and refresh
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     // With interpolation disabled, should show raw value
     let hover = get_hover(&fixture, &uri, 0, 20).await;

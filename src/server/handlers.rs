@@ -1128,7 +1128,9 @@ pub async fn handle_execute_command(
             } else if let Some(ref fp) = file_path {
                 state.core.active_env_files(fp)
             } else {
-                state.core.registry.registered_file_paths()
+                // No file path provided - use auto-discovery from workspace root
+                // This ensures statusline refresh still respects active file selection
+                state.core.active_env_files(&root)
             };
 
             // Convert to relative paths for display (more user-friendly)
@@ -1264,7 +1266,7 @@ pub async fn handle_execute_command(
                 .update_resolution_config(new_resolution_config);
 
             // Also refresh to clear caches
-            let _ = state.core.refresh().await;
+            let _ = state.core.refresh(abundantis::RefreshOptions::preserve_all()).await;
 
             let enabled_names: Vec<&str> = new_precedence
                 .iter()
@@ -1341,7 +1343,7 @@ pub async fn handle_execute_command(
                 .update_interpolation_config(new_interpolation_config);
 
             // Clear caches to ensure fresh resolution
-            let _ = state.core.refresh().await;
+            let _ = state.core.refresh(abundantis::RefreshOptions::preserve_all()).await;
 
             tracing::info!("Interpolation set to: {}", enabled);
 

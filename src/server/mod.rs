@@ -163,7 +163,7 @@ impl LspServer {
             };
 
             // Refresh Abundantis to pick up new/renamed env vars
-            if let Err(e) = self.state.core.refresh().await {
+            if let Err(e) = self.state.core.refresh(abundantis::RefreshOptions::preserve_all()).await {
                 tracing::warn!("Failed to refresh Abundantis after env file change: {}", e);
             }
 
@@ -407,7 +407,7 @@ impl LanguageServer for LspServer {
                     // Refresh Abundantis for env file changes so diagnostics update correctly
                     // This is important after rename operations where the .env file is modified
                     if is_env_file {
-                        if let Err(e) = self.state.core.refresh().await {
+                        if let Err(e) = self.state.core.refresh(abundantis::RefreshOptions::preserve_all()).await {
                             tracing::warn!(
                                 "Failed to refresh Abundantis after env file change: {}",
                                 e
@@ -429,7 +429,7 @@ impl LanguageServer for LspServer {
 
                     // Refresh Abundantis if env file was deleted
                     if is_env_file {
-                        if let Err(e) = self.state.core.refresh().await {
+                        if let Err(e) = self.state.core.refresh(abundantis::RefreshOptions::preserve_all()).await {
                             tracing::warn!(
                                 "Failed to refresh Abundantis after env file deletion: {}",
                                 e

@@ -20,7 +20,7 @@ async fn test_scenario_multiple_env_files() {
     fixture.state.core.clear_active_files();
 
     // Refresh to pick up new files
-    fixture.state.core.refresh().await.expect("Refresh failed");
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.expect("Refresh failed");
 
     let uri = fixture.create_file("test.js", "process.env.PORT");
     fixture
@@ -130,7 +130,7 @@ async fn test_scenario_quoted_values() {
         writeln!(f, "QUOTED=\"some value\"").unwrap();
     }
 
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     let uri = fixture.create_file("test.py", "os.environ['QUOTED']");
     fixture
@@ -170,7 +170,7 @@ async fn test_scenario_commented_env() {
         writeln!(f, "# IGNORE_ME=true").unwrap();
     }
 
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     let uri = fixture.create_file("test.js", "process.env.IGNORE_ME");
     fixture
@@ -220,7 +220,7 @@ async fn test_scenario_empty_value() {
         writeln!(f, "EMPTY=").unwrap();
     }
 
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     // Use JavaScript instead of Go for simpler pattern matching
     let uri = fixture.create_file("test.js", "process.env.EMPTY");
@@ -271,7 +271,7 @@ async fn test_scenario_multiline_value() {
         writeln!(f, "MULTI=\"line1\\nline2\"").unwrap();
     }
 
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     let uri = fixture.create_file("test.rs", "std::env::var(\"MULTI\")");
     fixture
@@ -459,7 +459,7 @@ async fn test_active_file_selection() {
     let mut f = std::fs::File::create(&prod_path).unwrap();
     writeln!(f, "MODE=PROD").unwrap();
 
-    fixture.state.core.refresh().await.unwrap();
+    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
 
     // Select .env.production
     fixture.state.core.set_active_files(&[".env.production"]);
