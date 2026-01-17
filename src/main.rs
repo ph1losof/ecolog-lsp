@@ -28,6 +28,7 @@ async fn main() {
     let abundantis_config = config.to_abundantis_config();
     let core = abundantis::Abundantis::builder()
         .root(&workspace_root)
+        .source_defaults(abundantis_config.sources.defaults)
         .precedence(abundantis_config.resolution.precedence)
         .env_files(abundantis_config.workspace.env_files)
         .interpolation(abundantis_config.interpolation.enabled)
