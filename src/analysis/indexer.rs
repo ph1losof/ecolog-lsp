@@ -81,10 +81,13 @@ impl WorkspaceIndexer {
         }
 
         // Step 2: Index files in parallel
-        let semaphore = Arc::new(Semaphore::new(num_cpus::get()));
+        // Limit parallelism to prevent starving the async runtime during large workspace indexing.
+        // This leaves capacity for LSP request handlers to remain responsive.
+        let parallelism = (num_cpus::get() / 2).max(1).min(4);
+        let semaphore = Arc::new(Semaphore::new(parallelism));
         let mut handles = Vec::with_capacity(file_count);
 
-        for file_path in files {
+        for (i, file_path) in files.into_iter().enumerate() {
             let permit = semaphore.clone().acquire_owned().await?;
             let indexer = self.clone_for_task();
             let config_clone = config.clone();
@@ -94,13 +97,18 @@ impl WorkspaceIndexer {
                 drop(permit);
                 result
             }));
+
+            // Yield periodically during task spawning to keep the event loop responsive
+            if (i + 1) % 10 == 0 {
+                tokio::task::yield_now().await;
+            }
         }
 
         // Step 3: Await all and collect results
         let mut success_count = 0;
         let mut error_count = 0;
 
-        for handle in handles {
+        for (i, handle) in handles.into_iter().enumerate() {
             match handle.await {
                 Ok(Ok(())) => {
                     success_count += 1;
@@ -115,6 +123,11 @@ impl WorkspaceIndexer {
                     warn!("Task panicked: {}", e);
                     error_count += 1;
                 }
+            }
+
+            // Yield periodically during result collection to keep the event loop responsive
+            if (i + 1) % 10 == 0 {
+                tokio::task::yield_now().await;
             }
         }
 
