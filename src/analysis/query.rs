@@ -73,19 +73,47 @@ impl QueryEngine {
         }
     }
 
+    /// Parse source code into a tree-sitter AST.
+    ///
+    /// Uses `spawn_blocking` to move CPU-bound parsing off the async runtime,
+    /// preventing blocking of other async tasks. This is a performance optimization
+    /// that trades incremental parsing benefits for better async task scheduling.
     pub async fn parse(
         &self,
         language: &dyn LanguageSupport,
         content: &str,
-        old_tree: Option<&Tree>,
+        _old_tree: Option<&Tree>,
     ) -> Option<Tree> {
-        let mut pool = self.parser_pool.lock().await;
-        let mut parser = pool.acquire(language);
+        // Acquire parser while holding lock briefly, then release lock
+        let parser = {
+            let mut pool = self.parser_pool.lock().await;
+            pool.acquire(language)
+        };
 
-        let tree = parser.parse(content, old_tree);
+        let language_id = language.id();
+        let content_owned = content.to_string();
+        let parser_pool = Arc::clone(&self.parser_pool);
 
-        pool.release(language.id(), parser);
-        tree
+        // Run CPU-bound parsing in spawn_blocking to avoid blocking async runtime
+        // Note: old_tree is not used here because Tree is not Send.
+        // This trades incremental parsing benefits for non-blocking async execution.
+        let result = tokio::task::spawn_blocking(move || {
+            let mut parser = parser;
+            let tree = parser.parse(&content_owned, None);
+            (tree, parser, language_id)
+        })
+        .await
+        .ok();
+
+        match result {
+            Some((tree, parser, lang_id)) => {
+                // Return parser to pool
+                let mut pool = parser_pool.lock().await;
+                pool.release(lang_id, parser);
+                tree
+            }
+            None => None,
+        }
     }
 
     pub async fn execute_query<'a, F, T>(

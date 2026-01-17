@@ -283,6 +283,32 @@ impl LanguageServer for LspServer {
 
         self.register_watched_files().await;
 
+        // Performance optimization: Pre-warm tree-sitter query caches in background.
+        // Queries are lazily compiled on first access, which can cause jank when
+        // opening the first document. By touching all queries now, we ensure
+        // they're ready before the user opens any files.
+        let languages = Arc::clone(&self.state.languages);
+        tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                for lang in languages.all_languages() {
+                    // Touch all queries to trigger lazy compilation
+                    let _ = lang.reference_query();
+                    let _ = lang.binding_query();
+                    let _ = lang.completion_query();
+                    let _ = lang.reassignment_query();
+                    let _ = lang.import_query();
+                    let _ = lang.identifier_query();
+                    let _ = lang.assignment_query();
+                    let _ = lang.destructure_query();
+                    let _ = lang.scope_query();
+                    let _ = lang.export_query();
+                }
+                tracing::debug!("Query pre-warming complete for all languages");
+            })
+            .await
+            .ok();
+        });
+
         // Start background workspace indexing
         let indexer = Arc::clone(&self.state.indexer);
         let config = self.state.config.get_config();

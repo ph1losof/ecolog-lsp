@@ -61,9 +61,11 @@ impl<'a> EnvHit<'a> {
     }
 
     /// Get the range for this hit.
+    /// For direct references, returns name_range (the variable name only),
+    /// not full_range, so hover highlights just the var name.
     pub fn range(&self) -> Range {
         match self {
-            EnvHit::DirectReference(r) => r.full_range,
+            EnvHit::DirectReference(r) => r.name_range,
             EnvHit::ViaSymbol { symbol, .. } => symbol.name_range,
             EnvHit::ViaUsage { usage, .. } => usage.range,
         }
@@ -157,10 +159,11 @@ impl<'a> BindingResolver<'a> {
         );
 
         // 1. Check direct references first (highest priority)
+        // Only match against name_range, not full_range, so hover/go-to-definition
+        // only triggers when cursor is on the variable name (e.g., DB_URL),
+        // not on other parts like "process.env" or quotes.
         for reference in self.graph.direct_references() {
-            if BindingGraph::contains_position(reference.full_range, position)
-                || BindingGraph::contains_position(reference.name_range, position)
-            {
+            if BindingGraph::contains_position(reference.name_range, position) {
                 return Some(EnvHit::DirectReference(reference));
             }
         }
@@ -274,11 +277,11 @@ impl<'a> BindingResolver<'a> {
     }
 
     /// Get direct reference at position (if any).
+    /// Only matches cursor position against name_range, not full_range,
+    /// so lookup only succeeds when cursor is on the variable name.
     pub fn direct_reference_at_position(&self, position: Position) -> Option<&'a EnvReference> {
         for reference in self.graph.direct_references() {
-            if BindingGraph::contains_position(reference.full_range, position)
-                || BindingGraph::contains_position(reference.name_range, position)
-            {
+            if BindingGraph::contains_position(reference.name_range, position) {
                 return Some(reference);
             }
         }
@@ -634,7 +637,7 @@ mod tests {
         // Test all EnvHit methods for DirectReference variant
         assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
         assert_eq!(hit.canonical_name().as_str(), "DATABASE_URL");
-        assert_eq!(hit.range(), make_range(0, 0, 0, 30)); // full_range
+        assert_eq!(hit.range(), make_range(0, 12, 0, 24)); // name_range (not full_range)
         assert!(!hit.is_env_object());
         assert!(hit.binding_name().is_none());
     }
@@ -1033,16 +1036,20 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Test at full range
-        let ref_at_full = resolver.direct_reference_at_position(Position::new(0, 5));
-        assert!(ref_at_full.is_some());
-        assert_eq!(ref_at_full.unwrap().name, "API_KEY");
+        // Test at full range but outside name range - should NOT match
+        // (e.g., cursor on "process" in "process.env.API_KEY")
+        let ref_at_full_only = resolver.direct_reference_at_position(Position::new(0, 5));
+        assert!(
+            ref_at_full_only.is_none(),
+            "Position in full_range but outside name_range should return None"
+        );
 
-        // Test at name range
+        // Test at name range - should match
         let ref_at_name = resolver.direct_reference_at_position(Position::new(0, 15));
         assert!(ref_at_name.is_some());
+        assert_eq!(ref_at_name.unwrap().name, "API_KEY");
 
-        // Test outside range
+        // Test outside both ranges
         let ref_outside = resolver.direct_reference_at_position(Position::new(1, 0));
         assert!(ref_outside.is_none());
     }

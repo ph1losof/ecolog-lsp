@@ -1,6 +1,6 @@
 [package]
 name = "ecolog-lsp"
-version = "0.1.8"
+version = "0.1.10"
 edition = "2021"
 license = "MIT"
 description = "Language Agnostic LSP for Environment Variables"

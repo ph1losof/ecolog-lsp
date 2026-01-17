@@ -12,34 +12,31 @@ async fn main() {
 
     let config_manager = ecolog_lsp::server::config::ConfigManager::new();
 
-    let config = config_manager
-        .load_from_workspace(&initial_root)
-        .await
-        .expect("Failed to load configuration");
+    // Performance optimization: Load config and build Abundantis core in parallel.
+    // Abundantis is built with initial_root and default config, then updated
+    // with the actual config after both complete.
+    let config_future = config_manager.load_from_workspace(&initial_root);
+    let core_future = {
+        let root = initial_root.clone();
+        async move {
+            abundantis::Abundantis::builder()
+                .root(&root)
+                .build()
+                .await
+        }
+    };
 
-    // Use configured workspace.root if provided, otherwise use current_dir
-    let workspace_root = config
-        .workspace
-        .root
-        .as_ref()
-        .and_then(|p| p.canonicalize().ok())
-        .unwrap_or(initial_root);
+    let (config_result, core_result) = tokio::join!(config_future, core_future);
 
+    let config = config_result.expect("Failed to load configuration");
+    let core = core_result.expect("Failed to initialize Ecolog core");
+
+    // Apply the loaded config to the core (fast O(1) updates)
     let abundantis_config = config.to_abundantis_config();
-    let core = abundantis::Abundantis::builder()
-        .root(&workspace_root)
-        .source_defaults(abundantis_config.sources.defaults)
-        .precedence(abundantis_config.resolution.precedence)
-        .env_files(abundantis_config.workspace.env_files)
-        .interpolation(abundantis_config.interpolation.enabled)
-        .max_interpolation_depth(abundantis_config.interpolation.max_depth)
-        .interpolation_features(abundantis_config.interpolation.features)
-        .cache_enabled(abundantis_config.cache.enabled)
-        .cache_size(abundantis_config.cache.hot_cache_size)
-        .cache_ttl(abundantis_config.cache.ttl)
-        .build()
-        .await
-        .expect("Failed to initialize Ecolog core");
+    core.resolution
+        .update_resolution_config(abundantis_config.resolution);
+    core.resolution
+        .update_interpolation_config(abundantis_config.interpolation);
 
     let config_arc = Arc::new(config_manager);
 

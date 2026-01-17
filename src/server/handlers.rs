@@ -134,7 +134,8 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             .document_manager
             .get_env_reference_cloned(uri, position)
         {
-            (reference.name, None, reference.full_range, false, None)
+            // Use name_range instead of full_range so hover highlights just the var name
+            (reference.name, None, reference.name_range, false, None)
         } else if let Some(binding) = state.document_manager.get_env_binding_cloned(uri, position) {
             (
                 binding.env_var_name,

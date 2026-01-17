@@ -438,6 +438,7 @@ impl BindingGraph {
     // =========================================================================
 
     /// Check if a range contains a position.
+    /// Uses LSP convention: start is inclusive, end is exclusive.
     #[inline]
     pub fn contains_position(range: Range, pos: Position) -> bool {
         if pos.line < range.start.line || pos.line > range.end.line {
@@ -446,7 +447,8 @@ impl BindingGraph {
         if pos.line == range.start.line && pos.character < range.start.character {
             return false;
         }
-        if pos.line == range.end.line && pos.character > range.end.character {
+        // End position is exclusive (LSP convention)
+        if pos.line == range.end.line && pos.character >= range.end.character {
             return false;
         }
         true
