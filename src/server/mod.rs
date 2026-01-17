@@ -265,7 +265,15 @@ impl LanguageServer for LspServer {
             workspace.root().to_path_buf()
         };
 
-        let _ = self.state.config.load_from_workspace(&workspace_root).await;
+        let config = self.state.config.load_from_workspace(&workspace_root).await;
+
+        // Update the resolution config in Abundantis core with the merged config
+        // This applies source defaults (e.g., shell disabled by default)
+        if let Ok(ref cfg) = config {
+            self.state.core.resolution.update_resolution_config(cfg.resolution.clone());
+            self.state.core.resolution.update_interpolation_config(cfg.interpolation.clone());
+        }
+
         self.client
             .log_message(
                 MessageType::INFO,
