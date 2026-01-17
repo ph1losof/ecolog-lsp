@@ -18,6 +18,8 @@ pub struct EcologConfig {
     pub interpolation: abundantis::config::InterpolationConfig,
     #[serde(default)]
     pub cache: abundantis::config::CacheConfig,
+    #[serde(default)]
+    pub sources: abundantis::config::SourcesConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -69,6 +71,7 @@ impl Default for EcologConfig {
             resolution: abundantis::config::ResolutionConfig::default(),
             interpolation: abundantis::config::InterpolationConfig::default(),
             cache: abundantis::config::CacheConfig::default(),
+            sources: abundantis::config::SourcesConfig::default(),
         }
     }
 }
@@ -80,6 +83,7 @@ impl EcologConfig {
             resolution: self.resolution.clone(),
             interpolation: self.interpolation.clone(),
             cache: self.cache.clone(),
+            sources: self.sources.clone(),
         }
     }
 }
@@ -140,13 +144,33 @@ impl ConfigManager {
         }
 
         // Convert final merged JSON back to EcologConfig
-        let config: EcologConfig = serde_json::from_value(config_json)
+        let mut config: EcologConfig = serde_json::from_value(config_json)
             .map_err(|e| format!("Failed to deserialize merged config: {}", e))?;
+
+        // Apply source defaults to precedence if precedence wasn't explicitly set
+        Self::apply_source_defaults(&mut config);
 
         let mut lock = self.config.write().await;
         *lock = config.clone();
 
         Ok(config)
+    }
+
+    /// Apply source defaults to derive precedence.
+    ///
+    /// If the precedence matches the old default [Shell, File], recalculate it
+    /// from sources.defaults to allow users to disable sources by default.
+    fn apply_source_defaults(config: &mut EcologConfig) {
+        use abundantis::config::{ResolutionConfig, SourcePrecedence};
+
+        // The old default precedence
+        let old_default = vec![SourcePrecedence::Shell, SourcePrecedence::File];
+
+        // If precedence is still the old default, derive from sources.defaults
+        if config.resolution.precedence == old_default {
+            config.resolution.precedence =
+                ResolutionConfig::precedence_from_defaults(&config.sources.defaults);
+        }
     }
 
     pub async fn update(&self, new_config: EcologConfig) {
