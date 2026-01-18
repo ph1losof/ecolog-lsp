@@ -249,6 +249,7 @@ impl LanguageServer for LspServer {
                         work_done_progress: None,
                     },
                 }),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -391,6 +392,16 @@ impl LanguageServer for LspServer {
             .await;
     }
 
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+
+        // Clean up document from document manager
+        self.state.document_manager.close(&uri);
+
+        // Clean up workspace index references (clears env var associations and exports)
+        self.state.workspace_index.remove_file(&uri);
+    }
+
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         Ok(handlers::handle_hover(params, &self.state).await)
     }
@@ -529,5 +540,12 @@ impl LanguageServer for LspServer {
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         Ok(handlers::handle_rename(params, &self.state).await)
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        Ok(handlers::handle_workspace_symbol(params, &self.state).await)
     }
 }

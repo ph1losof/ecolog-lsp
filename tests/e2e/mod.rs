@@ -20,3 +20,4 @@ mod rename_test;
 mod commands_test;
 mod sync_test;
 mod error_test;
+mod workspace_symbol_test;

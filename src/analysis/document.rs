@@ -123,6 +123,12 @@ impl DocumentManager {
         }
     }
 
+    /// Remove a document when it's closed by the client.
+    /// This prevents memory leaks from accumulated document state.
+    pub fn close(&self, uri: &Url) {
+        self.documents.remove(uri);
+    }
+
     async fn analyze_content(
         &self,
         content: &str,

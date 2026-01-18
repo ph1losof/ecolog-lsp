@@ -12,7 +12,8 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, Diagnostic, DiagnosticSeverity,
     Documentation, ExecuteCommandParams, Hover, HoverContents, HoverParams, Location,
     MarkupContent, MarkupKind, NumberOrString, Position, PrepareRenameResponse, Range,
-    ReferenceParams, RenameParams, TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
+    ReferenceParams, RenameParams, SymbolInformation, SymbolKind as LspSymbolKind,
+    TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit, WorkspaceSymbolParams,
 };
 
 fn format_source(source: &VariableSource, root: &Path) -> String {
@@ -1897,4 +1898,80 @@ fn is_valid_env_var_name(name: &str) -> bool {
     }
 
     true
+}
+
+// ============================================================================
+// Workspace Symbol Handler
+// ============================================================================
+
+/// Handle workspace/symbol request.
+///
+/// Returns all environment variables in the workspace that match the query.
+/// Each env var is returned once (not per-usage) with SymbolKind::CONSTANT.
+/// Location prefers .env file definition, falling back to first code reference.
+#[allow(deprecated)] // SymbolInformation is deprecated but still widely used
+pub async fn handle_workspace_symbol(
+    params: WorkspaceSymbolParams,
+    state: &ServerState,
+) -> Option<Vec<SymbolInformation>> {
+    let query = params.query.to_lowercase();
+
+    // Get all env vars from the workspace index
+    let all_vars = state.workspace_index.all_env_vars();
+
+    if all_vars.is_empty() {
+        return None;
+    }
+
+    let mut symbols = Vec::new();
+
+    for var_name in all_vars {
+        // Filter by query (case-insensitive substring match)
+        if !query.is_empty() && !var_name.to_lowercase().contains(&query) {
+            continue;
+        }
+
+        // Find location: prefer .env definition, fall back to first code reference
+        let location = if let Some(def_location) = find_env_definition(state, &var_name).await {
+            def_location
+        } else {
+            // Fall back to first code reference
+            let files = state.workspace_index.files_for_env_var(&var_name);
+            if let Some(first_file) = files.first() {
+                let usages = get_env_var_usages_in_file(state, first_file, &var_name).await;
+                if let Some(first_usage) = usages.first() {
+                    Location {
+                        uri: first_file.clone(),
+                        range: first_usage.range,
+                    }
+                } else {
+                    // No usages found, use file start
+                    Location {
+                        uri: first_file.clone(),
+                        range: Range::default(),
+                    }
+                }
+            } else {
+                // No files reference this var - skip it
+                continue;
+            }
+        };
+
+        symbols.push(SymbolInformation {
+            name: var_name.to_string(),
+            kind: LspSymbolKind::CONSTANT,
+            location,
+            tags: None,
+            deprecated: None,
+            container_name: Some("Environment Variables".to_string()),
+        });
+    }
+
+    if symbols.is_empty() {
+        None
+    } else {
+        // Sort by name for consistent ordering
+        symbols.sort_by(|a, b| a.name.cmp(&b.name));
+        Some(symbols)
+    }
 }
