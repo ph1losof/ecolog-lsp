@@ -18,9 +18,10 @@ struct AnalysisResult {
 
 /// Unified document entry containing both state and analysis results.
 /// This prevents desynchronization between document state and binding graph.
+/// The binding_graph is wrapped in Arc for O(1) cloning in methods like check_completion().
 pub struct DocumentEntry {
     pub state: DocumentState,
-    pub binding_graph: BindingGraph,
+    pub binding_graph: Arc<BindingGraph>,
 }
 
 pub struct DocumentManager {
@@ -40,6 +41,7 @@ impl DocumentManager {
     }
 
     pub async fn open(&self, uri: Url, language_id: String, content: String, version: i32) {
+
         // Detect language
         let lang_opt = self
             .languages
@@ -62,14 +64,14 @@ impl DocumentManager {
 
             doc.tree = tree;
             doc.import_context = import_context;
-            binding_graph
+            Arc::new(binding_graph)
         } else {
-            BindingGraph::new()
+            Arc::new(BindingGraph::new())
         };
 
         // Atomic insert of unified entry
         self.documents.insert(
-            uri,
+            uri.clone(),
             DocumentEntry {
                 state: doc,
                 binding_graph,
@@ -117,7 +119,7 @@ impl DocumentManager {
                 if entry.state.version == version {
                     entry.state.tree = tree;
                     entry.state.import_context = import_context;
-                    entry.binding_graph = binding_graph;
+                    entry.binding_graph = Arc::new(binding_graph);
                 }
             }
         }
@@ -227,32 +229,44 @@ impl DocumentManager {
     }
 
     pub async fn check_completion(&self, uri: &Url, position: Position) -> bool {
-        if let Some(entry) = self.documents.get(uri) {
-            if let Some(tree) = &entry.state.tree {
-                if let Some(lang) = self.languages.get_by_language_id(&entry.state.language_id) {
-                    let obj_name_opt = self
-                        .query_engine
-                        .check_completion_context(
-                            lang.as_ref(),
-                            tree,
-                            entry.state.content.as_bytes(),
-                            position,
-                        )
-                        .await;
+        // Extract all needed data while holding DashMap lock briefly
+        let (tree, content, language_id, binding_graph_clone) = {
+            let entry = match self.documents.get(uri) {
+                Some(e) => e,
+                None => return false,
+            };
+            let tree = match &entry.state.tree {
+                Some(t) => t.clone(),
+                None => return false,
+            };
+            let content = entry.state.content.clone();
+            let language_id = entry.state.language_id.clone();
+            let binding_graph_clone = entry.binding_graph.clone();
+            (tree, content, language_id, binding_graph_clone)
+            // Lock dropped here at end of block
+        };
 
-                    if let Some(obj_name) = obj_name_opt {
-                        if lang.is_standard_env_object(&obj_name) {
-                            return true;
-                        }
+        // Now do async operations without holding any lock
+        let lang = match self.languages.get_by_language_id(&language_id) {
+            Some(l) => l,
+            None => return false,
+        };
 
-                        // Check if obj_name is an env object alias via BindingGraph
-                        let resolver = BindingResolver::new(&entry.binding_graph);
-                        if let Some(kind) = resolver.get_binding_kind(&obj_name) {
-                            if kind == BindingKind::Object {
-                                return true;
-                            }
-                        }
-                    }
+        let obj_name_opt = self
+            .query_engine
+            .check_completion_context(lang.as_ref(), &tree, content.as_bytes(), position)
+            .await;
+
+        if let Some(obj_name) = obj_name_opt {
+            if lang.is_standard_env_object(&obj_name) {
+                return true;
+            }
+
+            // Check if obj_name is an env object alias via cloned BindingGraph
+            let resolver = BindingResolver::new(&binding_graph_clone);
+            if let Some(kind) = resolver.get_binding_kind(&obj_name) {
+                if kind == BindingKind::Object {
+                    return true;
                 }
             }
         }
@@ -264,34 +278,37 @@ impl DocumentManager {
         uri: &Url,
         position: Position,
     ) -> Option<CompactString> {
-        if let Some(entry) = self.documents.get(uri) {
-            if let Some(tree) = &entry.state.tree {
-                if let Some(lang) = self.languages.get_by_language_id(&entry.state.language_id) {
-                    return self
-                        .query_engine
-                        .check_completion_context(
-                            lang.as_ref(),
-                            tree,
-                            entry.state.content.as_bytes(),
-                            position,
-                        )
-                        .await;
-                }
-            }
-        }
-        None
+        // Extract all needed data while holding DashMap lock briefly
+        let (tree, content, language_id) = {
+            let entry = match self.documents.get(uri) {
+                Some(e) => e,
+                None => return None,
+            };
+            let tree = match entry.state.tree.clone() {
+                Some(t) => t,
+                None => return None,
+            };
+            let content = entry.state.content.clone();
+            let language_id = entry.state.language_id.clone();
+            (tree, content, language_id)
+            // Lock dropped here at end of block
+        };
+
+        // Now do async operations without holding any lock
+        let lang = self.languages.get_by_language_id(&language_id)?;
+
+        self.query_engine
+            .check_completion_context(lang.as_ref(), &tree, content.as_bytes(), position)
+            .await
     }
 
     // =========================================================================
     // BindingGraph Access
     // =========================================================================
 
-    /// Get a reference to the binding graph for a document.
-    pub fn get_binding_graph(
-        &self,
-        uri: &Url,
-    ) -> Option<dashmap::mapref::one::MappedRef<Url, DocumentEntry, BindingGraph>> {
-        self.documents.get(uri).map(|entry| entry.map(|e| &e.binding_graph))
+    /// Get the binding graph for a document (Arc clone is O(1)).
+    pub fn get_binding_graph(&self, uri: &Url) -> Option<Arc<BindingGraph>> {
+        self.documents.get(uri).map(|entry| Arc::clone(&entry.binding_graph))
     }
 
     /// Get all open document URIs.

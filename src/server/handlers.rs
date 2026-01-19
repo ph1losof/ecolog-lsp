@@ -8,6 +8,7 @@ use korni::{Error as KorniError, ParseOptions};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionParams, Diagnostic, DiagnosticSeverity,
     Documentation, ExecuteCommandParams, Hover, HoverContents, HoverParams, Location,
@@ -57,18 +58,25 @@ async fn resolve_env_var_value(
     file_path: &Path,
     state: &ServerState,
 ) -> Option<ResolvedEnvVarValue> {
-    // Use get_for_file which respects package boundaries and active file filtering
-    let resolved = state
-        .core
-        .get_for_file(env_var_name, file_path)
-        .await
-        .ok()??;
+    // Use safe_get_for_file with timeout protection
+    let start = Instant::now();
+    let resolved = crate::server::util::safe_get_for_file(
+        &state.core,
+        env_var_name,
+        file_path,
+    ).await?;
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        tracing::warn!(
+            "Slow env var resolution: {} took {:?} for '{}'",
+            file_path.display(),
+            elapsed,
+            env_var_name
+        );
+    }
 
-    // Get workspace root for formatting source
-    let workspace_root = {
-        let workspace = state.core.workspace.read();
-        workspace.root().to_path_buf()
-    };
+    // Get workspace root for formatting source (wrapped in spawn_blocking to avoid blocking async runtime)
+    let workspace_root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
     let source_str = format_source(&resolved.source, &workspace_root);
 
@@ -114,13 +122,15 @@ fn format_hover_markdown(
 pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
+    tracing::debug!("[HANDLE_HOVER_ENTER] uri={} pos={}:{}", uri, position.line, position.character);
+    let start = Instant::now();
 
     // 0. Check if hover is enabled
     {
         let config = state.config.get_config();
         let config = config.read().await;
         if !config.features.hover {
-            tracing::debug!("Hover feature disabled");
+            tracing::debug!("[HANDLE_HOVER_EXIT] disabled elapsed_ms={}", start.elapsed().as_millis());
             return None;
         }
     }
@@ -190,6 +200,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             md
         };
 
+        tracing::debug!("[HANDLE_HOVER_EXIT] found elapsed_ms={}", start.elapsed().as_millis());
         return Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
@@ -209,6 +220,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
                 b_name, env_var_name
             );
 
+            tracing::debug!("[HANDLE_HOVER_EXIT] object_alias elapsed_ms={}", start.elapsed().as_millis());
             return Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
@@ -219,6 +231,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
         }
 
         // Don't show hover for undefined vars - the diagnostic warning is sufficient
+        tracing::debug!("[HANDLE_HOVER_EXIT] not_found elapsed_ms={}", start.elapsed().as_millis());
         return None;
     }
 }
@@ -231,6 +244,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
 async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
+    tracing::debug!("[HANDLE_HOVER_CROSS_MODULE_ENTER] uri={}", uri);
 
     // Get document state for import context (scoped to drop MappedRef before await)
     let (import_ctx, tree, content) = {
@@ -502,17 +516,20 @@ pub async fn handle_completion(
     params: CompletionParams,
     state: &ServerState,
 ) -> Option<Vec<CompletionItem>> {
+    let uri = &params.text_document_position.text_document.uri;
+    let position = params.text_document_position.position;
+    tracing::debug!("[HANDLE_COMPLETION_ENTER] uri={} pos={}:{}", uri, position.line, position.character);
+    let start = Instant::now();
+
     let is_strict = {
         let config_manager = state.config.get_config();
         let config = config_manager.read().await;
         if !config.features.completion {
-            tracing::debug!("Completion feature disabled");
+            tracing::debug!("[HANDLE_COMPLETION_EXIT] disabled elapsed_ms={}", start.elapsed().as_millis());
             return None;
         }
         config.strict.completion
     };
-
-    let uri = &params.text_document_position.text_document.uri;
 
     // Strict Mode Check
     if is_strict {
@@ -527,15 +544,24 @@ pub async fn handle_completion(
 
     let file_path = uri.to_file_path().ok()?;
 
-    // Get workspace root for formatting source paths
-    let workspace_root = {
-        let workspace = state.core.workspace.read();
-        workspace.root().to_path_buf()
-    };
+    // Get workspace root for formatting source paths (wrapped in spawn_blocking)
+    let workspace_root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
-    // Use all_for_file which respects package boundaries and active file filtering
-    if let Ok(all_vars) = state.core.all_for_file(&file_path).await {
-        Some(
+    // Use safe_all_for_file with timeout protection
+    let start = Instant::now();
+    let all_vars = crate::server::util::safe_all_for_file(&state.core, &file_path).await;
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        tracing::warn!(
+            "Slow completion resolution: {} took {:?}",
+            file_path.display(),
+            elapsed
+        );
+    }
+
+    if !all_vars.is_empty() {
+        let count = all_vars.len();
+        let result = Some(
             all_vars
                 .into_iter()
                 .map(|var| {
@@ -569,8 +595,11 @@ pub async fn handle_completion(
                     }
                 })
                 .collect(),
-        )
+        );
+        tracing::debug!("[HANDLE_COMPLETION_EXIT] count={} elapsed_ms={}", count, start.elapsed().as_millis());
+        result
     } else {
+        tracing::debug!("[HANDLE_COMPLETION_EXIT] none elapsed_ms={}", start.elapsed().as_millis());
         None
     }
 }
@@ -583,13 +612,15 @@ pub async fn handle_definition(
 
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
+    tracing::debug!("[HANDLE_DEFINITION_ENTER] uri={} pos={}:{}", uri, position.line, position.character);
+    let start = Instant::now();
 
     // 0. Check if definition is enabled
     {
         let config = state.config.get_config();
         let config = config.read().await;
         if !config.features.definition {
-            tracing::debug!("Definition feature disabled");
+            tracing::debug!("[HANDLE_DEFINITION_EXIT] disabled elapsed_ms={}", start.elapsed().as_millis());
             return None;
         }
     }
@@ -615,7 +646,7 @@ pub async fn handle_definition(
     // Resolve variable using filtered resolution (respects active files AND source precedence)
     let file_path = uri.to_file_path().ok()?;
 
-    if let Ok(Some(variable)) = state.core.get_for_file(&env_var_name, &file_path).await {
+    if let Some(variable) = crate::server::util::safe_get_for_file(&state.core, &env_var_name, &file_path).await {
         match &variable.source {
             VariableSource::File { path, offset } => {
                 let target_uri = Url::from_file_path(path).ok()?;
@@ -628,14 +659,19 @@ pub async fn handle_definition(
                     Position::new(line, char + variable.key.len() as u32),
                 );
 
+                tracing::debug!("[HANDLE_DEFINITION_EXIT] found elapsed_ms={}", start.elapsed().as_millis());
                 Some(GotoDefinitionResponse::Scalar(Location {
                     uri: target_uri,
                     range,
                 }))
             }
-            _ => None,
+            _ => {
+                tracing::debug!("[HANDLE_DEFINITION_EXIT] non_file_source elapsed_ms={}", start.elapsed().as_millis());
+                None
+            }
         }
     } else {
+        tracing::debug!("[HANDLE_DEFINITION_EXIT] not_found elapsed_ms={}", start.elapsed().as_millis());
         None
     }
 }
@@ -687,10 +723,14 @@ async fn handle_definition_cross_module(
             // We'll prefer the .env file definition if it exists
 
             let file_path = uri.to_file_path().ok()?;
-            let context = {
-                let workspace = state.core.workspace.read();
-                workspace.context_for_file(&file_path)?
-            };
+            // Wrap synchronous lock access in spawn_blocking to avoid blocking async runtime
+            let workspace = std::sync::Arc::clone(&state.core.workspace);
+            let fp = file_path.clone();
+            let context = tokio::task::spawn_blocking(move || {
+                workspace.read().context_for_file(&fp)
+            })
+            .await
+            .ok()??;
 
             let registry = &state.core.registry;
             if let Ok(Some(variable)) = state
@@ -741,12 +781,15 @@ pub async fn compute_diagnostics(
 ) -> Vec<Diagnostic> {
     use tower_lsp::lsp_types::{Position, Range};
 
+    tracing::debug!("[COMPUTE_DIAGNOSTICS_ENTER] uri={}", uri);
+    let start = Instant::now();
+
     // 0. Check if diagnostics are enabled
     {
         let config = state.config.get_config();
         let config = config.read().await;
         if !config.features.diagnostics {
-            tracing::debug!("Diagnostics feature disabled");
+            tracing::debug!("[COMPUTE_DIAGNOSTICS_EXIT] disabled elapsed_ms={}", start.elapsed().as_millis());
             return vec![];
         }
     }
@@ -893,12 +936,12 @@ pub async fn compute_diagnostics(
     // Part B: Undefined Variable Diagnostics (For code files)
     // Only if NOT .env file (references usually are in code)
     if !is_env_file {
-        // Use get_for_file for filtered resolution (respects active files AND source precedence)
+        // Use safe_get_for_file for filtered resolution with timeout protection
         // Check direct references
         for reference in references {
-            let resolved_result = state.core.get_for_file(&reference.name, &file_path).await;
+            let resolved = crate::server::util::safe_get_for_file(&state.core, &reference.name, &file_path).await;
 
-            if matches!(resolved_result, Ok(None)) {
+            if resolved.is_none() {
                 diagnostics.push(Diagnostic {
                     range: reference.name_range,
                     severity: Some(DiagnosticSeverity::WARNING),
@@ -912,9 +955,9 @@ pub async fn compute_diagnostics(
 
         // Check symbols that resolve to env vars (e.g., destructured patterns)
         for (env_name, range) in env_var_symbols {
-            let resolved_result = state.core.get_for_file(&env_name, &file_path).await;
+            let resolved = crate::server::util::safe_get_for_file(&state.core, &env_name, &file_path).await;
 
-            if matches!(resolved_result, Ok(None)) {
+            if resolved.is_none() {
                 diagnostics.push(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::WARNING),
@@ -928,9 +971,9 @@ pub async fn compute_diagnostics(
 
         // Check property accesses on env object aliases (e.g., env.DEBUG2)
         for (env_name, range) in property_accesses {
-            let resolved_result = state.core.get_for_file(&env_name, &file_path).await;
+            let resolved = crate::server::util::safe_get_for_file(&state.core, &env_name, &file_path).await;
 
-            if matches!(resolved_result, Ok(None)) {
+            if resolved.is_none() {
                 diagnostics.push(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::WARNING),
@@ -943,6 +986,11 @@ pub async fn compute_diagnostics(
         }
     }
 
+    tracing::debug!(
+        "[COMPUTE_DIAGNOSTICS_EXIT] count={} elapsed_ms={}",
+        diagnostics.len(),
+        start.elapsed().as_millis()
+    );
     diagnostics
 }
 
@@ -964,6 +1012,24 @@ pub async fn handle_execute_command(
     params: ExecuteCommandParams,
     state: &ServerState,
 ) -> Option<serde_json::Value> {
+    tracing::debug!("[HANDLE_EXECUTE_COMMAND_ENTER] cmd={}", params.command);
+    let start = Instant::now();
+
+    let result = handle_execute_command_inner(&params, state).await;
+
+    tracing::debug!(
+        "[HANDLE_EXECUTE_COMMAND_EXIT] cmd={} result={} elapsed_ms={}",
+        params.command,
+        if result.is_some() { "some" } else { "none" },
+        start.elapsed().as_millis()
+    );
+    result
+}
+
+async fn handle_execute_command_inner(
+    params: &ExecuteCommandParams,
+    state: &ServerState,
+) -> Option<serde_json::Value> {
     match params.command.as_str() {
         "ecolog.file.setActive" => {
             // Check if file source is enabled
@@ -982,7 +1048,7 @@ pub async fn handle_execute_command(
             // Arguments: file patterns as strings
             let patterns: Vec<String> = params
                 .arguments
-                .into_iter()
+                .iter()
                 .filter_map(|arg| arg.as_str().map(|s| s.to_string()))
                 .collect();
 
@@ -1003,32 +1069,24 @@ pub async fn handle_execute_command(
                 .and_then(|arg| arg.as_str())
                 .map(std::path::PathBuf::from);
 
-            let root = {
-                let workspace = state.core.workspace.read();
-                workspace.root().to_path_buf()
-            };
+            let root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
-            // Use all_for_file if file context provided (scoped to package),
-            // otherwise use workspace root for resolution
+            // Use safe_all_for_file with timeout protection
             let resolve_path = file_path.as_ref().unwrap_or(&root);
+            let vars = crate::server::util::safe_all_for_file(&state.core, resolve_path).await;
 
-            match state.core.all_for_file(resolve_path).await {
-                Ok(vars) => {
-                    let var_list: Vec<serde_json::Value> = vars
-                        .iter()
-                        .map(|v| {
-                            json!({
-                                "name": v.key,
-                                "value": v.resolved_value,
-                                "source": format_source(&v.source, &root)
-                            })
-                        })
-                        .collect();
+            let var_list: Vec<serde_json::Value> = vars
+                .iter()
+                .map(|v| {
+                    json!({
+                        "name": v.key,
+                        "value": v.resolved_value,
+                        "source": format_source(&v.source, &root)
+                    })
+                })
+                .collect();
 
-                    Some(json!({ "variables": var_list, "count": var_list.len() }))
-                }
-                Err(e) => Some(json!({ "error": format!("Failed to list variables: {}", e) })),
-            }
+            Some(json!({ "variables": var_list, "count": var_list.len() }))
         }
         "ecolog.generateEnvExample" => {
             // Generate .env.example content from all env vars used in the workspace
@@ -1088,11 +1146,8 @@ pub async fn handle_execute_command(
                 .and_then(|arg| arg.as_bool())
                 .unwrap_or(false);
 
-            // Get workspace root for making paths relative
-            let root = {
-                let workspace = state.core.workspace.read();
-                workspace.root().to_path_buf()
-            };
+            // Get workspace root for making paths relative (wrapped in spawn_blocking)
+            let root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
             // Get env files based on mode:
             // - all=true with file_path: return all files for current PACKAGE (for pickers in monorepo)
@@ -1104,18 +1159,26 @@ pub async fn handle_execute_command(
 
                 // If file_path provided, filter to current package's files only
                 if let Some(ref fp) = file_path {
-                    let workspace = state.core.workspace.read();
+                    // Wrap synchronous lock access in spawn_blocking
+                    let workspace = std::sync::Arc::clone(&state.core.workspace);
+                    let fp_path = std::path::PathBuf::from(fp.as_str());
+                    let context_opt = tokio::task::spawn_blocking(move || {
+                        workspace.read().context_for_file(&fp_path)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
 
                     // Get package context for the file
-                    if let Some(context) = workspace.context_for_file(std::path::Path::new(fp)) {
-                        let package_root = &context.package_root;
-                        let workspace_root = &context.workspace_root;
+                    if let Some(context) = context_opt {
+                        let package_root = context.package_root;
+                        let workspace_root = context.workspace_root;
 
                         // Filter to files under package root OR workspace root (for cascading)
                         all_files
                             .into_iter()
                             .filter(|path| {
-                                path.starts_with(package_root)
+                                path.starts_with(&package_root)
                                     || (path.parent() == Some(workspace_root.as_path()))
                             })
                             .collect()
@@ -1166,10 +1229,7 @@ pub async fn handle_execute_command(
                 return Some(json!({ "error": "Variable name required" }));
             };
 
-            let root = {
-                let workspace = state.core.workspace.read();
-                workspace.root().to_path_buf()
-            };
+            let root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
             // Resolve the variable
             if let Some(resolved) = resolve_env_var_value(&name, &root, state).await {
@@ -1187,8 +1247,10 @@ pub async fn handle_execute_command(
             // List all workspaces (for monorepo support)
             // Returns the current workspace info - full monorepo detection would require
             // more integration with abundantis workspace detection
-            let workspace_info = {
-                let workspace = state.core.workspace.read();
+            // Wrap synchronous lock access in spawn_blocking
+            let workspace = std::sync::Arc::clone(&state.core.workspace);
+            let workspace_info = tokio::task::spawn_blocking(move || {
+                let workspace = workspace.read();
                 json!({
                     "name": workspace.root().file_name()
                         .and_then(|n| n.to_str())
@@ -1196,7 +1258,9 @@ pub async fn handle_execute_command(
                     "path": workspace.root().display().to_string(),
                     "isActive": true
                 })
-            };
+            })
+            .await
+            .unwrap_or_else(|_| json!({"error": "Failed to get workspace info"}));
 
             Some(json!({
                 "workspaces": [workspace_info],
@@ -1237,7 +1301,7 @@ pub async fn handle_execute_command(
 
             let source_names: Vec<String> = params
                 .arguments
-                .into_iter()
+                .iter()
                 .filter_map(|arg| arg.as_str().map(|s| s.to_string()))
                 .collect();
 
@@ -1267,8 +1331,8 @@ pub async fn handle_execute_command(
                 .resolution
                 .update_resolution_config(new_resolution_config);
 
-            // Also refresh to clear caches
-            let _ = state.core.refresh(abundantis::RefreshOptions::preserve_all()).await;
+            // Also refresh to clear caches (with timeout protection)
+            crate::server::util::safe_refresh(&state.core, abundantis::RefreshOptions::preserve_all()).await;
 
             let enabled_names: Vec<&str> = new_precedence
                 .iter()
@@ -1344,8 +1408,8 @@ pub async fn handle_execute_command(
                 .resolution
                 .update_interpolation_config(new_interpolation_config);
 
-            // Clear caches to ensure fresh resolution
-            let _ = state.core.refresh(abundantis::RefreshOptions::preserve_all()).await;
+            // Clear caches to ensure fresh resolution (with timeout protection)
+            crate::server::util::safe_refresh(&state.core, abundantis::RefreshOptions::preserve_all()).await;
 
             tracing::info!("Interpolation set to: {}", enabled);
 
@@ -1381,8 +1445,17 @@ pub async fn handle_references(
     let position = params.text_document_position.position;
     let include_declaration = params.context.include_declaration;
 
+    tracing::debug!("[HANDLE_REFERENCES_ENTER] uri={} pos={}:{}", uri, position.line, position.character);
+    let start = Instant::now();
+
     // Step 1: Get env var name at position (now includes cross-module resolution)
-    let env_var_name = get_env_var_at_position(state, uri, position).await?;
+    let env_var_name = match get_env_var_at_position(state, uri, position).await {
+        Some(name) => name,
+        None => {
+            tracing::debug!("[HANDLE_REFERENCES_EXIT] no_env_var elapsed_ms={}", start.elapsed().as_millis());
+            return None;
+        }
+    };
 
     // Step 2: Query workspace index for files that reference this env var
     let files = state.workspace_index.files_for_env_var(&env_var_name);
@@ -1420,8 +1493,14 @@ pub async fn handle_references(
     }
 
     if locations.is_empty() {
+        tracing::debug!("[HANDLE_REFERENCES_EXIT] none elapsed_ms={}", start.elapsed().as_millis());
         None
     } else {
+        tracing::debug!(
+            "[HANDLE_REFERENCES_EXIT] count={} elapsed_ms={}",
+            locations.len(),
+            start.elapsed().as_millis()
+        );
         Some(locations)
     }
 }
@@ -1546,11 +1625,8 @@ async fn parse_file_for_binding_graph(state: &ServerState, uri: &Url) -> Option<
 
 /// Find the definition location of an env var in .env files.
 async fn find_env_definition(state: &ServerState, env_var_name: &str) -> Option<Location> {
-    // Get workspace root
-    let workspace_root = {
-        let workspace = state.core.workspace.read();
-        workspace.root().to_path_buf()
-    };
+    // Get workspace root (wrapped in spawn_blocking)
+    let workspace_root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
     // Get env file patterns from config
     let env_patterns: Vec<String> = {
@@ -1738,8 +1814,12 @@ pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<
     let position = params.text_document_position.position;
     let new_name = &params.new_name;
 
+    tracing::debug!("[HANDLE_RENAME_ENTER] uri={} new_name={}", uri, new_name);
+    let start = Instant::now();
+
     // Validate new name
     if !is_valid_env_var_name(new_name) {
+        tracing::debug!("[HANDLE_RENAME_EXIT] invalid_name elapsed_ms={}", start.elapsed().as_millis());
         return None;
     }
 
@@ -1791,8 +1871,14 @@ pub async fn handle_rename(params: RenameParams, state: &ServerState) -> Option<
     }
 
     if changes.is_empty() {
+        tracing::debug!("[HANDLE_RENAME_EXIT] no_changes elapsed_ms={}", start.elapsed().as_millis());
         None
     } else {
+        tracing::debug!(
+            "[HANDLE_RENAME_EXIT] files={} elapsed_ms={}",
+            changes.len(),
+            start.elapsed().as_millis()
+        );
         Some(WorkspaceEdit {
             changes: Some(changes),
             ..Default::default()
@@ -1915,11 +2001,14 @@ pub async fn handle_workspace_symbol(
     state: &ServerState,
 ) -> Option<Vec<SymbolInformation>> {
     let query = params.query.to_lowercase();
+    tracing::debug!("[HANDLE_WORKSPACE_SYMBOL_ENTER] query={}", query);
+    let start = Instant::now();
 
     // Get all env vars from the workspace index
     let all_vars = state.workspace_index.all_env_vars();
 
     if all_vars.is_empty() {
+        tracing::debug!("[HANDLE_WORKSPACE_SYMBOL_EXIT] empty elapsed_ms={}", start.elapsed().as_millis());
         return None;
     }
 
@@ -1968,10 +2057,16 @@ pub async fn handle_workspace_symbol(
     }
 
     if symbols.is_empty() {
+        tracing::debug!("[HANDLE_WORKSPACE_SYMBOL_EXIT] none elapsed_ms={}", start.elapsed().as_millis());
         None
     } else {
         // Sort by name for consistent ordering
         symbols.sort_by(|a, b| a.name.cmp(&b.name));
+        tracing::debug!(
+            "[HANDLE_WORKSPACE_SYMBOL_EXIT] count={} elapsed_ms={}",
+            symbols.len(),
+            start.elapsed().as_millis()
+        );
         Some(symbols)
     }
 }

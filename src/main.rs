@@ -1,11 +1,18 @@
 use ecolog_lsp::server::LspServer;
 use std::sync::Arc;
 use tower_lsp::{LspService, Server};
+use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    // Initialize tracing with RUST_LOG env filter support
+    // Default to "info" if RUST_LOG is not set
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"))
+        )
         .init();
 
     let initial_root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

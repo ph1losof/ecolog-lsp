@@ -75,45 +75,34 @@ impl QueryEngine {
 
     /// Parse source code into a tree-sitter AST.
     ///
-    /// Uses `spawn_blocking` to move CPU-bound parsing off the async runtime,
-    /// preventing blocking of other async tasks. This is a performance optimization
-    /// that trades incremental parsing benefits for better async task scheduling.
+    /// Tree-sitter parsing is fast enough (<10ms for most files) to run directly
+    /// on the async executor without blocking concerns. This approach also enables
+    /// incremental parsing when an old tree is provided.
     pub async fn parse(
         &self,
         language: &dyn LanguageSupport,
         content: &str,
-        _old_tree: Option<&Tree>,
+        old_tree: Option<&Tree>,
     ) -> Option<Tree> {
         // Acquire parser while holding lock briefly, then release lock
-        let parser = {
+        let mut parser = {
             let mut pool = self.parser_pool.lock().await;
             pool.acquire(language)
         };
 
         let language_id = language.id();
-        let content_owned = content.to_string();
-        let parser_pool = Arc::clone(&self.parser_pool);
 
-        // Run CPU-bound parsing in spawn_blocking to avoid blocking async runtime
-        // Note: old_tree is not used here because Tree is not Send.
-        // This trades incremental parsing benefits for non-blocking async execution.
-        let result = tokio::task::spawn_blocking(move || {
-            let mut parser = parser;
-            let tree = parser.parse(&content_owned, None);
-            (tree, parser, language_id)
-        })
-        .await
-        .ok();
+        // Parse directly - tree-sitter is fast enough for typical source files
+        // Pass old_tree to enable incremental parsing (10-100x faster for edits)
+        let tree = parser.parse(content, old_tree);
 
-        match result {
-            Some((tree, parser, lang_id)) => {
-                // Return parser to pool
-                let mut pool = parser_pool.lock().await;
-                pool.release(lang_id, parser);
-                tree
-            }
-            None => None,
+        // Return parser to pool
+        {
+            let mut pool = self.parser_pool.lock().await;
+            pool.release(language_id, parser);
         }
+
+        tree
     }
 
     pub async fn execute_query<'a, F, T>(

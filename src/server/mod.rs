@@ -162,10 +162,8 @@ impl LspServer {
                 FxHashSet::default()
             };
 
-            // Refresh Abundantis to pick up new/renamed env vars
-            if let Err(e) = self.state.core.refresh(abundantis::RefreshOptions::preserve_all()).await {
-                tracing::warn!("Failed to refresh Abundantis after env file change: {}", e);
-            }
+            // Refresh Abundantis to pick up new/renamed env vars (with timeout protection)
+            util::safe_refresh(&self.state.core, abundantis::RefreshOptions::preserve_all()).await;
 
             vars
         } else {
@@ -261,10 +259,7 @@ impl LanguageServer for LspServer {
             .log_message(MessageType::INFO, "ecolog-lsp initialized!")
             .await;
 
-        let workspace_root = {
-            let workspace = self.state.core.workspace.read();
-            workspace.root().to_path_buf()
-        };
+        let workspace_root = util::get_workspace_root(&self.state.core.workspace).await;
 
         let config = self.state.config.load_from_workspace(&workspace_root).await;
 
@@ -316,13 +311,17 @@ impl LanguageServer for LspServer {
         let client = self.client.clone();
 
         tokio::spawn(async move {
-            let config = config.read().await;
+            // Clone config and release lock immediately to avoid blocking other operations
+            let config_snapshot = {
+                let config = config.read().await;
+                config.clone()
+            };
             info!("Starting background workspace indexing...");
             client
                 .log_message(MessageType::INFO, "Starting workspace indexing...")
                 .await;
 
-            if let Err(e) = indexer.index_workspace(&config).await {
+            if let Err(e) = indexer.index_workspace(&config_snapshot).await {
                 client
                     .log_message(
                         MessageType::WARNING,
@@ -342,6 +341,21 @@ impl LanguageServer for LspServer {
                     .await;
             }
         });
+
+        // Start a heartbeat task to help diagnose responsiveness issues
+        // Logs every 30 seconds to confirm the async runtime is still responsive
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut heartbeat_count = 0u64;
+            loop {
+                interval.tick().await;
+                heartbeat_count += 1;
+                tracing::info!(
+                    "LSP heartbeat #{} - async runtime responsive",
+                    heartbeat_count
+                );
+            }
+        });
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -349,6 +363,10 @@ impl LanguageServer for LspServer {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        let uri = &params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] did_open uri={}", uri);
+        let start = std::time::Instant::now();
+
         self.state
             .document_manager
             .open(
@@ -368,9 +386,15 @@ impl LanguageServer for LspServer {
         self.client
             .publish_diagnostics(params.text_document.uri, diagnostics, None)
             .await;
+
+        tracing::debug!("[HANDLER_EXIT] did_open elapsed_ms={}", start.elapsed().as_millis());
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let uri = &params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] did_change uri={}", uri);
+        let start = std::time::Instant::now();
+
         self.state
             .document_manager
             .change(
@@ -390,20 +414,35 @@ impl LanguageServer for LspServer {
         self.client
             .publish_diagnostics(params.text_document.uri, diagnostics, None)
             .await;
+
+        tracing::debug!("[HANDLER_EXIT] did_change elapsed_ms={}", start.elapsed().as_millis());
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] did_close uri={}", uri);
+        let start = std::time::Instant::now();
 
         // Clean up document from document manager
         self.state.document_manager.close(&uri);
 
         // Clean up workspace index references (clears env var associations and exports)
         self.state.workspace_index.remove_file(&uri);
+
+        tracing::debug!("[HANDLER_EXIT] did_close elapsed_ms={}", start.elapsed().as_millis());
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        Ok(handlers::handle_hover(params, &self.state).await)
+        let uri = &params.text_document_position_params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] hover uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_hover(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] hover result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -424,10 +463,7 @@ impl LanguageServer for LspServer {
                 self.client
                     .log_message(MessageType::INFO, "Reloading configuration...")
                     .await;
-                let workspace_root = {
-                    let workspace = self.state.core.workspace.read();
-                    workspace.root().to_path_buf()
-                };
+                let workspace_root = util::get_workspace_root(&self.state.core.workspace).await;
                 let _ = self.state.config.load_from_workspace(&workspace_root).await;
                 continue;
             }
@@ -452,12 +488,8 @@ impl LanguageServer for LspServer {
                     // Refresh Abundantis for env file changes so diagnostics update correctly
                     // This is important after rename operations where the .env file is modified
                     if is_env_file {
-                        if let Err(e) = self.state.core.refresh(abundantis::RefreshOptions::preserve_all()).await {
-                            tracing::warn!(
-                                "Failed to refresh Abundantis after env file change: {}",
-                                e
-                            );
-                        }
+                        // Use safe_refresh with timeout protection
+                        util::safe_refresh(&self.state.core, abundantis::RefreshOptions::preserve_all()).await;
 
                         // Republish diagnostics for all open documents after env file change
                         // This ensures diagnostics are updated with the new env var definitions
@@ -472,14 +504,9 @@ impl LanguageServer for LspServer {
                     // Remove from index
                     self.state.indexer.on_file_deleted(&change.uri);
 
-                    // Refresh Abundantis if env file was deleted
+                    // Refresh Abundantis if env file was deleted (with timeout protection)
                     if is_env_file {
-                        if let Err(e) = self.state.core.refresh(abundantis::RefreshOptions::preserve_all()).await {
-                            tracing::warn!(
-                                "Failed to refresh Abundantis after env file deletion: {}",
-                                e
-                            );
-                        }
+                        util::safe_refresh(&self.state.core, abundantis::RefreshOptions::preserve_all()).await;
 
                         // Republish diagnostics for all open documents after env file deletion
                         for uri in self.state.document_manager.all_uris() {
@@ -495,17 +522,35 @@ impl LanguageServer for LspServer {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        match handlers::handle_completion(params, &self.state).await {
-            Some(items) => Ok(Some(CompletionResponse::Array(items))),
-            None => Ok(None),
-        }
+        let uri = &params.text_document_position.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] completion uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = match handlers::handle_completion(params, &self.state).await {
+            Some(items) => Some(CompletionResponse::Array(items)),
+            None => None,
+        };
+        tracing::debug!(
+            "[HANDLER_EXIT] completion result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 
     async fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        Ok(handlers::handle_definition(params, &self.state).await)
+        let uri = &params.text_document_position_params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] goto_definition uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_definition(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] goto_definition result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 
     async fn execute_command(
@@ -513,6 +558,9 @@ impl LanguageServer for LspServer {
         params: ExecuteCommandParams,
     ) -> Result<Option<serde_json::Value>> {
         let command = params.command.clone();
+        tracing::debug!("[HANDLER_ENTER] execute_command cmd={}", command);
+        let start = std::time::Instant::now();
+
         let result = handlers::handle_execute_command(params, &self.state).await;
 
         // Republish diagnostics after configuration changes
@@ -524,28 +572,69 @@ impl LanguageServer for LspServer {
             }
         }
 
+        tracing::debug!(
+            "[HANDLER_EXIT] execute_command cmd={} result={} elapsed_ms={}",
+            command,
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
         Ok(result)
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        Ok(handlers::handle_references(params, &self.state).await)
+        let uri = &params.text_document_position.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] references uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_references(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] references result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 
     async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
-        Ok(handlers::handle_prepare_rename(params, &self.state).await)
+        let uri = &params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] prepare_rename uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_prepare_rename(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] prepare_rename result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
-        Ok(handlers::handle_rename(params, &self.state).await)
+        let uri = &params.text_document_position.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] rename uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_rename(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] rename result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
-        Ok(handlers::handle_workspace_symbol(params, &self.state).await)
+        tracing::debug!("[HANDLER_ENTER] workspace_symbol query={}", params.query);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_workspace_symbol(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] workspace_symbol result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
     }
 }

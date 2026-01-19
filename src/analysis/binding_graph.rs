@@ -30,7 +30,7 @@ struct RangeIndexEntry {
 
 /// The binding graph for a single document.
 /// Uses sparse representation - only env-related symbols are tracked.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct BindingGraph {
     /// Arena storage for symbols.
     symbols: Vec<Symbol>,
@@ -699,15 +699,19 @@ mod tests {
     fn test_contains_position() {
         let range = make_range(5, 10, 5, 20);
 
+        // Start is inclusive
         assert!(BindingGraph::contains_position(range, Position::new(5, 10)));
         assert!(BindingGraph::contains_position(range, Position::new(5, 15)));
-        assert!(BindingGraph::contains_position(range, Position::new(5, 20)));
+        assert!(BindingGraph::contains_position(range, Position::new(5, 19))); // Last valid char
 
+        // End is exclusive (LSP convention)
+        assert!(!BindingGraph::contains_position(range, Position::new(5, 20)));
+        assert!(!BindingGraph::contains_position(range, Position::new(5, 21)));
+
+        // Before start
         assert!(!BindingGraph::contains_position(range, Position::new(5, 9)));
-        assert!(!BindingGraph::contains_position(
-            range,
-            Position::new(5, 21)
-        ));
+
+        // Different lines
         assert!(!BindingGraph::contains_position(
             range,
             Position::new(4, 15)
@@ -1286,7 +1290,7 @@ mod tests {
     fn test_contains_position_multiline() {
         let range = make_range(5, 10, 8, 20);
 
-        // Start line
+        // Start line - start is inclusive
         assert!(BindingGraph::contains_position(range, Position::new(5, 10)));
         assert!(BindingGraph::contains_position(range, Position::new(5, 50)));
         assert!(!BindingGraph::contains_position(range, Position::new(5, 9)));
@@ -1295,9 +1299,10 @@ mod tests {
         assert!(BindingGraph::contains_position(range, Position::new(6, 0)));
         assert!(BindingGraph::contains_position(range, Position::new(7, 100)));
 
-        // End line
-        assert!(BindingGraph::contains_position(range, Position::new(8, 20)));
+        // End line - end is exclusive (LSP convention)
         assert!(BindingGraph::contains_position(range, Position::new(8, 0)));
+        assert!(BindingGraph::contains_position(range, Position::new(8, 19))); // Last valid char
+        assert!(!BindingGraph::contains_position(range, Position::new(8, 20))); // End is exclusive
         assert!(!BindingGraph::contains_position(range, Position::new(8, 21)));
     }
 }
