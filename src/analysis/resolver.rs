@@ -1,8 +1,3 @@
-//! Binding Resolver - Query-time resolution for LSP features.
-//!
-//! This module provides the resolver that uses the BindingGraph to answer
-//! LSP queries like hover, go-to-definition, and find-references.
-
 use crate::analysis::binding_graph::BindingGraph;
 use crate::types::{
     BindingKind, EnvBinding, EnvBindingUsage, EnvReference, ResolvedEnv, ScopeId, Symbol, SymbolId,
@@ -12,20 +7,15 @@ use compact_str::CompactString;
 use tower_lsp::lsp_types::{Position, Range};
 use tracing::error;
 
-/// Result of looking up an env var at a position using the new binding graph.
 #[derive(Debug, Clone)]
 pub enum EnvHit<'a> {
-    /// Direct reference to an env var (e.g., process.env.DATABASE_URL).
     DirectReference(&'a EnvReference),
 
-    /// Via a symbol in the binding graph.
-    /// Contains the symbol and its resolved env var/object.
     ViaSymbol {
         symbol: &'a Symbol,
         resolved: ResolvedEnv,
     },
 
-    /// Via a symbol usage (identifier that references a symbol).
     ViaUsage {
         usage: &'a SymbolUsage,
         symbol: &'a Symbol,
@@ -34,7 +24,6 @@ pub enum EnvHit<'a> {
 }
 
 impl<'a> EnvHit<'a> {
-    /// Get the env var name from this hit.
     pub fn env_var_name(&self) -> Option<CompactString> {
         match self {
             EnvHit::DirectReference(r) => Some(r.name.clone()),
@@ -47,7 +36,6 @@ impl<'a> EnvHit<'a> {
         }
     }
 
-    /// Get the canonical name (env var name or object name).
     pub fn canonical_name(&self) -> CompactString {
         match self {
             EnvHit::DirectReference(r) => r.name.clone(),
@@ -60,9 +48,6 @@ impl<'a> EnvHit<'a> {
         }
     }
 
-    /// Get the range for this hit.
-    /// For direct references, returns name_range (the variable name only),
-    /// not full_range, so hover highlights just the var name.
     pub fn range(&self) -> Range {
         match self {
             EnvHit::DirectReference(r) => r.name_range,
@@ -71,7 +56,6 @@ impl<'a> EnvHit<'a> {
         }
     }
 
-    /// Check if this hit resolves to an env object (not a specific var).
     pub fn is_env_object(&self) -> bool {
         match self {
             EnvHit::DirectReference(_) => false,
@@ -81,7 +65,6 @@ impl<'a> EnvHit<'a> {
         }
     }
 
-    /// Get the symbol name (for bindings/usages).
     pub fn binding_name(&self) -> Option<&CompactString> {
         match self {
             EnvHit::DirectReference(_) => None,
@@ -91,25 +74,22 @@ impl<'a> EnvHit<'a> {
     }
 }
 
-/// Information about a resolved binding (for legacy handler compatibility).
 #[derive(Debug, Clone)]
 pub struct ResolvedBinding {
-    /// The binding/variable name as declared.
     pub binding_name: CompactString,
-    /// The env var name it resolves to.
+
     pub env_var_name: CompactString,
-    /// Range of the binding identifier.
+
     pub binding_range: Range,
-    /// Range of the entire declaration.
+
     pub declaration_range: Range,
-    /// The kind of binding.
+
     pub kind: BindingKind,
-    /// Whether this is a symbol usage (vs the declaration itself).
+
     pub is_usage: bool,
 }
 
 impl ResolvedBinding {
-    /// Convert to the legacy EnvBinding type for backward compatibility.
     pub fn to_env_binding(&self, scope_range: Range) -> EnvBinding {
         EnvBinding {
             binding_name: self.binding_name.clone(),
@@ -119,11 +99,10 @@ impl ResolvedBinding {
             scope_range,
             is_valid: true,
             kind: self.kind.clone(),
-            destructured_key_range: None, // Legacy compatibility - not tracked in ResolvedBinding
+            destructured_key_range: None,
         }
     }
 
-    /// Convert to the legacy EnvBindingUsage type for backward compatibility.
     pub fn to_binding_usage(&self) -> EnvBindingUsage {
         EnvBindingUsage {
             name: self.binding_name.clone(),
@@ -134,23 +113,15 @@ impl ResolvedBinding {
     }
 }
 
-/// Resolver for querying env vars from a BindingGraph.
 pub struct BindingResolver<'a> {
     graph: &'a BindingGraph,
 }
 
 impl<'a> BindingResolver<'a> {
-    /// Create a new resolver for the given binding graph.
     pub fn new(graph: &'a BindingGraph) -> Self {
         Self { graph }
     }
 
-    // =========================================================================
-    // Position-based queries (for hover, go-to-definition)
-    // =========================================================================
-
-    /// Find an env var at the given position.
-    /// Checks direct references, symbol declarations, destructured keys, and symbol usages.
     pub fn env_at_position(&self, position: Position) -> Option<EnvHit<'a>> {
         tracing::trace!(
             "Looking up env at position line={}, char={}",
@@ -158,26 +129,18 @@ impl<'a> BindingResolver<'a> {
             position.character
         );
 
-        // 1. Check direct references first (highest priority)
-        // Only match against name_range, not full_range, so hover/go-to-definition
-        // only triggers when cursor is on the variable name (e.g., DB_URL),
-        // not on other parts like "process.env" or quotes.
         for reference in self.graph.direct_references() {
             if BindingGraph::contains_position(reference.name_range, position) {
                 return Some(EnvHit::DirectReference(reference));
             }
         }
 
-        // 2. Check symbol declarations (name range)
         if let Some(symbol) = self.graph.symbol_at_position(position) {
             if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
                 return Some(EnvHit::ViaSymbol { symbol, resolved });
             }
         }
 
-        // 3. Check destructured property keys (e.g., hovering over API_KEY in `{ API_KEY: apiKey }`)
-        // This is separate from symbol_at_position because the key range is different from the name range
-        // Using optimized range index for O(log n) lookup instead of O(n) iteration
         if let Some(symbol_id) = self.graph.symbol_at_destructure_key(position) {
             if let Some(symbol) = self.graph.get_symbol(symbol_id) {
                 if let Some(resolved) = self.graph.resolve_to_env(symbol_id) {
@@ -186,15 +149,11 @@ impl<'a> BindingResolver<'a> {
             }
         }
 
-        // 4. Check symbol usages
         if let Some(usage) = self.graph.usage_at_position(position) {
             if let Some(symbol) = self.graph.get_symbol(usage.symbol_id) {
-                // Handle property access on object aliases (env.VAR)
                 if let Some(property) = &usage.property_access {
-                    // Resolve the symbol first
                     if let Some(resolved) = self.graph.resolve_to_env(usage.symbol_id) {
                         if matches!(resolved, ResolvedEnv::Object(_)) {
-                            // This is a property access on an env object
                             return Some(EnvHit::ViaUsage {
                                 usage,
                                 symbol,
@@ -220,8 +179,6 @@ impl<'a> BindingResolver<'a> {
         None
     }
 
-    /// Get resolved binding information at a position.
-    /// Returns None for direct references; use for bindings and usages.
     pub fn binding_at_position(&self, position: Position) -> Option<ResolvedBinding> {
         let hit = self.env_at_position(position)?;
 
@@ -276,9 +233,6 @@ impl<'a> BindingResolver<'a> {
         }
     }
 
-    /// Get direct reference at position (if any).
-    /// Only matches cursor position against name_range, not full_range,
-    /// so lookup only succeeds when cursor is on the variable name.
     pub fn direct_reference_at_position(&self, position: Position) -> Option<&'a EnvReference> {
         for reference in self.graph.direct_references() {
             if BindingGraph::contains_position(reference.name_range, position) {
@@ -288,19 +242,12 @@ impl<'a> BindingResolver<'a> {
         None
     }
 
-    // =========================================================================
-    // Find all usages (for find-references)
-    // =========================================================================
-
-    /// Find all locations where an env var is used (directly or through bindings).
     pub fn find_env_var_usages(&self, env_var_name: &str) -> Vec<EnvVarUsageLocation> {
         let mut locations = Vec::new();
         let mut seen_ranges = std::collections::HashSet::new();
 
-        // 1. Direct references
         for reference in self.graph.direct_references() {
             if reference.name == env_var_name {
-                // Deduplicate by range
                 let range_key = (
                     reference.name_range.start.line,
                     reference.name_range.start.character,
@@ -317,30 +264,19 @@ impl<'a> BindingResolver<'a> {
             }
         }
 
-        // 2. Symbol declarations that resolve to this env var
-        // Only include if we have a proper env var range to rename
         for symbol in self.graph.symbols() {
             if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
                 if let ResolvedEnv::Variable(name) = &resolved {
                     if name == env_var_name {
-                        // Determine the correct range for renaming:
-                        // - If destructured with rename (e.g., { VAR: v }), use destructured_key_range
-                        // - If shorthand destructure (e.g., { VAR }), the symbol name IS the env var
-                        // - If regular binding (e.g., const a = process.env.VAR), skip - DirectReference covers it
                         let rename_range = if let Some(key_range) = symbol.destructured_key_range {
-                            // Renamed destructuring: { ENV_VAR: localName }
                             Some(key_range)
                         } else if symbol.name.as_str() == env_var_name {
-                            // Shorthand destructuring: { ENV_VAR } - the binding name IS the env var
                             Some(symbol.name_range)
                         } else {
-                            // Regular binding like `const a = process.env.VAR`
-                            // The env var is already covered by DirectReference, skip the binding
                             None
                         };
 
                         if let Some(range) = rename_range {
-                            // Deduplicate by range
                             let range_key = (
                                 range.start.line,
                                 range.start.character,
@@ -360,12 +296,10 @@ impl<'a> BindingResolver<'a> {
             }
         }
 
-        // 3. Symbol usages (identifiers referencing symbols that resolve to env var)
         for usage in self.graph.usages() {
             if let Some(resolved) = self.graph.resolve_to_env(usage.symbol_id) {
                 match &resolved {
                     ResolvedEnv::Variable(name) if name == env_var_name => {
-                        // Deduplicate by range
                         let range_key = (
                             usage.range.start.line,
                             usage.range.start.character,
@@ -385,13 +319,10 @@ impl<'a> BindingResolver<'a> {
                         }
                     }
                     ResolvedEnv::Object(_) => {
-                        // Check property access
                         if let Some(prop) = &usage.property_access {
                             if prop == env_var_name {
-                                // Use property_access_range if available (for rename),
-                                // otherwise fall back to usage.range
                                 let range = usage.property_access_range.unwrap_or(usage.range);
-                                // Deduplicate by range
+
                                 let range_key = (
                                     range.start.line,
                                     range.start.character,
@@ -420,16 +351,13 @@ impl<'a> BindingResolver<'a> {
         locations
     }
 
-    /// Find all env vars referenced in the document.
     pub fn all_env_vars(&self) -> Vec<CompactString> {
         let mut vars = std::collections::HashSet::new();
 
-        // Direct references
         for reference in self.graph.direct_references() {
             vars.insert(reference.name.clone());
         }
 
-        // Through symbols
         for symbol in self.graph.symbols() {
             if let Some(ResolvedEnv::Variable(name)) = self.graph.resolve_to_env(symbol.id) {
                 vars.insert(name);
@@ -439,52 +367,35 @@ impl<'a> BindingResolver<'a> {
         vars.into_iter().collect()
     }
 
-    // =========================================================================
-    // Symbol queries
-    // =========================================================================
-
-    /// Get a symbol by ID.
     pub fn get_symbol(&self, id: SymbolId) -> Option<&'a Symbol> {
         self.graph.get_symbol(id)
     }
 
-    /// Lookup symbol by name in scope.
     pub fn lookup_symbol(&self, name: &str, scope: ScopeId) -> Option<&'a Symbol> {
         self.graph.lookup_symbol(name, scope)
     }
 
-    /// Get the scope at a position.
     pub fn scope_at_position(&self, position: Position) -> ScopeId {
         self.graph.scope_at_position(position)
     }
 
-    /// Check if a symbol resolves to an env object.
     pub fn is_env_object(&self, symbol_id: SymbolId) -> bool {
         self.graph.resolves_to_env_object(symbol_id)
     }
 
-    // =========================================================================
-    // Legacy compatibility methods
-    // =========================================================================
-
-    /// Get a cloned EnvReference at position (legacy compatibility).
-    /// This handles both direct references and property access on env object aliases.
     pub fn get_env_reference_cloned(&self, position: Position) -> Option<EnvReference> {
-        // First check for direct reference
         if let Some(reference) = self.direct_reference_at_position(position) {
             return Some(reference.clone());
         }
 
-        // Check for property access on an env object alias (e.g., env.API_KEY)
         if let Some(usage) = self.graph.usage_at_position(position) {
             if let Some(property) = &usage.property_access {
                 if let Some(resolved) = self.graph.resolve_to_env(usage.symbol_id) {
                     if matches!(resolved, ResolvedEnv::Object(_)) {
-                        // Synthesize an EnvReference for this property access
                         return Some(EnvReference {
                             name: property.clone(),
                             full_range: usage.range,
-                            name_range: usage.range, // Best approximation
+                            name_range: usage.range,
                             access_type: crate::types::AccessType::Property,
                             has_default: false,
                             default_value: None,
@@ -497,14 +408,12 @@ impl<'a> BindingResolver<'a> {
         None
     }
 
-    /// Get a cloned EnvBinding at position (legacy compatibility).
     pub fn get_env_binding_cloned(&self, position: Position) -> Option<EnvBinding> {
-        // Use env_at_position which checks name_range AND destructured_key_range
         let hit = self.env_at_position(position)?;
 
         match hit {
             EnvHit::DirectReference(_) => None,
-            EnvHit::ViaUsage { .. } => None, // This is a usage, not a declaration
+            EnvHit::ViaUsage { .. } => None,
 
             EnvHit::ViaSymbol { symbol, resolved } => {
                 let env_var_name = match &resolved {
@@ -517,9 +426,6 @@ impl<'a> BindingResolver<'a> {
                     ResolvedEnv::Object(_) => BindingKind::Object,
                 };
 
-                // Get scope range from the symbol's scope
-                // INVARIANT: scope_at_position always returns valid scopes during analysis,
-                // so this should never fail. If it does, we have a data consistency bug.
                 let scope = match self.graph.get_scope(symbol.scope) {
                     Some(s) => s,
                     None => {
@@ -551,18 +457,15 @@ impl<'a> BindingResolver<'a> {
         }
     }
 
-    /// Get a cloned EnvBindingUsage at position (legacy compatibility).
     pub fn get_binding_usage_cloned(&self, position: Position) -> Option<EnvBindingUsage> {
         let binding = self.binding_at_position(position)?;
         if !binding.is_usage {
-            return None; // This is a declaration, not a usage
+            return None;
         }
         Some(binding.to_binding_usage())
     }
 
-    /// Get binding kind for a symbol name (legacy compatibility).
     pub fn get_binding_kind(&self, name: &str) -> Option<BindingKind> {
-        // Search through all symbols for one with this name
         for symbol in self.graph.symbols() {
             if symbol.name == name && symbol.is_valid {
                 if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
@@ -577,27 +480,23 @@ impl<'a> BindingResolver<'a> {
     }
 }
 
-/// Location of an env var usage in the document.
 #[derive(Debug, Clone)]
 pub struct EnvVarUsageLocation {
-    /// Range of the usage.
     pub range: Range,
-    /// Kind of usage.
+
     pub kind: UsageKind,
-    /// Binding name if accessed through a binding.
+
     pub binding_name: Option<CompactString>,
 }
 
-/// Kind of env var usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageKind {
-    /// Direct reference (e.g., process.env.VAR).
     DirectReference,
-    /// Binding declaration (e.g., const x = process.env.VAR).
+
     BindingDeclaration,
-    /// Usage of a binding (e.g., using x after above declaration).
+
     BindingUsage,
-    /// Property access on an env object alias (e.g., env.VAR).
+
     PropertyAccess,
 }
 
@@ -612,10 +511,6 @@ mod tests {
             Position::new(end_line, end_char),
         )
     }
-
-    // =========================================================================
-    // EnvHit Tests
-    // =========================================================================
 
     #[test]
     fn test_env_hit_direct_reference_methods() {
@@ -634,10 +529,9 @@ mod tests {
         let resolver = BindingResolver::new(&graph);
         let hit = resolver.env_at_position(Position::new(0, 15)).unwrap();
 
-        // Test all EnvHit methods for DirectReference variant
         assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
         assert_eq!(hit.canonical_name().as_str(), "DATABASE_URL");
-        assert_eq!(hit.range(), make_range(0, 12, 0, 24)); // name_range (not full_range)
+        assert_eq!(hit.range(), make_range(0, 12, 0, 24));
         assert!(!hit.is_env_object());
         assert!(hit.binding_name().is_none());
     }
@@ -665,7 +559,7 @@ mod tests {
 
         assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
         assert_eq!(hit.canonical_name().as_str(), "DATABASE_URL");
-        assert_eq!(hit.range(), make_range(0, 6, 0, 11)); // name_range
+        assert_eq!(hit.range(), make_range(0, 6, 0, 11));
         assert!(!hit.is_env_object());
         assert_eq!(hit.binding_name(), Some(&"dbUrl".into()));
     }
@@ -691,7 +585,7 @@ mod tests {
         let resolver = BindingResolver::new(&graph);
         let hit = resolver.env_at_position(Position::new(0, 7)).unwrap();
 
-        assert!(hit.env_var_name().is_none()); // Object has no specific var
+        assert!(hit.env_var_name().is_none());
         assert_eq!(hit.canonical_name().as_str(), "process.env");
         assert!(hit.is_env_object());
         assert_eq!(hit.binding_name(), Some(&"env".into()));
@@ -752,7 +646,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // Usage with property access: env.DATABASE_URL
         graph.add_usage(SymbolUsage {
             symbol_id: id,
             range: make_range(1, 0, 1, 16),
@@ -765,14 +658,10 @@ mod tests {
         let hit = resolver.env_at_position(Position::new(1, 8)).unwrap();
 
         assert!(matches!(hit, EnvHit::ViaUsage { .. }));
-        // Property access should resolve to the variable name
-        assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
-        assert!(!hit.is_env_object()); // Because it's resolving to a variable now
-    }
 
-    // =========================================================================
-    // ResolvedBinding Tests
-    // =========================================================================
+        assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
+        assert!(!hit.is_env_object());
+    }
 
     #[test]
     fn test_resolved_binding_to_env_binding() {
@@ -832,15 +721,10 @@ mod tests {
         assert_eq!(env_binding.kind, BindingKind::Object);
     }
 
-    // =========================================================================
-    // BindingResolver Tests - Position-based queries
-    // =========================================================================
-
     #[test]
     fn test_resolve_direct_reference() {
         let mut graph = BindingGraph::new();
 
-        // Add a direct reference
         graph.add_direct_reference(EnvReference {
             name: "DATABASE_URL".into(),
             full_range: make_range(0, 0, 0, 30),
@@ -852,7 +736,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Query at the reference position
         let hit = resolver.env_at_position(Position::new(0, 15)).unwrap();
         assert!(matches!(hit, EnvHit::DirectReference(_)));
         assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
@@ -862,7 +745,6 @@ mod tests {
     fn test_resolve_via_symbol() {
         let mut graph = BindingGraph::new();
 
-        // Add a symbol: const dbUrl = process.env.DATABASE_URL
         let _id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "dbUrl".into(),
@@ -879,7 +761,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Query at the symbol name position
         let hit = resolver.env_at_position(Position::new(0, 8)).unwrap();
         assert!(matches!(hit, EnvHit::ViaSymbol { .. }));
         assert_eq!(hit.env_var_name(), Some("DATABASE_URL".into()));
@@ -890,7 +771,6 @@ mod tests {
     fn test_resolve_chain() {
         let mut graph = BindingGraph::new();
 
-        // const env = process.env
         let env_id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "env".into(),
@@ -905,7 +785,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // const config = env
         let config_id = graph.add_symbol(Symbol {
             id: SymbolId::new(2).unwrap(),
             name: "config".into(),
@@ -918,7 +797,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // const { DB_URL } = config
         let _db_url_id = graph.add_symbol(Symbol {
             id: SymbolId::new(3).unwrap(),
             name: "DB_URL".into(),
@@ -931,12 +809,11 @@ mod tests {
             },
             kind: SymbolKind::DestructuredProperty,
             is_valid: true,
-            destructured_key_range: Some(make_range(2, 8, 2, 14)), // Same as name in this case
+            destructured_key_range: Some(make_range(2, 8, 2, 14)),
         });
 
         let resolver = BindingResolver::new(&graph);
 
-        // Query at DB_URL symbol
         let hit = resolver.env_at_position(Position::new(2, 10)).unwrap();
         assert!(matches!(hit, EnvHit::ViaSymbol { .. }));
         assert_eq!(hit.env_var_name(), Some("DB_URL".into()));
@@ -1017,7 +894,7 @@ mod tests {
         });
 
         let resolver = BindingResolver::new(&graph);
-        // binding_at_position returns None for direct references
+
         assert!(resolver.binding_at_position(Position::new(0, 15)).is_none());
     }
 
@@ -1036,20 +913,16 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Test at full range but outside name range - should NOT match
-        // (e.g., cursor on "process" in "process.env.API_KEY")
         let ref_at_full_only = resolver.direct_reference_at_position(Position::new(0, 5));
         assert!(
             ref_at_full_only.is_none(),
             "Position in full_range but outside name_range should return None"
         );
 
-        // Test at name range - should match
         let ref_at_name = resolver.direct_reference_at_position(Position::new(0, 15));
         assert!(ref_at_name.is_some());
         assert_eq!(ref_at_name.unwrap().name, "API_KEY");
 
-        // Test outside both ranges
         let ref_outside = resolver.direct_reference_at_position(Position::new(1, 0));
         assert!(ref_outside.is_none());
     }
@@ -1067,44 +940,35 @@ mod tests {
     fn test_env_at_position_with_destructure_key() {
         let mut graph = BindingGraph::new();
 
-        // const { API_KEY: apiKey } = process.env
-        // destructured_key_range is API_KEY, name_range is apiKey
         let _id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "apiKey".into(),
             declaration_range: make_range(0, 0, 0, 40),
-            name_range: make_range(0, 18, 0, 24), // apiKey
+            name_range: make_range(0, 18, 0, 24),
             scope: ScopeId::root(),
             origin: SymbolOrigin::EnvVar {
                 name: "API_KEY".into(),
             },
             kind: SymbolKind::DestructuredProperty,
             is_valid: true,
-            destructured_key_range: Some(make_range(0, 8, 0, 15)), // API_KEY
+            destructured_key_range: Some(make_range(0, 8, 0, 15)),
         });
 
         let resolver = BindingResolver::new(&graph);
 
-        // Hovering over "API_KEY" (destructure key) should find it
         let hit = resolver.env_at_position(Position::new(0, 10));
         assert!(hit.is_some());
         let hit = hit.unwrap();
         assert_eq!(hit.env_var_name(), Some("API_KEY".into()));
 
-        // Hovering over "apiKey" (binding name) should also find it
         let hit2 = resolver.env_at_position(Position::new(0, 20));
         assert!(hit2.is_some());
     }
-
-    // =========================================================================
-    // BindingResolver Tests - Find all usages
-    // =========================================================================
 
     #[test]
     fn test_find_usages() {
         let mut graph = BindingGraph::new();
 
-        // Add direct reference
         graph.add_direct_reference(EnvReference {
             name: "API_KEY".into(),
             full_range: make_range(0, 0, 0, 20),
@@ -1114,7 +978,6 @@ mod tests {
             default_value: None,
         });
 
-        // Add binding
         let id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "apiKey".into(),
@@ -1129,7 +992,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // Add usage of binding
         graph.add_usage(SymbolUsage {
             symbol_id: id,
             range: make_range(2, 10, 2, 16),
@@ -1141,12 +1003,7 @@ mod tests {
         let resolver = BindingResolver::new(&graph);
 
         let usages = resolver.find_env_var_usages("API_KEY");
-        // Only 2 usages now:
-        // - DirectReference: for the actual env var access
-        // - BindingUsage: for usages of the binding
-        // BindingDeclaration is excluded because the binding name ("apiKey") != env var name ("API_KEY")
-        // and there's no destructured_key_range. This is correct for rename - we don't want to
-        // rename the local variable "apiKey" when renaming "API_KEY".
+
         assert_eq!(usages.len(), 2);
 
         assert!(usages.iter().any(|u| u.kind == UsageKind::DirectReference));
@@ -1157,11 +1014,9 @@ mod tests {
     fn test_find_usages_destructured() {
         let mut graph = BindingGraph::new();
 
-        // Add binding with shorthand destructuring: const { API_KEY } = process.env
-        // Here binding name == env var name
         graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
-            name: "API_KEY".into(), // Same as env var name (shorthand destructuring)
+            name: "API_KEY".into(),
             declaration_range: make_range(0, 0, 0, 35),
             name_range: make_range(0, 8, 0, 15),
             scope: ScopeId::root(),
@@ -1170,43 +1025,46 @@ mod tests {
             },
             kind: SymbolKind::DestructuredProperty,
             is_valid: true,
-            destructured_key_range: None, // No separate key range for shorthand
+            destructured_key_range: None,
         });
 
         let resolver = BindingResolver::new(&graph);
 
         let usages = resolver.find_env_var_usages("API_KEY");
-        // Should include BindingDeclaration because binding name == env var name
+
         assert_eq!(usages.len(), 1);
-        assert!(usages.iter().any(|u| u.kind == UsageKind::BindingDeclaration));
+        assert!(usages
+            .iter()
+            .any(|u| u.kind == UsageKind::BindingDeclaration));
     }
 
     #[test]
     fn test_find_usages_destructured_with_rename() {
         let mut graph = BindingGraph::new();
 
-        // Add binding with renamed destructuring: const { API_KEY: apiKey } = process.env
         graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
-            name: "apiKey".into(), // Local binding name
+            name: "apiKey".into(),
             declaration_range: make_range(0, 0, 0, 45),
-            name_range: make_range(0, 18, 0, 24), // Range of "apiKey"
+            name_range: make_range(0, 18, 0, 24),
             scope: ScopeId::root(),
             origin: SymbolOrigin::EnvVar {
                 name: "API_KEY".into(),
             },
             kind: SymbolKind::DestructuredProperty,
             is_valid: true,
-            destructured_key_range: Some(make_range(0, 8, 0, 15)), // Range of "API_KEY"
+            destructured_key_range: Some(make_range(0, 8, 0, 15)),
         });
 
         let resolver = BindingResolver::new(&graph);
 
         let usages = resolver.find_env_var_usages("API_KEY");
-        // Should include BindingDeclaration with the destructured_key_range
+
         assert_eq!(usages.len(), 1);
-        assert!(usages.iter().any(|u| u.kind == UsageKind::BindingDeclaration));
-        // The range should be the key range, not the binding name range
+        assert!(usages
+            .iter()
+            .any(|u| u.kind == UsageKind::BindingDeclaration));
+
         assert_eq!(usages[0].range, make_range(0, 8, 0, 15));
     }
 
@@ -1228,7 +1086,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // env.DATABASE_URL usage
         graph.add_usage(SymbolUsage {
             symbol_id: id,
             range: make_range(1, 0, 1, 16),
@@ -1242,7 +1099,7 @@ mod tests {
 
         assert_eq!(usages.len(), 1);
         assert!(usages.iter().any(|u| u.kind == UsageKind::PropertyAccess));
-        // Should use the property_access_range
+
         assert_eq!(usages[0].range, make_range(1, 4, 1, 16));
     }
 
@@ -1264,20 +1121,19 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // env.API_KEY usage without specific property range
         graph.add_usage(SymbolUsage {
             symbol_id: id,
             range: make_range(2, 5, 2, 16),
             scope: ScopeId::root(),
             property_access: Some("API_KEY".into()),
-            property_access_range: None, // No specific range
+            property_access_range: None,
         });
 
         let resolver = BindingResolver::new(&graph);
         let usages = resolver.find_env_var_usages("API_KEY");
 
         assert_eq!(usages.len(), 1);
-        // Should fall back to usage.range
+
         assert_eq!(usages[0].range, make_range(2, 5, 2, 16));
     }
 
@@ -1285,7 +1141,6 @@ mod tests {
     fn test_find_usages_deduplication() {
         let mut graph = BindingGraph::new();
 
-        // Add same direct reference twice (to test dedup)
         graph.add_direct_reference(EnvReference {
             name: "DUPLICATE".into(),
             full_range: make_range(0, 0, 0, 20),
@@ -1297,7 +1152,7 @@ mod tests {
         graph.add_direct_reference(EnvReference {
             name: "DUPLICATE".into(),
             full_range: make_range(0, 0, 0, 20),
-            name_range: make_range(0, 12, 0, 20), // Same range
+            name_range: make_range(0, 12, 0, 20),
             access_type: AccessType::Property,
             has_default: false,
             default_value: None,
@@ -1306,7 +1161,6 @@ mod tests {
         let resolver = BindingResolver::new(&graph);
         let usages = resolver.find_env_var_usages("DUPLICATE");
 
-        // Should be deduplicated
         assert_eq!(usages.len(), 1);
     }
 
@@ -1377,7 +1231,6 @@ mod tests {
     fn test_all_env_vars_excludes_objects() {
         let mut graph = BindingGraph::new();
 
-        // Object binding should not appear in all_env_vars
         let _id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "env".into(),
@@ -1395,13 +1248,8 @@ mod tests {
         let resolver = BindingResolver::new(&graph);
         let all_vars = resolver.all_env_vars();
 
-        // Object shouldn't be in the list
         assert!(all_vars.is_empty());
     }
-
-    // =========================================================================
-    // BindingResolver Tests - Symbol queries
-    // =========================================================================
 
     #[test]
     fn test_get_symbol() {
@@ -1427,7 +1275,6 @@ mod tests {
         assert!(symbol.is_some());
         assert_eq!(symbol.unwrap().name, "testVar");
 
-        // Nonexistent ID
         let fake_id = SymbolId::new(999).unwrap();
         assert!(resolver.get_symbol(fake_id).is_none());
     }
@@ -1452,12 +1299,10 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Found in root scope
         let symbol = resolver.lookup_symbol("myVar", ScopeId::root());
         assert!(symbol.is_some());
         assert_eq!(symbol.unwrap().name, "myVar");
 
-        // Not found
         let not_found = resolver.lookup_symbol("nonexistent", ScopeId::root());
         assert!(not_found.is_none());
     }
@@ -1467,7 +1312,6 @@ mod tests {
         let graph = BindingGraph::new();
         let resolver = BindingResolver::new(&graph);
 
-        // With just root scope, everything returns root
         let scope = resolver.scope_at_position(Position::new(5, 10));
         assert_eq!(scope, ScopeId::root());
     }
@@ -1510,10 +1354,6 @@ mod tests {
         assert!(!resolver.is_env_object(var_id));
     }
 
-    // =========================================================================
-    // BindingResolver Tests - Legacy compatibility
-    // =========================================================================
-
     #[test]
     fn test_get_env_reference_cloned() {
         let mut graph = BindingGraph::new();
@@ -1555,7 +1395,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // env.MY_VAR usage
         graph.add_usage(SymbolUsage {
             symbol_id: id,
             range: make_range(1, 0, 1, 10),
@@ -1566,7 +1405,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Should synthesize an EnvReference from property access
         let cloned = resolver.get_env_reference_cloned(Position::new(1, 6));
         assert!(cloned.is_some());
         let cloned = cloned.unwrap();
@@ -1594,7 +1432,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Symbol declaration is not a direct reference
         let cloned = resolver.get_env_reference_cloned(Position::new(0, 8));
         assert!(cloned.is_none());
     }
@@ -1603,7 +1440,6 @@ mod tests {
     fn test_get_env_binding_cloned() {
         let mut graph = BindingGraph::new();
 
-        // Add a scope first
         let scope_id = graph.add_scope(crate::types::Scope {
             id: ScopeId::new(1).unwrap(),
             parent: Some(ScopeId::root()),
@@ -1634,7 +1470,10 @@ mod tests {
         assert_eq!(binding.env_var_name, "MY_VAR");
         assert_eq!(binding.scope_range, make_range(0, 0, 10, 0));
         assert!(binding.is_valid);
-        assert_eq!(binding.destructured_key_range, Some(make_range(1, 6, 1, 11)));
+        assert_eq!(
+            binding.destructured_key_range,
+            Some(make_range(1, 6, 1, 11))
+        );
     }
 
     #[test]
@@ -1712,7 +1551,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Declaration position, not usage
         let usage = resolver.get_binding_usage_cloned(Position::new(0, 8));
         assert!(usage.is_none());
     }
@@ -1749,7 +1587,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // Invalid symbol (is_valid = false)
         let _id3 = graph.add_symbol(Symbol {
             id: SymbolId::new(3).unwrap(),
             name: "invalidBinding".into(),
@@ -1774,18 +1611,12 @@ mod tests {
         assert!(kind2.is_some());
         assert_eq!(kind2.unwrap(), BindingKind::Object);
 
-        // Invalid binding should not be found
         let kind3 = resolver.get_binding_kind("invalidBinding");
         assert!(kind3.is_none());
 
-        // Nonexistent binding
         let kind4 = resolver.get_binding_kind("nonexistent");
         assert!(kind4.is_none());
     }
-
-    // =========================================================================
-    // UsageKind Tests
-    // =========================================================================
 
     #[test]
     fn test_usage_kind_equality() {
@@ -1801,13 +1632,9 @@ mod tests {
     #[test]
     fn test_usage_kind_copy() {
         let kind = UsageKind::DirectReference;
-        let copied = kind; // Copy trait
+        let copied = kind;
         assert_eq!(kind, copied);
     }
-
-    // =========================================================================
-    // EnvVarUsageLocation Tests
-    // =========================================================================
 
     #[test]
     fn test_env_var_usage_location_clone() {
@@ -1836,15 +1663,10 @@ mod tests {
         assert!(debug_str.contains("BindingUsage"));
     }
 
-    // =========================================================================
-    // Integration Tests - Complex scenarios
-    // =========================================================================
-
     #[test]
     fn test_complex_chain_resolution() {
         let mut graph = BindingGraph::new();
 
-        // const env = process.env
         let env_id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "env".into(),
@@ -1859,7 +1681,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // const config = env
         let config_id = graph.add_symbol(Symbol {
             id: SymbolId::new(2).unwrap(),
             name: "config".into(),
@@ -1872,7 +1693,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // const settings = config
         let settings_id = graph.add_symbol(Symbol {
             id: SymbolId::new(3).unwrap(),
             name: "settings".into(),
@@ -1885,7 +1705,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // const { DB_URL } = settings
         let _db_id = graph.add_symbol(Symbol {
             id: SymbolId::new(4).unwrap(),
             name: "DB_URL".into(),
@@ -1903,11 +1722,9 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Query at DB_URL - should resolve through entire chain
         let hit = resolver.env_at_position(Position::new(3, 10)).unwrap();
         assert_eq!(hit.env_var_name(), Some("DB_URL".into()));
 
-        // Query at settings - should resolve to process.env (object)
         let hit2 = resolver.env_at_position(Position::new(2, 10)).unwrap();
         assert!(hit2.is_env_object());
         assert_eq!(hit2.canonical_name().as_str(), "process.env");
@@ -1951,7 +1768,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Each position should resolve to correct var
         let hit_a = resolver.env_at_position(Position::new(0, 15)).unwrap();
         assert_eq!(hit_a.canonical_name().as_str(), "VAR_A");
 
@@ -1961,7 +1777,6 @@ mod tests {
         let hit_c = resolver.env_at_position(Position::new(2, 8)).unwrap();
         assert_eq!(hit_c.canonical_name().as_str(), "VAR_C");
 
-        // All env vars should be collected
         let all_vars = resolver.all_env_vars();
         assert_eq!(all_vars.len(), 3);
     }
@@ -1970,7 +1785,6 @@ mod tests {
     fn test_binding_with_usage_at_different_scopes() {
         let mut graph = BindingGraph::new();
 
-        // Create inner scope
         let inner_scope = graph.add_scope(crate::types::Scope {
             id: ScopeId::new(1).unwrap(),
             parent: Some(ScopeId::root()),
@@ -1978,7 +1792,6 @@ mod tests {
             kind: ScopeKind::Block,
         });
 
-        // Declaration in root scope
         let id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "rootVar".into(),
@@ -1993,7 +1806,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // Usage in inner scope
         graph.add_usage(SymbolUsage {
             symbol_id: id,
             range: make_range(2, 5, 2, 12),
@@ -2004,7 +1816,6 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Usage should resolve correctly
         let hit = resolver.env_at_position(Position::new(2, 8)).unwrap();
         assert!(matches!(hit, EnvHit::ViaUsage { .. }));
         assert_eq!(hit.env_var_name(), Some("ROOT_VAR".into()));
@@ -2014,7 +1825,6 @@ mod tests {
     fn test_binding_object_with_property_access_and_destructuring() {
         let mut graph = BindingGraph::new();
 
-        // const env = process.env
         let env_id = graph.add_symbol(Symbol {
             id: SymbolId::new(1).unwrap(),
             name: "env".into(),
@@ -2029,7 +1839,6 @@ mod tests {
             destructured_key_range: None,
         });
 
-        // Property access: env.VAR_ONE
         graph.add_usage(SymbolUsage {
             symbol_id: env_id,
             range: make_range(1, 0, 1, 11),
@@ -2038,7 +1847,6 @@ mod tests {
             property_access_range: Some(make_range(1, 4, 1, 11)),
         });
 
-        // Destructuring: const { VAR_TWO } = env
         let _var_two_id = graph.add_symbol(Symbol {
             id: SymbolId::new(2).unwrap(),
             name: "VAR_TWO".into(),
@@ -2056,12 +1864,10 @@ mod tests {
 
         let resolver = BindingResolver::new(&graph);
 
-        // Find usages for VAR_ONE (property access)
         let var_one_usages = resolver.find_env_var_usages("VAR_ONE");
         assert_eq!(var_one_usages.len(), 1);
         assert_eq!(var_one_usages[0].kind, UsageKind::PropertyAccess);
 
-        // Find usages for VAR_TWO (destructuring)
         let var_two_usages = resolver.find_env_var_usages("VAR_TWO");
         assert_eq!(var_two_usages.len(), 1);
         assert_eq!(var_two_usages[0].kind, UsageKind::BindingDeclaration);

@@ -1,4 +1,4 @@
-//! Workspace symbol tests for LSP server
+
 
 use crate::harness::{LspTestClient, TempWorkspace};
 use std::thread;
@@ -10,10 +10,10 @@ fn test_workspace_symbol_empty_query_returns_all() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    // Create .env file with some env vars
-    workspace.create_file(".env", "DB_URL=postgres://localhost\nAPI_KEY=secret\nPORT=3000");
+    
+    workspace.create_file(".env", "DB_URL=postgres:
 
-    // Create a JS file that references some env vars
+    
     let uri = workspace.file_uri("test.js");
     let content = "const db = process.env.DB_URL;\nconst key = process.env.API_KEY;";
     workspace.create_file("test.js", content);
@@ -23,7 +23,7 @@ fn test_workspace_symbol_empty_query_returns_all() {
         .expect("Failed to open document");
     thread::sleep(Duration::from_millis(500));
 
-    // Empty query should return all env vars
+    
     let result = client.workspace_symbol("").expect("Workspace symbol request failed");
 
     let symbols = result.as_array().expect("Result should be array");
@@ -33,7 +33,7 @@ fn test_workspace_symbol_empty_query_returns_all() {
         symbols.len()
     );
 
-    // All symbols should be CONSTANT kind (value 14)
+    
     for symbol in symbols {
         let kind = symbol.get("kind").and_then(|k| k.as_u64()).expect("Symbol should have kind");
         assert_eq!(kind, 14, "Symbol kind should be CONSTANT (14)");
@@ -48,10 +48,10 @@ fn test_workspace_symbol_query_filtering() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    // Create .env file with env vars
-    workspace.create_file(".env", "DATABASE_URL=postgres://localhost\nDB_HOST=localhost\nAPI_KEY=secret");
+    
+    workspace.create_file(".env", "DATABASE_URL=postgres:
 
-    // Create a JS file that references env vars
+    
     let uri = workspace.file_uri("test.js");
     let content = "process.env.DATABASE_URL; process.env.DB_HOST; process.env.API_KEY;";
     workspace.create_file("test.js", content);
@@ -59,22 +59,22 @@ fn test_workspace_symbol_query_filtering() {
     client
         .open_document(&uri, "javascript", content)
         .expect("Failed to open document");
-    // Wait for indexing to complete
+    
     thread::sleep(Duration::from_millis(800));
 
-    // Query "DB" should match DATABASE_URL and DB_HOST but not API_KEY
+    
     let result = client.workspace_symbol("DB").expect("Workspace symbol request failed");
 
     let symbols = result.as_array().expect("Result should be array");
 
-    // Should have at least 1 match (either DATABASE_URL or DB_HOST)
-    // Note: Background indexer timing may vary, so we check for at least 1
+    
+    
     assert!(
         !symbols.is_empty(),
         "Expected at least 1 symbol matching 'DB', got 0"
     );
 
-    // All returned symbols should contain "DB" (case-insensitive)
+    
     for symbol in symbols {
         let name = symbol
             .get("name")
@@ -87,7 +87,7 @@ fn test_workspace_symbol_query_filtering() {
         );
     }
 
-    // Verify API_KEY is NOT in the results (it doesn't contain "DB")
+    
     let has_api_key = symbols
         .iter()
         .any(|s| s.get("name").and_then(|n| n.as_str()) == Some("API_KEY"));
@@ -102,7 +102,7 @@ fn test_workspace_symbol_case_insensitive() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    workspace.create_file(".env", "DATABASE_URL=postgres://localhost");
+    workspace.create_file(".env", "DATABASE_URL=postgres:
 
     let uri = workspace.file_uri("test.js");
     let content = "process.env.DATABASE_URL;";
@@ -113,7 +113,7 @@ fn test_workspace_symbol_case_insensitive() {
         .expect("Failed to open document");
     thread::sleep(Duration::from_millis(500));
 
-    // Query with lowercase should match uppercase env var
+    
     let result = client
         .workspace_symbol("database")
         .expect("Workspace symbol request failed");
@@ -135,10 +135,10 @@ fn test_workspace_symbol_points_to_env_definition() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    // Create .env file
+    
     workspace.create_file(".env", "API_KEY=secret123");
 
-    // Create a JS file that references the env var
+    
     let uri = workspace.file_uri("test.js");
     let content = "const key = process.env.API_KEY;";
     workspace.create_file("test.js", content);
@@ -160,7 +160,7 @@ fn test_workspace_symbol_points_to_env_definition() {
         .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("API_KEY"))
         .expect("Should find API_KEY symbol");
 
-    // Location should point to .env file
+    
     let location = api_key_symbol.get("location").expect("Symbol should have location");
     let location_uri = location
         .get("uri")
@@ -182,7 +182,7 @@ fn test_workspace_symbol_empty_workspace() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    // Create a JS file with no env var references
+    
     let uri = workspace.file_uri("test.js");
     let content = "const x = 1;";
     workspace.create_file("test.js", content);
@@ -196,7 +196,7 @@ fn test_workspace_symbol_empty_workspace() {
         .workspace_symbol("")
         .expect("Workspace symbol request failed");
 
-    // Empty workspace should return null or empty array
+    
     assert!(
         result.is_null() || result.as_array().map(|a| a.is_empty()).unwrap_or(false),
         "Empty workspace should return null or empty array"
@@ -222,12 +222,12 @@ fn test_workspace_symbol_no_match() {
         .expect("Failed to open document");
     thread::sleep(Duration::from_millis(500));
 
-    // Query that matches nothing
+    
     let result = client
         .workspace_symbol("ZZZZZ_NONEXISTENT")
         .expect("Workspace symbol request failed");
 
-    // Should return null or empty array
+    
     assert!(
         result.is_null() || result.as_array().map(|a| a.is_empty()).unwrap_or(false),
         "Non-matching query should return null or empty array"

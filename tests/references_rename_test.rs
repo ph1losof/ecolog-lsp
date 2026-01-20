@@ -1,4 +1,4 @@
-//! Integration tests for Find References and Rename functionality.
+
 
 mod common;
 
@@ -9,24 +9,24 @@ use tower_lsp::lsp_types::{
     TextDocumentPositionParams,
 };
 
-// ============================================================================
-// Find References Tests
-// ============================================================================
+
+
+
 
 #[tokio::test]
 async fn test_find_references_direct_reference() {
     let fixture = TestFixture::new().await;
 
-    // Create test file with env var reference
+    
     let uri = fixture.create_file(
         "test.js",
         "const url = process.env.DB_URL;\nconsole.log(process.env.DB_URL);",
     );
 
-    // Index workspace
+    
     fixture.index_workspace().await;
 
-    // Open the document so it's analyzed
+    
     fixture
         .state
         .document_manager
@@ -34,13 +34,13 @@ async fn test_find_references_direct_reference() {
               "const url = process.env.DB_URL;\nconsole.log(process.env.DB_URL);".to_string(), 1)
         .await;
 
-    // Create reference params at position of DB_URL
+    
     let params = ReferenceParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri: uri.clone() },
             position: Position {
                 line: 0,
-                character: 24, // Position within "DB_URL"
+                character: 24, 
             },
         },
         work_done_progress_params: Default::default(),
@@ -55,7 +55,7 @@ async fn test_find_references_direct_reference() {
     assert!(result.is_some(), "Expected to find references");
     let locations = result.unwrap();
 
-    // Should find at least 2 references (the two DB_URL usages in the file)
+    
     assert!(
         locations.len() >= 2,
         "Expected at least 2 references, found {}",
@@ -67,14 +67,14 @@ async fn test_find_references_direct_reference() {
 async fn test_find_references_across_files() {
     let fixture = TestFixture::new().await;
 
-    // Create multiple test files
+    
     fixture.create_file("a.js", "const key = process.env.API_KEY;");
     fixture.create_file("b.ts", "const apiKey = process.env.API_KEY;");
 
-    // Index workspace
+    
     fixture.index_workspace().await;
 
-    // Open first file
+    
     let uri_a = fixture.create_file("a.js", "const key = process.env.API_KEY;");
     fixture
         .state
@@ -92,7 +92,7 @@ async fn test_find_references_across_files() {
             text_document: TextDocumentIdentifier { uri: uri_a },
             position: Position {
                 line: 0,
-                character: 24, // Position within "API_KEY"
+                character: 24, 
             },
         },
         work_done_progress_params: Default::default(),
@@ -107,7 +107,7 @@ async fn test_find_references_across_files() {
     assert!(result.is_some(), "Expected to find references");
     let locations = result.unwrap();
 
-    // Should find references in multiple files
+    
     assert!(
         locations.len() >= 2,
         "Expected at least 2 references across files, found {}",
@@ -139,7 +139,7 @@ async fn test_find_references_no_refs_for_unknown_var() {
             text_document: TextDocumentIdentifier { uri },
             position: Position {
                 line: 0,
-                character: 22, // Position within "UNKNOWN_VAR"
+                character: 22, 
             },
         },
         work_done_progress_params: Default::default(),
@@ -151,13 +151,13 @@ async fn test_find_references_no_refs_for_unknown_var() {
 
     let result = handle_references(params, &fixture.state).await;
 
-    // Should find at least the one reference in the file
+    
     assert!(result.is_some());
 }
 
-// ============================================================================
-// Rename Tests
-// ============================================================================
+
+
+
 
 #[tokio::test]
 async fn test_prepare_rename_valid_env_var() {
@@ -231,7 +231,7 @@ async fn test_rename_env_var() {
     assert!(edit.changes.is_some(), "WorkspaceEdit should have changes");
     let changes = edit.changes.unwrap();
 
-    // Should have edits for at least one file
+    
     assert!(!changes.is_empty(), "Should have edits for at least one file");
 }
 
@@ -260,7 +260,7 @@ async fn test_rename_invalid_new_name() {
                 character: 24,
             },
         },
-        new_name: "123_INVALID".to_string(), // Invalid: starts with number
+        new_name: "123_INVALID".to_string(), 
         work_done_progress_params: Default::default(),
     };
 
@@ -269,35 +269,35 @@ async fn test_rename_invalid_new_name() {
     assert!(result.is_none(), "Rename with invalid name should return None");
 }
 
-// ============================================================================
-// Rename from .env File Tests
-// ============================================================================
+
+
+
 
 #[tokio::test]
 async fn test_prepare_rename_in_env_file() {
     let fixture = TestFixture::new().await;
 
-    // Create a .env file with a variable
-    let env_uri = fixture.create_file(".env", "API_KEY=secret123\nDB_URL=postgres://localhost");
+    
+    let env_uri = fixture.create_file(".env", "API_KEY=secret123\nDB_URL=postgres:
 
-    // Open the .env file
+    
     fixture
         .state
         .document_manager
         .open(
             env_uri.clone(),
             "plaintext".to_string(),
-            "API_KEY=secret123\nDB_URL=postgres://localhost".to_string(),
+            "API_KEY=secret123\nDB_URL=postgres:
             1,
         )
         .await;
 
-    // Prepare rename on API_KEY (position within the key name)
+    
     let params = TextDocumentPositionParams {
         text_document: TextDocumentIdentifier { uri: env_uri },
         position: Position {
             line: 0,
-            character: 3, // Within "API_KEY"
+            character: 3, 
         },
     };
 
@@ -310,17 +310,17 @@ async fn test_prepare_rename_in_env_file() {
 async fn test_rename_from_env_file() {
     let fixture = TestFixture::new().await;
 
-    // Create .env file
+    
     let env_uri = fixture.create_file(".env", "API_KEY=secret123");
 
-    // Create code files referencing API_KEY
+    
     let js_uri = fixture.create_file("app.js", "const key = process.env.API_KEY;");
     let ts_uri = fixture.create_file("config.ts", "const apiKey = process.env.API_KEY;");
 
-    // Index workspace
+    
     fixture.index_workspace().await;
 
-    // Open all files
+    
     fixture
         .state
         .document_manager
@@ -352,13 +352,13 @@ async fn test_rename_from_env_file() {
         )
         .await;
 
-    // Rename API_KEY to AUTH_TOKEN from .env file
+    
     let params = RenameParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri: env_uri.clone() },
             position: Position {
                 line: 0,
-                character: 3, // Within "API_KEY"
+                character: 3, 
             },
         },
         new_name: "AUTH_TOKEN".to_string(),
@@ -373,10 +373,10 @@ async fn test_rename_from_env_file() {
     assert!(edit.changes.is_some(), "WorkspaceEdit should have changes");
     let changes = edit.changes.unwrap();
 
-    // Should have edits for at least the .env file and possibly code files
+    
     assert!(!changes.is_empty(), "Should have edits for at least one file");
 
-    // The .env file should definitely be in the changes
+    
     assert!(
         changes.contains_key(&env_uri),
         "Changes should include the .env file"
@@ -387,17 +387,17 @@ async fn test_rename_from_env_file() {
 async fn test_rename_from_env_file_updates_code_files() {
     let fixture = TestFixture::new().await;
 
-    // Create .env file
+    
     let env_uri = fixture.create_file(".env", "DB_HOST=localhost");
 
-    // Create code file
-    let js_content = "const host = process.env.DB_HOST;\nconst url = `http://${process.env.DB_HOST}:8080`;";
+    
+    let js_content = "const host = process.env.DB_HOST;\nconst url = `http:
     let js_uri = fixture.create_file("server.js", js_content);
 
-    // Index workspace
+    
     fixture.index_workspace().await;
 
-    // Open files
+    
     fixture
         .state
         .document_manager
@@ -419,13 +419,13 @@ async fn test_rename_from_env_file_updates_code_files() {
         )
         .await;
 
-    // Rename from .env file
+    
     let params = RenameParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri: env_uri.clone() },
             position: Position {
                 line: 0,
-                character: 2, // Within "DB_HOST"
+                character: 2, 
             },
         },
         new_name: "DATABASE_HOST".to_string(),
@@ -438,32 +438,32 @@ async fn test_rename_from_env_file_updates_code_files() {
     let edit = result.unwrap();
     let changes = edit.changes.expect("Should have changes");
 
-    // Check that js file got edits (if indexed)
+    
     if changes.contains_key(&js_uri) {
         let js_edits = &changes[&js_uri];
-        // Should have edits for both DB_HOST occurrences
+        
         assert!(
             js_edits.len() >= 1,
             "JS file should have at least 1 edit"
         );
     }
 
-    // .env file should always have the edit
+    
     assert!(
         changes.contains_key(&env_uri),
         ".env file should be in changes"
     );
 }
 
-// ============================================================================
-// Workspace Index Tests
-// ============================================================================
+
+
+
 
 #[tokio::test]
 async fn test_workspace_index_stats() {
     let fixture = TestFixture::new().await;
 
-    // Create multiple files with env var references
+    
     fixture.create_file("a.js", "process.env.API_KEY");
     fixture.create_file("b.ts", "process.env.DB_URL");
     fixture.create_file("c.py", "os.environ['DEBUG']");
@@ -472,7 +472,7 @@ async fn test_workspace_index_stats() {
 
     let stats = fixture.state.workspace_index.stats();
 
-    // Should have indexed at least the code files plus .env
+    
     assert!(stats.total_files >= 1, "Should have indexed at least 1 file");
     assert!(
         stats.total_env_vars >= 1,
@@ -484,16 +484,16 @@ async fn test_workspace_index_stats() {
 async fn test_workspace_index_files_for_env_var() {
     let fixture = TestFixture::new().await;
 
-    // Create files with API_KEY references
+    
     fixture.create_file("a.js", "const k = process.env.API_KEY;");
     fixture.create_file("b.ts", "const key = process.env.API_KEY;");
-    fixture.create_file("c.js", "const port = process.env.PORT;"); // Different var
+    fixture.create_file("c.js", "const port = process.env.PORT;"); 
 
     fixture.index_workspace().await;
 
     let api_key_files = fixture.state.workspace_index.files_for_env_var("API_KEY");
 
-    // Should find files referencing API_KEY
+    
     assert!(
         api_key_files.len() >= 2,
         "Expected at least 2 files with API_KEY, found {}",
@@ -501,23 +501,23 @@ async fn test_workspace_index_files_for_env_var() {
     );
 }
 
-/// Test that renaming one env var doesn't affect similarly-named vars.
-/// For example, renaming `DEBUG` to `SOMEWHAT` should NOT affect `DEBUGHAT`.
+
+
 #[tokio::test]
 async fn test_rename_does_not_affect_similar_names() {
     let fixture = TestFixture::new().await;
 
-    // Create .env file with both DEBUG and DEBUGHAT
+    
     let env_uri = fixture.create_file(".env", "DEBUG=on\nDEBUGHAT=value");
 
-    // Create code file with both references
+    
     let js_content = "const d = process.env.DEBUG;\nconst dh = process.env.DEBUGHAT;";
     let js_uri = fixture.create_file("app.js", js_content);
 
-    // Index workspace
+    
     fixture.index_workspace().await;
 
-    // Open files
+    
     fixture
         .state
         .document_manager
@@ -539,13 +539,13 @@ async fn test_rename_does_not_affect_similar_names() {
         )
         .await;
 
-    // Rename DEBUG to SOMEWHAT (should NOT affect DEBUGHAT)
+    
     let params = RenameParams {
         text_document_position: TextDocumentPositionParams {
             text_document: TextDocumentIdentifier { uri: env_uri.clone() },
             position: Position {
                 line: 0,
-                character: 0, // On DEBUG in .env
+                character: 0, 
             },
         },
         new_name: "SOMEWHAT".to_string(),
@@ -558,23 +558,23 @@ async fn test_rename_does_not_affect_similar_names() {
     let edit = result.unwrap();
     let changes = edit.changes.expect("Should have changes");
 
-    // Check .env edits
+    
     let env_edits = changes.get(&env_uri).expect(".env should have edits");
     assert_eq!(env_edits.len(), 1, "Should only rename DEBUG, not DEBUGHAT");
 
-    // The edit should be for "DEBUG" only (at line 0, chars 0-5)
+    
     let first_edit = &env_edits[0];
     assert_eq!(first_edit.new_text, "SOMEWHAT");
     assert_eq!(first_edit.range.start.line, 0);
     assert_eq!(first_edit.range.start.character, 0);
     assert_eq!(first_edit.range.end.line, 0);
-    assert_eq!(first_edit.range.end.character, 5); // "DEBUG" is 5 chars
+    assert_eq!(first_edit.range.end.character, 5); 
 
-    // Check JS edits
+    
     if let Some(js_edits) = changes.get(&js_uri) {
         assert_eq!(js_edits.len(), 1, "Should only rename DEBUG reference, not DEBUGHAT");
         let js_edit = &js_edits[0];
         assert_eq!(js_edit.new_text, "SOMEWHAT");
-        // DEBUG is at position 22-27 in "const d = process.env.DEBUG;"
+        
     }
 }

@@ -17,7 +17,7 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_hover_direct_access() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 const api = process.env.API_KEY;
 "#;
@@ -25,7 +25,7 @@ const api = process.env.API_KEY;
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // Hover on "API_KEY" (line 1, around char 24-31)
+    
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(1, 26));
     assert!(ref1.is_some(), "Should find reference for direct access");
     assert_eq!(ref1.unwrap().name, "API_KEY");
@@ -34,7 +34,7 @@ const api = process.env.API_KEY;
 #[tokio::test]
 async fn test_hover_object_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 const env = process.env;
 const secret = env.SECRET;
@@ -43,7 +43,7 @@ const secret = env.SECRET;
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // Hover on "SECRET" via alias (line 2)
+    
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 22));
     assert!(ref1.is_some(), "Should find reference via object alias");
     assert_eq!(ref1.unwrap().name, "SECRET");
@@ -52,7 +52,7 @@ const secret = env.SECRET;
 #[tokio::test]
 async fn test_hover_subscript_access() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 const env = process.env;
 const db = env["DATABASE_URL"];
@@ -61,7 +61,7 @@ const db = env["DATABASE_URL"];
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // Hover on "DATABASE_URL" (line 2, inside the string)
+    
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 20));
     assert!(ref1.is_some(), "Should find reference via subscript access");
     assert_eq!(ref1.unwrap().name, "DATABASE_URL");
@@ -70,13 +70,13 @@ const db = env["DATABASE_URL"];
 #[tokio::test]
 async fn test_repro_integration_js_single_line() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
     let content = "const a = process.env.DB_URL;";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)
         .await;
 
-    // Hover on "DB_URL" (line 0, char 22)
+    
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(0, 22));
     assert!(
         ref1.is_some(),

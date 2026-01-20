@@ -1,4 +1,4 @@
-//! Hover tests for LSP server
+
 
 use crate::harness::{LspTestClient, TempWorkspace};
 use std::thread;
@@ -16,10 +16,10 @@ fn test_hover_direct_env_reference_js() {
 
     client.open_document(&uri, "javascript", content).expect("Failed to open document");
 
-    // Wait for analysis
+    
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "DB_URL" (character 24 is start of DB_URL)
+    
     let hover = client.hover(&uri, 0, 24).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for DB_URL");
@@ -28,7 +28,7 @@ fn test_hover_direct_env_reference_js() {
     let value = contents.get("value").expect("Missing value").as_str().expect("Value not string");
 
     assert!(value.contains("DB_URL"), "Hover should contain variable name");
-    assert!(value.contains("postgres://"), "Hover should contain variable value");
+    assert!(value.contains("postgres:
 
     client.shutdown().expect("Shutdown failed");
 }
@@ -46,7 +46,7 @@ fn test_hover_bracket_notation_js() {
     client.open_document(&uri, "javascript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "API_KEY" inside brackets
+    
     let hover = client.hover(&uri, 0, 26).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for API_KEY");
@@ -72,7 +72,7 @@ fn test_hover_destructuring() {
     client.open_document(&uri, "javascript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "PORT" in destructuring
+    
     let hover = client.hover(&uri, 0, 8).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for PORT");
@@ -98,7 +98,7 @@ fn test_hover_object_alias_chain() {
     client.open_document(&uri, "javascript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "PORT" via alias 'e'
+    
     let hover = client.hover(&uri, 0, 40).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for PORT via alias");
@@ -126,7 +126,7 @@ fn test_hover_undefined_returns_null() {
 
     let hover = client.hover(&uri, 0, 15).expect("Hover request failed");
 
-    // Undefined vars should return null hover (no value to show)
+    
     assert!(hover.is_null(), "Undefined vars should return null hover");
 
     client.shutdown().expect("Shutdown failed");
@@ -145,7 +145,7 @@ fn test_hover_python() {
     client.open_document(&uri, "python", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "DB_URL" in Python
+    
     let hover = client.hover(&uri, 1, 18).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for Python");
@@ -166,7 +166,7 @@ fn test_hover_rust() {
     client.open_document(&uri, "rust", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "PORT"
+    
     let hover = client.hover(&uri, 0, 28).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for Rust");
@@ -189,7 +189,7 @@ func main() { os.Getenv("DEBUG") }"#;
     client.open_document(&uri, "go", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "DEBUG"
+    
     let hover = client.hover(&uri, 2, 26).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for Go");
@@ -210,7 +210,7 @@ fn test_hover_typescript() {
     client.open_document(&uri, "typescript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Hover on "API_KEY"
+    
     let hover = client.hover(&uri, 0, 38).expect("Hover request failed");
 
     assert!(!hover.is_null(), "Expected hover result for TypeScript");

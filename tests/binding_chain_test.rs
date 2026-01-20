@@ -1,10 +1,10 @@
-//! Tests for the new binding resolution engine.
-//!
-//! Tests the 4 target patterns:
-//! 1. Multi-level binding chains
-//! 2. Object alias + destructure
-//! 3. Re-assignment through aliases
-//! 4. Scope isolation
+
+
+
+
+
+
+
 
 use abundantis::Abundantis;
 use ecolog_lsp::analysis::{
@@ -58,10 +58,10 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
     )
 }
 
-/// Pattern 1: Multi-level binding chains
-/// const a = process.env.DB_URL;
-/// const b = a;
-/// console.log(b);  // ✓ Must resolve to DB_URL
+
+
+
+
 #[tokio::test]
 async fn test_multi_level_binding_chain() {
     let timestamp = SystemTime::now()
@@ -71,10 +71,10 @@ async fn test_multi_level_binding_chain() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_chain_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres://localhost:5432").unwrap();
+    writeln!(env_file, "DB_URL=postgres:
 
     let state = setup_test_state(&temp_dir).await;
 
@@ -97,7 +97,7 @@ b;"#;
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'b' (line 2, col 0)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -125,10 +125,10 @@ b;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Pattern 2: Object alias + destructure
-/// const c = process.env;
-/// const { DB_URL } = c;
-/// DB_URL;  // ✓ Must resolve to DB_URL
+
+
+
+
 #[tokio::test]
 async fn test_object_alias_destructure() {
     let timestamp = SystemTime::now()
@@ -140,7 +140,7 @@ async fn test_object_alias_destructure() {
 
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres://localhost:5432").unwrap();
+    writeln!(env_file, "DB_URL=postgres:
 
     let state = setup_test_state(&temp_dir).await;
 
@@ -163,7 +163,7 @@ DB_URL;"#;
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'DB_URL' usage (line 2, col 0)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -191,11 +191,11 @@ DB_URL;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Pattern 3: Re-assignment through aliases with rename
-/// const c = process.env;
-/// let d = c;
-/// let { ALPHA: alpha } = d;
-/// alpha;  // ✓ Must resolve to ALPHA
+
+
+
+
+
 #[tokio::test]
 async fn test_reassignment_through_alias() {
     let timestamp = SystemTime::now()
@@ -231,7 +231,7 @@ alpha;"#;
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'alpha' usage (line 3, col 0)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -259,12 +259,12 @@ alpha;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Pattern 4: Scope isolation
-/// function test() {
-///   const { DB_URL: something } = process.env;
-///   console.log(something);  // ✓ something → DB_URL
-/// }
-/// something;  // ✗ NOT linked - out of scope
+
+
+
+
+
+
 #[tokio::test]
 async fn test_scope_isolation_detailed() {
     let timestamp = SystemTime::now()
@@ -276,7 +276,7 @@ async fn test_scope_isolation_detailed() {
 
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres://localhost:5432").unwrap();
+    writeln!(env_file, "DB_URL=postgres:
 
     let state = setup_test_state(&temp_dir).await;
 
@@ -301,7 +301,7 @@ something;"#;
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'something' inside function (line 2, col 2)
+    
     let hover_inside = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -326,7 +326,7 @@ something;"#;
         hover_str
     );
 
-    // Hover on 'something' outside function (line 4, col 0)
+    
     let hover_outside = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {

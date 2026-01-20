@@ -1,12 +1,6 @@
-//! Structured error types for the LSP server.
-//!
-//! This module provides a unified error type for LSP operations,
-//! enabling better error logging and debugging.
-
 use thiserror::Error;
 use tower_lsp::lsp_types::Position;
 
-/// Structured error type for LSP operations.
 #[derive(Debug, Error)]
 pub enum LspError {
     #[error("Parse failed for {uri}: {reason}")]
@@ -36,24 +30,20 @@ pub enum LspError {
 }
 
 impl LspError {
-    /// Log the error at debug level.
     pub fn log_debug(&self) {
         tracing::debug!("LSP Error: {}", self);
     }
 
-    /// Log the error at warn level.
     pub fn log_warn(&self) {
         tracing::warn!("LSP Error: {}", self);
     }
 
-    /// Create a DocumentNotFound error from a URL.
     pub fn document_not_found(uri: &tower_lsp::lsp_types::Url) -> Self {
         Self::DocumentNotFound {
             uri: uri.to_string(),
         }
     }
 
-    /// Create an InvalidPosition error.
     pub fn invalid_position(uri: &tower_lsp::lsp_types::Url, position: Position) -> Self {
         Self::InvalidPosition {
             uri: uri.to_string(),
@@ -62,7 +52,6 @@ impl LspError {
         }
     }
 
-    /// Create a FeatureDisabled error.
     pub fn feature_disabled(feature: &str) -> Self {
         Self::FeatureDisabled {
             feature: feature.to_string(),

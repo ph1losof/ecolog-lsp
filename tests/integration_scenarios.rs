@@ -5,22 +5,23 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use tower_lsp::lsp_types::*;
 
-// Test that Abundantis refresh() picks up files created after initial scan
 #[tokio::test]
 async fn test_scenario_multiple_env_files() {
     let fixture = TestFixture::new().await;
 
-    // Create .env.local with override
     let local_path = fixture.temp_dir.join(".env.local");
     let mut f = std::fs::File::create(&local_path).unwrap();
     writeln!(f, "PORT=9090").unwrap();
     writeln!(f, "NEW_VAR=custom").unwrap();
 
-    // Clear active files to force re-scan
     fixture.state.core.clear_active_files();
 
-    // Refresh to pick up new files
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.expect("Refresh failed");
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .expect("Refresh failed");
 
     let uri = fixture.create_file("test.js", "process.env.PORT");
     fixture
@@ -34,7 +35,6 @@ async fn test_scenario_multiple_env_files() {
         )
         .await;
 
-    // Hover PORT - should be 9090 (override)
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -55,7 +55,6 @@ async fn test_scenario_multiple_env_files() {
         h_str
     );
 
-    // Hover NEW_VAR
     fixture
         .state
         .document_manager
@@ -90,13 +89,11 @@ async fn test_scenario_multiple_env_files() {
 async fn test_scenario_env_syntax_diagnostics() {
     let fixture = TestFixture::new().await;
 
-    // Create malformed .env
     let env_path = fixture.temp_dir.join(".env.bad");
     let mut f = std::fs::File::create(&env_path).unwrap();
-    writeln!(f, "BAD LINE").unwrap(); // Missing =
+    writeln!(f, "BAD LINE").unwrap();
     let uri = Url::from_file_path(&env_path).unwrap();
 
-    // Configure to treat .env.bad as env file (for linter)
     {
         let manager = fixture.state.config.clone();
         let config_arc = manager.get_config();
@@ -123,14 +120,19 @@ async fn test_scenario_env_syntax_diagnostics() {
 #[tokio::test]
 async fn test_scenario_quoted_values() {
     let fixture = TestFixture::new().await;
-    // Append quoted var to .env
+
     let env_path = fixture.temp_dir.join(".env");
     {
         let mut f = OpenOptions::new().append(true).open(env_path).unwrap();
         writeln!(f, "QUOTED=\"some value\"").unwrap();
     }
 
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
     let uri = fixture.create_file("test.py", "os.environ['QUOTED']");
     fixture
@@ -157,12 +159,11 @@ async fn test_scenario_quoted_values() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("some value")); // value should not contain quotes
+    assert!(format!("{:?}", hover.unwrap()).contains("some value"));
 }
 
 #[tokio::test]
 async fn test_scenario_commented_env() {
-    // Ensuring we don't pick up commented out vars
     let fixture = TestFixture::new().await;
     let env_path = fixture.temp_dir.join(".env");
     {
@@ -170,7 +171,12 @@ async fn test_scenario_commented_env() {
         writeln!(f, "# IGNORE_ME=true").unwrap();
     }
 
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
     let uri = fixture.create_file("test.js", "process.env.IGNORE_ME");
     fixture
@@ -196,13 +202,11 @@ async fn test_scenario_commented_env() {
     )
     .await;
 
-    // Hover returns None for undefined vars (diagnostic warning is used instead)
     assert!(
         hover.is_none(),
         "Hover should return None for undefined variables"
     );
 
-    // Verify diagnostic is generated for undefined var
     let diags = compute_diagnostics(&uri, &fixture.state).await;
     assert!(
         diags.iter().any(|d| d.message.contains("not defined")),
@@ -210,7 +214,6 @@ async fn test_scenario_commented_env() {
     );
 }
 
-// Test that Abundantis refresh() picks up changes to existing files (empty value)
 #[tokio::test]
 async fn test_scenario_empty_value() {
     let fixture = TestFixture::new().await;
@@ -220,9 +223,13 @@ async fn test_scenario_empty_value() {
         writeln!(f, "EMPTY=").unwrap();
     }
 
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
-    // Use JavaScript instead of Go for simpler pattern matching
     let uri = fixture.create_file("test.js", "process.env.EMPTY");
     fixture
         .state
@@ -239,7 +246,7 @@ async fn test_scenario_empty_value() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 14), // Position inside "EMPTY"
+                position: Position::new(0, 14),
             },
             work_done_progress_params: Default::default(),
         },
@@ -251,7 +258,7 @@ async fn test_scenario_empty_value() {
         hover.is_some(),
         "Hover should find EMPTY variable with empty value"
     );
-    // Value should be empty string
+
     let h_str = format!("{:?}", hover.unwrap());
     assert!(
         h_str.contains("Value**: ``") || h_str.contains("Value**: \"\""),
@@ -262,8 +269,6 @@ async fn test_scenario_empty_value() {
 
 #[tokio::test]
 async fn test_scenario_multiline_value() {
-    // EDF supports multiline? Standard dotenv usually does with quotes.
-    // If korni supports it.
     let fixture = TestFixture::new().await;
     let env_path = fixture.temp_dir.join(".env");
     {
@@ -271,7 +276,12 @@ async fn test_scenario_multiline_value() {
         writeln!(f, "MULTI=\"line1\\nline2\"").unwrap();
     }
 
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
     let uri = fixture.create_file("test.rs", "std::env::var(\"MULTI\")");
     fixture
@@ -301,10 +311,8 @@ async fn test_scenario_multiline_value() {
     assert!(format!("{:?}", hover.unwrap()).contains("line1"));
 }
 
-// More diagnostics tests
 #[tokio::test]
 async fn test_scenario_forbidden_whitespace() {
-    // EDF rule: KEY =VALUE is bad?
     let fixture = TestFixture::new().await;
     let env_path = fixture.temp_dir.join(".env.bad2");
     let mut f = std::fs::File::create(&env_path).unwrap();
@@ -338,8 +346,6 @@ async fn test_scenario_forbidden_whitespace() {
         );
     }
 }
-
-// --- Config & Feature Tests ---
 
 #[tokio::test]
 async fn test_feature_hover_disabled() {
@@ -415,12 +421,10 @@ async fn test_feature_completion_disabled() {
     assert!(completion.is_none());
 }
 
-// Tests case sensitivity behavior of env var lookup
-// db_url (lowercase) should NOT match DB_URL (uppercase)
 #[tokio::test]
 async fn test_case_sensitivity() {
     let fixture = TestFixture::new().await;
-    let uri = fixture.create_file("test.js", "process.env.db_url"); // lower case
+    let uri = fixture.create_file("test.js", "process.env.db_url");
     fixture
         .state
         .document_manager
@@ -444,14 +448,12 @@ async fn test_case_sensitivity() {
     )
     .await;
 
-    // db_url doesn't exist (only DB_URL does), so hover should be None
     assert!(
         hover.is_none(),
         "db_url (lowercase) should not match DB_URL"
     );
 }
 
-// Test that Abundantis refresh() picks up files created after initial scan and active file selection works
 #[tokio::test]
 async fn test_active_file_selection() {
     let fixture = TestFixture::new().await;
@@ -459,9 +461,13 @@ async fn test_active_file_selection() {
     let mut f = std::fs::File::create(&prod_path).unwrap();
     writeln!(f, "MODE=PROD").unwrap();
 
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
-    // Select .env.production
     fixture.state.core.set_active_files(&[".env.production"]);
 
     let uri = fixture.create_file("test.js", "process.env.MODE");
@@ -495,11 +501,10 @@ async fn test_active_file_selection() {
 #[tokio::test]
 async fn test_list_variables_command() {
     let fixture = TestFixture::new().await;
-    // Create a real file for the command to work with
+
     let test_file = fixture.temp_dir.join("test.txt");
     std::fs::write(&test_file, "test").ok();
 
-    // Command handler integration
     let params = ExecuteCommandParams {
         command: "ecolog.listEnvVariables".to_string(),
         arguments: vec![],
@@ -510,13 +515,13 @@ async fn test_list_variables_command() {
     assert!(res.is_some());
     let json = res.unwrap();
     let vars = json.get("variables").unwrap().as_array().unwrap();
-    assert!(vars.len() >= 4); // DB_URL, API_KEY, DEBUG, PORT
+    assert!(vars.len() >= 4);
 }
 
 #[tokio::test]
 async fn test_list_env_files_command() {
     let fixture = TestFixture::new().await;
-    // Need to enable File source for this command now
+
     {
         let config_arc = fixture.state.config.get_config();
         let mut config = config_arc.write().await;

@@ -1,4 +1,4 @@
-//! Completion tests for LSP server
+
 
 use crate::harness::{LspTestClient, TempWorkspace};
 use std::thread;
@@ -17,7 +17,7 @@ fn test_completion_trigger_character() {
     client.open_document(&uri, "javascript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Completion after "process.env."
+    
     let completion = client.completion(&uri, 0, 12).expect("Completion request failed");
 
     assert!(!completion.is_null(), "Expected completion items");
@@ -25,7 +25,7 @@ fn test_completion_trigger_character() {
     let items = completion.as_array().expect("Completion should be array");
     assert!(!items.is_empty(), "Should have completion items");
 
-    // Check for expected env vars
+    
     let labels: Vec<&str> = items
         .iter()
         .filter_map(|i| i.get("label")?.as_str())
@@ -52,7 +52,7 @@ fn test_completion_on_alias() {
     client.open_document(&uri, "typescript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Completion after "env."
+    
     let completion = client.completion(&uri, 0, 29).expect("Completion request failed");
 
     assert!(!completion.is_null(), "Expected completion items on alias");
@@ -84,7 +84,7 @@ fn test_completion_item_documentation() {
         .find(|i| i.get("label").map(|l| l == "DB_URL").unwrap_or(false))
         .expect("Should have DB_URL completion");
 
-    // Should have documentation with value
+    
     let doc = db_url_item.get("documentation");
     assert!(doc.is_some(), "DB_URL completion should have documentation");
 
@@ -96,7 +96,7 @@ fn test_completion_item_documentation() {
         .expect("Documentation value should be string");
 
     assert!(
-        doc_value.contains("postgres://"),
+        doc_value.contains("postgres:
         "Documentation should contain the value"
     );
 
@@ -125,7 +125,7 @@ completion = false
 
     let completion = client.completion(&uri, 0, 12).expect("Completion request failed");
 
-    // When completion is disabled, should return null or empty
+    
     assert!(
         completion.is_null() || completion.as_array().map(|a| a.is_empty()).unwrap_or(false),
         "Completion should be null or empty when disabled"
@@ -141,16 +141,16 @@ fn test_completion_no_results_outside_env() {
     client.initialize().expect("Initialize failed");
 
     let uri = workspace.file_uri("test.js");
-    let content = "const x = 1; // not env";
+    let content = "const x = 1; 
     workspace.create_file("test.js", content);
 
     client.open_document(&uri, "javascript", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Completion in regular code (not after process.env.)
+    
     let completion = client.completion(&uri, 0, 5).expect("Completion request failed");
 
-    // Should return null or empty for non-env context
+    
     assert!(
         completion.is_null() || completion.as_array().map(|a| a.is_empty()).unwrap_or(false),
         "Should not provide completion outside env context"
@@ -172,11 +172,11 @@ fn test_completion_python() {
     client.open_document(&uri, "python", content).expect("Failed to open document");
     thread::sleep(Duration::from_millis(300));
 
-    // Completion inside environ['...']
+    
     let _completion = client.completion(&uri, 1, 13).expect("Completion request failed");
 
-    // Python completion may work differently, but shouldn't crash
-    // The important thing is the request completes without error
+    
+    
 
     client.shutdown().expect("Shutdown failed");
 }

@@ -19,7 +19,7 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_js_object_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
         const env = process.env;
         const api = env.API_KEY; 
@@ -29,13 +29,13 @@ async fn test_js_object_alias() {
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // L2: const api = env.API_KEY; (24 is col)
+    
     let ref1 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(2, 24))
         .expect("Should find ref at L2");
     assert_eq!(ref1.name, "API_KEY");
 
-    // L3: const secret = env["SECRET"];
+    
     let ref2 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(3, 30))
         .expect("Should find ref at L3");
@@ -45,7 +45,7 @@ async fn test_js_object_alias() {
 #[tokio::test]
 async fn test_python_module_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.py").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 import os as o
 val1 = o.environ["VAR1"]
@@ -55,13 +55,13 @@ val2 = o.getenv("VAR2")
         .open(uri.clone(), "python".into(), content.to_string(), 1)
         .await;
 
-    // L2: val1 = o.environ["VAR1"]
+    
     let ref1 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(2, 20))
         .expect("Should find VAR1 at L2");
     assert_eq!(ref1.name, "VAR1");
 
-    // L3: val2 = o.getenv("VAR2")
+    
     let ref2 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(3, 19))
         .expect("Should find VAR2 at L3");
@@ -71,7 +71,7 @@ val2 = o.getenv("VAR2")
 #[tokio::test]
 async fn test_python_object_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test_obj.py").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 from os import environ as e
 val = e["VAR"]
@@ -80,7 +80,7 @@ val = e["VAR"]
         .open(uri.clone(), "python".into(), content.to_string(), 1)
         .await;
 
-    // L2: val = e["VAR"]
+    
     let ref1 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(2, 10))
         .expect("Should find VAR at L2");
@@ -90,7 +90,7 @@ val = e["VAR"]
 #[tokio::test]
 async fn test_rust_module_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.rs").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 use std::env as e;
 fn main() {
@@ -100,7 +100,7 @@ fn main() {
     doc_manager
         .open(uri.clone(), "rust".into(), content.to_string(), 1)
         .await;
-    // L3: let v = e::var("VAR").unwrap();
+    
     let ref1 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(3, 22))
         .expect("Should find VAR at L3");
@@ -110,7 +110,7 @@ fn main() {
 #[tokio::test]
 async fn test_go_module_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.go").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 package main
 import (
@@ -125,8 +125,8 @@ func main() {
         .open(uri.clone(), "go".into(), content.to_string(), 1)
         .await;
 
-    // L7: val := e.Getenv("VAR")
-    // Col start around 21. Check 22.
+    
+    
     let ref1 = doc_manager
         .get_env_reference_cloned(&uri, Position::new(7, 22))
         .expect("Should find VAR at L7");
@@ -136,25 +136,25 @@ func main() {
 #[tokio::test]
 async fn test_scope_isolation() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///scope.js").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 function a() {
     const env = process.env;
     env.A;
 }
 function b() {
-    env.B; // Should NOT be detected as reference
+    env.B; 
 }
 "#;
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // env.A should be valid
+    
     let ref_a = doc_manager.get_env_reference_cloned(&uri, Position::new(3, 8));
     assert!(ref_a.is_some(), "Should detect env.A in scope");
 
-    // env.B should NOT be valid
+    
     let ref_b = doc_manager.get_env_reference_cloned(&uri, Position::new(6, 8));
     assert!(ref_b.is_none(), "Should NOT detect env.B out of scope");
 }

@@ -6,11 +6,9 @@ use serde_json::json;
 use std::fs::File;
 use std::io::Write;
 use tower_lsp::lsp_types::{
-    ExecuteCommandParams, HoverParams, Position, TextDocumentIdentifier,
-    TextDocumentPositionParams,
+    ExecuteCommandParams, HoverParams, Position, TextDocumentIdentifier, TextDocumentPositionParams,
 };
 
-/// Helper to set interpolation via command
 async fn set_interpolation(fixture: &TestFixture, enabled: bool) -> Option<serde_json::Value> {
     let params = ExecuteCommandParams {
         command: "ecolog.interpolation.set".to_string(),
@@ -20,7 +18,6 @@ async fn set_interpolation(fixture: &TestFixture, enabled: bool) -> Option<serde
     handle_execute_command(params, &fixture.state).await
 }
 
-/// Helper to get interpolation state via command
 async fn get_interpolation(fixture: &TestFixture) -> Option<serde_json::Value> {
     let params = ExecuteCommandParams {
         command: "ecolog.interpolation.get".to_string(),
@@ -30,7 +27,6 @@ async fn get_interpolation(fixture: &TestFixture) -> Option<serde_json::Value> {
     handle_execute_command(params, &fixture.state).await
 }
 
-/// Helper to get hover at position
 async fn get_hover(
     fixture: &TestFixture,
     uri: &tower_lsp::lsp_types::Url,
@@ -53,8 +49,6 @@ async fn get_hover(
 fn extract_hover_value(hover: &tower_lsp::lsp_types::Hover) -> Option<String> {
     match &hover.contents {
         tower_lsp::lsp_types::HoverContents::Markup(markup) => {
-            // Extract value from markdown format: **Value**: `value`
-            // Simple string parsing instead of regex
             let content = &markup.value;
             if let Some(start) = content.find("**Value**: `") {
                 let value_start = start + "**Value**: `".len();
@@ -67,10 +61,6 @@ fn extract_hover_value(hover: &tower_lsp::lsp_types::Hover) -> Option<String> {
         _ => None,
     }
 }
-
-// =============================================================================
-// Test: Interpolation get command returns current state
-// =============================================================================
 
 #[tokio::test]
 async fn test_get_interpolation_returns_enabled_by_default() {
@@ -87,26 +77,19 @@ async fn test_get_interpolation_returns_enabled_by_default() {
     );
 }
 
-// =============================================================================
-// Test: Interpolation set command changes state
-// =============================================================================
-
 #[tokio::test]
 async fn test_set_interpolation_changes_state() {
     let fixture = TestFixture::new().await;
 
-    // Initially enabled
     let result = get_interpolation(&fixture).await.unwrap();
     assert_eq!(result.get("enabled").and_then(|v| v.as_bool()), Some(true));
 
-    // Disable
     let result = set_interpolation(&fixture, false).await;
     assert!(result.is_some());
     let result = result.unwrap();
     assert_eq!(result.get("success").and_then(|v| v.as_bool()), Some(true));
     assert_eq!(result.get("enabled").and_then(|v| v.as_bool()), Some(false));
 
-    // Verify state changed
     let result = get_interpolation(&fixture).await.unwrap();
     assert_eq!(
         result.get("enabled").and_then(|v| v.as_bool()),
@@ -114,12 +97,10 @@ async fn test_set_interpolation_changes_state() {
         "Interpolation should now be disabled"
     );
 
-    // Re-enable
     let result = set_interpolation(&fixture, true).await.unwrap();
     assert_eq!(result.get("success").and_then(|v| v.as_bool()), Some(true));
     assert_eq!(result.get("enabled").and_then(|v| v.as_bool()), Some(true));
 
-    // Verify state changed back
     let result = get_interpolation(&fixture).await.unwrap();
     assert_eq!(
         result.get("enabled").and_then(|v| v.as_bool()),
@@ -128,15 +109,10 @@ async fn test_set_interpolation_changes_state() {
     );
 }
 
-// =============================================================================
-// Test: Interpolation affects hover values
-// =============================================================================
-
 #[tokio::test]
 async fn test_interpolation_affects_hover_values() {
     let fixture = TestFixture::new().await;
 
-    // Create env file with interpolated variable
     let env_path = fixture.temp_dir.join(".env.interpolation");
     {
         let mut env_file = File::create(&env_path).unwrap();
@@ -144,10 +120,13 @@ async fn test_interpolation_affects_hover_values() {
         writeln!(env_file, "DATA_PATH=${{BASE_DIR}}/data").unwrap();
     }
 
-    // Refresh to pick up new file
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
-    // Create JS file that uses the interpolated variable
     let uri = fixture.create_file("test.js", "process.env.DATA_PATH");
     fixture
         .state
@@ -160,7 +139,6 @@ async fn test_interpolation_affects_hover_values() {
         )
         .await;
 
-    // With interpolation enabled, should show resolved value
     let hover = get_hover(&fixture, &uri, 0, 20).await;
     if let Some(hover) = hover {
         let value = extract_hover_value(&hover);
@@ -173,13 +151,15 @@ async fn test_interpolation_affects_hover_values() {
         }
     }
 
-    // Disable interpolation
     set_interpolation(&fixture, false).await;
 
-    // Force cache clear and refresh
-    fixture.state.core.refresh(abundantis::RefreshOptions::reset_all()).await.unwrap();
+    fixture
+        .state
+        .core
+        .refresh(abundantis::RefreshOptions::reset_all())
+        .await
+        .unwrap();
 
-    // With interpolation disabled, should show raw value
     let hover = get_hover(&fixture, &uri, 0, 20).await;
     if let Some(hover) = hover {
         let value = extract_hover_value(&hover);
@@ -193,36 +173,30 @@ async fn test_interpolation_affects_hover_values() {
     }
 }
 
-// =============================================================================
-// Test: Boolean argument parsing
-// =============================================================================
-
 #[tokio::test]
 async fn test_boolean_argument_parsing() {
     let fixture = TestFixture::new().await;
 
-    // Test with explicit true
     let params = ExecuteCommandParams {
         command: "ecolog.interpolation.set".to_string(),
         arguments: vec![json!(true)],
         work_done_progress_params: Default::default(),
     };
-    let result = handle_execute_command(params, &fixture.state).await.unwrap();
+    let result = handle_execute_command(params, &fixture.state)
+        .await
+        .unwrap();
     assert_eq!(result.get("enabled").and_then(|v| v.as_bool()), Some(true));
 
-    // Test with explicit false
     let params = ExecuteCommandParams {
         command: "ecolog.interpolation.set".to_string(),
         arguments: vec![json!(false)],
         work_done_progress_params: Default::default(),
     };
-    let result = handle_execute_command(params, &fixture.state).await.unwrap();
+    let result = handle_execute_command(params, &fixture.state)
+        .await
+        .unwrap();
     assert_eq!(result.get("enabled").and_then(|v| v.as_bool()), Some(false));
 
-    // Verify the state is actually false
     let result = get_interpolation(&fixture).await.unwrap();
-    assert_eq!(
-        result.get("enabled").and_then(|v| v.as_bool()),
-        Some(false)
-    );
+    assert_eq!(result.get("enabled").and_then(|v| v.as_bool()), Some(false));
 }

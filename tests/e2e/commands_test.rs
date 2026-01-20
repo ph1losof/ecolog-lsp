@@ -1,5 +1,3 @@
-//! Execute command tests for LSP server
-
 use crate::harness::{LspTestClient, TempWorkspace};
 use serde_json::json;
 use std::thread;
@@ -21,7 +19,10 @@ fn test_command_list_env_variables() {
         .as_array()
         .expect("Variables should be array");
 
-    assert!(variables.len() >= 4, "Should have at least 4 variables (DB_URL, API_KEY, DEBUG, PORT)");
+    assert!(
+        variables.len() >= 4,
+        "Should have at least 4 variables (DB_URL, API_KEY, DEBUG, PORT)"
+    );
 
     let names: Vec<&str> = variables
         .iter()
@@ -51,7 +52,9 @@ fn test_command_file_list() {
         .expect("Files should be array");
 
     assert!(
-        files.iter().any(|f| f.as_str().map(|s| s.contains(".env")).unwrap_or(false)),
+        files
+            .iter()
+            .any(|f| f.as_str().map(|s| s.contains(".env")).unwrap_or(false)),
         "Should list .env file"
     );
 
@@ -66,14 +69,17 @@ fn test_command_set_active_file() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    // Wait for file discovery
     thread::sleep(Duration::from_millis(300));
 
     let result = client
         .execute_command("ecolog.file.setActive", vec![json!(".env.production")])
         .expect("Command execution failed");
 
-    assert_eq!(result.get("success"), Some(&json!(true)), "setActive should succeed");
+    assert_eq!(
+        result.get("success"),
+        Some(&json!(true)),
+        "setActive should succeed"
+    );
 
     client.shutdown().expect("Shutdown failed");
 }
@@ -94,7 +100,11 @@ fn test_command_get_variable() {
         "Should return correct variable name"
     );
     assert!(
-        result.get("value").and_then(|v| v.as_str()).map(|s| s.contains("postgres")).unwrap_or(false),
+        result
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(|s| s.contains("postgres"))
+            .unwrap_or(false),
         "Should return correct value"
     );
 
@@ -111,7 +121,6 @@ fn test_command_get_variable_not_found() {
         .execute_command("ecolog.variable.get", vec![json!("NONEXISTENT_VAR")])
         .expect("Command execution failed");
 
-    // Should return null or error indication
     assert!(
         result.is_null() || result.get("error").is_some() || result.get("value").is_none(),
         "Nonexistent variable should indicate not found"
@@ -126,7 +135,6 @@ fn test_command_interpolation_toggle() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    // Disable interpolation
     let result = client
         .execute_command("ecolog.interpolation.set", vec![json!(false)])
         .expect("Command execution failed");
@@ -134,14 +142,12 @@ fn test_command_interpolation_toggle() {
     assert_eq!(result.get("success"), Some(&json!(true)));
     assert_eq!(result.get("enabled"), Some(&json!(false)));
 
-    // Get interpolation state
     let get_result = client
         .execute_command("ecolog.interpolation.get", vec![])
         .expect("Command execution failed");
 
     assert_eq!(get_result.get("enabled"), Some(&json!(false)));
 
-    // Re-enable
     let result = client
         .execute_command("ecolog.interpolation.set", vec![json!(true)])
         .expect("Command execution failed");
@@ -161,8 +167,6 @@ fn test_command_workspace_list() {
         .execute_command("ecolog.workspace.list", vec![])
         .expect("Command execution failed");
 
-    // Should return workspace info
-    // The exact structure depends on implementation
     assert!(!result.is_null(), "Should return workspace info");
 
     client.shutdown().expect("Shutdown failed");
@@ -208,30 +212,31 @@ fn test_unknown_command_returns_null() {
 #[test]
 fn test_command_generate_env_example() {
     let workspace = TempWorkspace::new();
-    workspace.create_file("app.js", "const url = process.env.DB_URL;\nconst key = process.env.API_KEY;");
+    workspace.create_file(
+        "app.js",
+        "const url = process.env.DB_URL;\nconst key = process.env.API_KEY;",
+    );
 
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
     let uri = workspace.file_uri("app.js");
     client
-        .open_document(&uri, "javascript", "const url = process.env.DB_URL;\nconst key = process.env.API_KEY;")
+        .open_document(
+            &uri,
+            "javascript",
+            "const url = process.env.DB_URL;\nconst key = process.env.API_KEY;",
+        )
         .expect("Failed to open document");
 
-    // Wait for analysis
     thread::sleep(Duration::from_millis(500));
 
     let result = client
         .execute_command("ecolog.generateEnvExample", vec![])
         .expect("Command execution failed");
 
-    // The command should execute without error - result format may vary
-    // The command is considered working if it returns any valid response
     if !result.is_null() {
-        // If we have content, verify it's well-formed
         if let Some(content) = result.get("content").and_then(|c| c.as_str()) {
-            // Content can be empty if no env vars are tracked in .env files yet
-            // Just verify it's a valid string
             assert!(content.len() < 100000, "Content should be reasonable size");
         }
     }

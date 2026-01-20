@@ -16,16 +16,16 @@ struct AnalysisResult {
     binding_graph: BindingGraph,
 }
 
-/// Unified document entry containing both state and analysis results.
-/// This prevents desynchronization between document state and binding graph.
-/// The binding_graph is wrapped in Arc for O(1) cloning in methods like check_completion().
+
+
+
 pub struct DocumentEntry {
     pub state: DocumentState,
     pub binding_graph: Arc<BindingGraph>,
 }
 
 pub struct DocumentManager {
-    /// Unified document storage (state + binding graph together).
+    
     documents: DashMap<Url, DocumentEntry>,
     query_engine: Arc<QueryEngine>,
     languages: Arc<LanguageRegistry>,
@@ -42,7 +42,7 @@ impl DocumentManager {
 
     pub async fn open(&self, uri: Url, language_id: String, content: String, version: i32) {
 
-        // Detect language
+        
         let lang_opt = self
             .languages
             .get_by_language_id(&language_id)
@@ -69,7 +69,7 @@ impl DocumentManager {
             Arc::new(BindingGraph::new())
         };
 
-        // Atomic insert of unified entry
+        
         self.documents.insert(
             uri.clone(),
             DocumentEntry {
@@ -85,10 +85,10 @@ impl DocumentManager {
         changes: Vec<TextDocumentContentChangeEvent>,
         version: i32,
     ) {
-        // 1. Update content and get snapshot (short lock)
+        
         let (content, language_id) = {
             if let Some(mut entry) = self.documents.get_mut(uri) {
-                // Apply changes - assuming FULL sync mode
+                
                 for change in changes {
                     if change.range.is_none() {
                         entry.state.content = change.text;
@@ -101,7 +101,7 @@ impl DocumentManager {
             }
         };
 
-        // 2. Analyze without lock
+        
         let lang_opt = self
             .languages
             .get_by_language_id(&language_id)
@@ -114,7 +114,7 @@ impl DocumentManager {
                 binding_graph,
             } = self.analyze_content(&content, lang.as_ref()).await;
 
-            // 3. Apply results atomically if version matches (short lock)
+            
             if let Some(mut entry) = self.documents.get_mut(uri) {
                 if entry.state.version == version {
                     entry.state.tree = tree;
@@ -125,8 +125,8 @@ impl DocumentManager {
         }
     }
 
-    /// Remove a document when it's closed by the client.
-    /// This prevents memory leaks from accumulated document state.
+    
+    
     pub fn close(&self, uri: &Url) {
         self.documents.remove(uri);
     }
@@ -136,7 +136,7 @@ impl DocumentManager {
         content: &str,
         language: &dyn LanguageSupport,
     ) -> AnalysisResult {
-        // Step 1: Parse the document
+        
         let tree = self.query_engine.parse(language, content, None).await;
 
         let Some(tree) = &tree else {
@@ -149,13 +149,13 @@ impl DocumentManager {
 
         let source = content.as_bytes();
 
-        // Step 2: Extract imports (needed for reference validation)
+        
         let imports = self
             .query_engine
             .extract_imports(language, tree, source)
             .await;
 
-        // Build ImportContext from extracted imports
+        
         let mut import_ctx = ImportContext::new();
         for import in &imports {
             import_ctx
@@ -175,8 +175,8 @@ impl DocumentManager {
             }
         }
 
-        // Step 3: Run the AnalysisPipeline to create the BindingGraph
-        // This handles all reference extraction, binding tracking, and chain resolution
+        
+        
         let binding_graph =
             AnalysisPipeline::analyze(&self.query_engine, language, tree, source, &import_ctx)
                 .await;
@@ -192,24 +192,24 @@ impl DocumentManager {
         self.documents.get(uri).map(|entry| entry.map(|e| &e.state))
     }
 
-    /// Get an environment variable reference at the given position (cloned for thread safety).
-    /// Uses BindingGraph for resolution.
+    
+    
     pub fn get_env_reference_cloned(&self, uri: &Url, position: Position) -> Option<EnvReference> {
         let entry = self.documents.get(uri)?;
         let resolver = BindingResolver::new(&entry.binding_graph);
         resolver.get_env_reference_cloned(position)
     }
 
-    /// Get an environment variable binding at the given position (cloned for thread safety).
-    /// Uses BindingGraph for resolution.
+    
+    
     pub fn get_env_binding_cloned(&self, uri: &Url, position: Position) -> Option<EnvBinding> {
         let entry = self.documents.get(uri)?;
         let resolver = BindingResolver::new(&entry.binding_graph);
         resolver.get_env_binding_cloned(position)
     }
 
-    /// Get a usage of an alias binding at the given position.
-    /// Uses BindingGraph for resolution.
+    
+    
     pub fn get_binding_usage_cloned(
         &self,
         uri: &Url,
@@ -220,8 +220,8 @@ impl DocumentManager {
         resolver.get_binding_usage_cloned(position)
     }
 
-    /// Get the BindingKind for a usage by looking up its original binding declaration.
-    /// Uses BindingGraph for resolution.
+    
+    
     pub fn get_binding_kind_for_usage(&self, uri: &Url, binding_name: &str) -> Option<BindingKind> {
         let entry = self.documents.get(uri)?;
         let resolver = BindingResolver::new(&entry.binding_graph);
@@ -229,7 +229,7 @@ impl DocumentManager {
     }
 
     pub async fn check_completion(&self, uri: &Url, position: Position) -> bool {
-        // Extract all needed data while holding DashMap lock briefly
+        
         let (tree, content, language_id, binding_graph_clone) = {
             let entry = match self.documents.get(uri) {
                 Some(e) => e,
@@ -243,10 +243,10 @@ impl DocumentManager {
             let language_id = entry.state.language_id.clone();
             let binding_graph_clone = entry.binding_graph.clone();
             (tree, content, language_id, binding_graph_clone)
-            // Lock dropped here at end of block
+            
         };
 
-        // Now do async operations without holding any lock
+        
         let lang = match self.languages.get_by_language_id(&language_id) {
             Some(l) => l,
             None => return false,
@@ -262,7 +262,7 @@ impl DocumentManager {
                 return true;
             }
 
-            // Check if obj_name is an env object alias via cloned BindingGraph
+            
             let resolver = BindingResolver::new(&binding_graph_clone);
             if let Some(kind) = resolver.get_binding_kind(&obj_name) {
                 if kind == BindingKind::Object {
@@ -278,7 +278,7 @@ impl DocumentManager {
         uri: &Url,
         position: Position,
     ) -> Option<CompactString> {
-        // Extract all needed data while holding DashMap lock briefly
+        
         let (tree, content, language_id) = {
             let entry = match self.documents.get(uri) {
                 Some(e) => e,
@@ -291,10 +291,10 @@ impl DocumentManager {
             let content = entry.state.content.clone();
             let language_id = entry.state.language_id.clone();
             (tree, content, language_id)
-            // Lock dropped here at end of block
+            
         };
 
-        // Now do async operations without holding any lock
+        
         let lang = self.languages.get_by_language_id(&language_id)?;
 
         self.query_engine
@@ -302,21 +302,21 @@ impl DocumentManager {
             .await
     }
 
-    // =========================================================================
-    // BindingGraph Access
-    // =========================================================================
+    
+    
+    
 
-    /// Get the binding graph for a document (Arc clone is O(1)).
+    
     pub fn get_binding_graph(&self, uri: &Url) -> Option<Arc<BindingGraph>> {
         self.documents.get(uri).map(|entry| Arc::clone(&entry.binding_graph))
     }
 
-    /// Get all open document URIs.
+    
     pub fn all_uris(&self) -> Vec<Url> {
         self.documents.iter().map(|entry| entry.key().clone()).collect()
     }
 
-    /// Get access to the query engine for parsing.
+    
     pub fn query_engine(&self) -> &Arc<QueryEngine> {
         &self.query_engine
     }
@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn test_uri(name: &str) -> Url {
-        Url::parse(&format!("file:///test/{}", name)).unwrap()
+        Url::parse(&format!("file:
     }
 
     #[tokio::test]
@@ -432,7 +432,7 @@ func main() {
 
         let doc = manager.get(&uri).unwrap();
         assert_eq!(doc.language_id, "unknown");
-        // Tree should be None for unknown language
+        
         assert!(doc.tree.is_none());
     }
 
@@ -469,7 +469,7 @@ func main() {
             text: "new content".to_string(),
         }];
 
-        // Should not panic
+        
         manager.change(&uri, changes, 1).await;
     }
 
@@ -477,12 +477,12 @@ func main() {
     async fn test_get_env_reference_cloned() {
         let manager = create_test_manager();
         let uri = test_uri("test.js");
-        // Position 0:12 should be on DATABASE_URL
+        
         let content = r#"const x = process.env.DATABASE_URL;"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position on DATABASE_URL (line 0, character 22 is within the env var name)
+        
         let reference = manager.get_env_reference_cloned(&uri, Position::new(0, 22));
         assert!(reference.is_some());
         let reference = reference.unwrap();
@@ -493,12 +493,12 @@ func main() {
     async fn test_get_env_binding_cloned() {
         let manager = create_test_manager();
         let uri = test_uri("test.js");
-        // Create a binding: const { API_KEY } = process.env;
+        
         let content = r#"const { API_KEY } = process.env;"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position on API_KEY (line 0, character 8 is within the binding name)
+        
         let binding = manager.get_env_binding_cloned(&uri, Position::new(0, 10));
         assert!(binding.is_some());
         let binding = binding.unwrap();
@@ -510,16 +510,16 @@ func main() {
     async fn test_get_binding_usage_cloned() {
         let manager = create_test_manager();
         let uri = test_uri("test.js");
-        // Create a binding and use it
+        
         let content = r#"const { API_KEY } = process.env;
 console.log(API_KEY);"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position on usage of API_KEY (line 1, character 12)
+        
         let usage = manager.get_binding_usage_cloned(&uri, Position::new(1, 14));
-        // The usage detection depends on the binding graph, may not be found if not tracked
-        // This tests the path where usage is not found
+        
+        
         assert!(usage.is_none() || usage.is_some());
     }
 
@@ -532,7 +532,7 @@ const { API_KEY } = env;"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Check binding kind for "env" (should be Object)
+        
         let kind = manager.get_binding_kind_for_usage(&uri, "env");
         assert!(kind.is_some());
         assert_eq!(kind.unwrap(), BindingKind::Object);
@@ -542,14 +542,14 @@ const { API_KEY } = env;"#.to_string();
     async fn test_check_completion() {
         let manager = create_test_manager();
         let uri = test_uri("test.js");
-        // Use a scenario where the completion query matches correctly
+        
         let content = r#"process.env."#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position after the dot (line 0, character 12)
+        
         let should_complete = manager.check_completion(&uri, Position::new(0, 12)).await;
-        // Since process.env is a standard env object, completion should be triggered
+        
         assert!(should_complete);
     }
 
@@ -562,9 +562,9 @@ env."#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position after env. (line 1, character 4)
+        
         let should_complete = manager.check_completion(&uri, Position::new(1, 4)).await;
-        // env is aliased to process.env, so completion should be triggered
+        
         assert!(should_complete);
     }
 
@@ -572,12 +572,12 @@ env."#.to_string();
     async fn test_check_completion_context() {
         let manager = create_test_manager();
         let uri = test_uri("test.js");
-        // Use a scenario that correctly returns process.env
+        
         let content = r#"process.env."#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position after the dot (line 0, character 12)
+        
         let context = manager.check_completion_context(&uri, Position::new(0, 12)).await;
         assert!(context.is_some());
         assert_eq!(context.unwrap(), "process.env");
@@ -595,7 +595,7 @@ env."#.to_string();
         assert!(graph.is_some());
 
         let graph = graph.unwrap();
-        // Should have direct references
+        
         assert!(!graph.direct_references().is_empty());
     }
 
@@ -627,7 +627,7 @@ env."#.to_string();
     async fn test_query_engine_access() {
         let manager = create_test_manager();
         let _engine = manager.query_engine();
-        // Just verify we can access the query engine
+        
     }
 
     #[tokio::test]
@@ -640,7 +640,7 @@ const db = env.DATABASE_URL;"#.to_string();
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
         let doc = manager.get(&uri).unwrap();
-        // Should have import context (just verify it exists, may or may not have imports depending on query)
+        
         let _import_ctx = &doc.import_context;
     }
 
@@ -659,7 +659,7 @@ console.log(DATABASE_URL);"#.to_string();
         assert!(graph.is_some());
 
         let graph = graph.unwrap();
-        // Should have symbols for env, config, and DATABASE_URL
+        
         assert!(graph.symbols().len() >= 2);
     }
 
@@ -687,7 +687,7 @@ console.log(DATABASE_URL);"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // First change with version 2
+        
         let changes1 = vec![TextDocumentContentChangeEvent {
             range: None,
             range_length: None,
@@ -695,7 +695,7 @@ console.log(DATABASE_URL);"#.to_string();
         }];
         manager.change(&uri, changes1, 2).await;
 
-        // Another change with the same content but different version
+        
         let changes2 = vec![TextDocumentContentChangeEvent {
             range: None,
             range_length: None,
@@ -711,15 +711,15 @@ console.log(DATABASE_URL);"#.to_string();
     #[tokio::test]
     async fn test_uri_by_extension_detection() {
         let manager = create_test_manager();
-        // Open with generic language but .js extension
-        let uri = Url::parse("file:///test/script.js").unwrap();
+        
+        let uri = Url::parse("file:
         let content = r#"const db = process.env.DATABASE_URL;"#.to_string();
 
-        // Open with empty language ID - should detect from extension
+        
         manager.open(uri.clone(), "".to_string(), content, 1).await;
 
         let doc = manager.get(&uri).unwrap();
-        // Tree should still be parsed based on URI extension
+        
         assert!(doc.tree.is_some());
     }
 
@@ -745,7 +745,7 @@ const secret = process.env.SECRET;"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        // Position on dbUrl (the local binding)
+        
         let binding = manager.get_env_binding_cloned(&uri, Position::new(0, 24));
         assert!(binding.is_some());
         let binding = binding.unwrap();

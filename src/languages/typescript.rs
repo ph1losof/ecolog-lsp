@@ -21,7 +21,7 @@ static TS_IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static TS_EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
-// New statics for enhanced binding resolution
+
 static TS_ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static TS_DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static TS_SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
@@ -152,10 +152,6 @@ impl LanguageSupport for TypeScript {
         }))
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Enhanced Binding Resolution Queries
-    // ─────────────────────────────────────────────────────────────
-
     fn assignment_query(&self) -> Option<&Query> {
         Some(TS_ASSIGNMENT_QUERY.get_or_init(|| {
             Query::new(
@@ -187,7 +183,6 @@ impl LanguageSupport for TypeScript {
     }
 
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        // Check for member_expression like process.env
         if node.kind() == "member_expression" {
             let object = node.child_by_field_name("object")?;
             let property = node.child_by_field_name("property")?;
@@ -195,14 +190,12 @@ impl LanguageSupport for TypeScript {
             let object_text = object.utf8_text(source).ok()?;
             let property_text = property.utf8_text(source).ok()?;
 
-            // process.env
             if object_text == "process" && property_text == "env" {
                 return Some(EnvSourceKind::Object {
                     canonical_name: "process.env".into(),
                 });
             }
 
-            // import.meta.env (for Vite, etc.)
             if object.kind() == "member_expression" {
                 let inner_object = object.child_by_field_name("object")?;
                 let inner_property = object.child_by_field_name("property")?;
@@ -224,18 +217,16 @@ impl LanguageSupport for TypeScript {
     }
 
     fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
-        // For pair_pattern like { KEY: alias }, the key is a property_identifier
         if node.kind() == "pair_pattern" {
             if let Some(key_node) = node.child_by_field_name("key") {
                 return key_node.utf8_text(source).ok().map(|s| s.into());
             }
         }
-        // For shorthand like { KEY }, the node itself is the key
+
         node.utf8_text(source).ok().map(|s| s.into())
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
-        // TypeScript supports double quotes, single quotes, and backticks (template literals)
         text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
 
@@ -249,7 +240,6 @@ impl LanguageSupport for TypeScript {
             .root_node()
             .descendant_for_byte_range(byte_offset, byte_offset)?;
 
-        // Check if we're on a property_identifier
         if node.kind() != "property_identifier" {
             return None;
         }
@@ -259,7 +249,6 @@ impl LanguageSupport for TypeScript {
             return None;
         }
 
-        // Get the object of the member expression
         let object_node = parent.child_by_field_name("object")?;
         if object_node.kind() != "identifier" {
             return None;
@@ -328,7 +317,6 @@ impl LanguageSupport for TypeScriptReact {
 
     fn reference_query(&self) -> &Query {
         TSX_REFERENCE_QUERY.get_or_init(|| {
-            // Using same queries for now, assuming they are compatible or main query works for both
             Query::new(
                 &self.grammar(),
                 include_str!("../../queries/typescript/references.scm"),
@@ -349,7 +337,6 @@ impl LanguageSupport for TypeScriptReact {
 
     fn completion_query(&self) -> Option<&Query> {
         Some(TSX_COMPLETION_QUERY.get_or_init(|| {
-            // Reusing TS query for TSX
             Query::new(
                 &self.grammar(),
                 include_str!("../../queries/typescript/completion.scm"),
@@ -380,7 +367,6 @@ impl LanguageSupport for TypeScriptReact {
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(TSX_IDENTIFIER_QUERY.get_or_init(|| {
-            // Using TS query for now
             Query::new(
                 &self.grammar(),
                 include_str!("../../queries/typescript/identifiers.scm"),
@@ -398,10 +384,6 @@ impl LanguageSupport for TypeScriptReact {
             .expect("Failed to compile TypeScriptReact export query")
         }))
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // Enhanced Binding Resolution Queries
-    // ─────────────────────────────────────────────────────────────
 
     fn assignment_query(&self) -> Option<&Query> {
         Some(TSX_ASSIGNMENT_QUERY.get_or_init(|| {
@@ -434,7 +416,6 @@ impl LanguageSupport for TypeScriptReact {
     }
 
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        // Check for member_expression like process.env
         if node.kind() == "member_expression" {
             let object = node.child_by_field_name("object")?;
             let property = node.child_by_field_name("property")?;
@@ -442,14 +423,12 @@ impl LanguageSupport for TypeScriptReact {
             let object_text = object.utf8_text(source).ok()?;
             let property_text = property.utf8_text(source).ok()?;
 
-            // process.env
             if object_text == "process" && property_text == "env" {
                 return Some(EnvSourceKind::Object {
                     canonical_name: "process.env".into(),
                 });
             }
 
-            // import.meta.env (for Vite, etc.)
             if object.kind() == "member_expression" {
                 let inner_object = object.child_by_field_name("object")?;
                 let inner_property = object.child_by_field_name("property")?;
@@ -471,18 +450,16 @@ impl LanguageSupport for TypeScriptReact {
     }
 
     fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
-        // For pair_pattern like { KEY: alias }, the key is a property_identifier
         if node.kind() == "pair_pattern" {
             if let Some(key_node) = node.child_by_field_name("key") {
                 return key_node.utf8_text(source).ok().map(|s| s.into());
             }
         }
-        // For shorthand like { KEY }, the node itself is the key
+
         node.utf8_text(source).ok().map(|s| s.into())
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
-        // TypeScript supports double quotes, single quotes, and backticks (template literals)
         text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
 
@@ -496,7 +473,6 @@ impl LanguageSupport for TypeScriptReact {
             .root_node()
             .descendant_for_byte_range(byte_offset, byte_offset)?;
 
-        // Check if we're on a property_identifier
         if node.kind() != "property_identifier" {
             return None;
         }
@@ -506,7 +482,6 @@ impl LanguageSupport for TypeScriptReact {
             return None;
         }
 
-        // Get the object of the member expression
         let object_node = parent.child_by_field_name("object")?;
         if object_node.kind() != "identifier" {
             return None;
@@ -522,10 +497,6 @@ impl LanguageSupport for TypeScriptReact {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ═══════════════════════════════════════════════════════════════
-    // TypeScript Tests
-    // ═══════════════════════════════════════════════════════════════
 
     fn get_ts() -> TypeScript {
         TypeScript
@@ -715,10 +686,7 @@ mod tests {
         let tree = parser.parse(code, None).unwrap();
         let root = tree.root_node();
 
-        fn find_node<'a>(
-            node: tree_sitter::Node<'a>,
-            kind: &str,
-        ) -> Option<tree_sitter::Node<'a>> {
+        fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
             if node.kind() == kind {
                 return Some(node);
             }
@@ -771,10 +739,6 @@ mod tests {
             assert!(ts.is_scope_node(func));
         }
     }
-
-    // ═══════════════════════════════════════════════════════════════
-    // TypeScriptReact Tests
-    // ═══════════════════════════════════════════════════════════════
 
     fn get_tsx() -> TypeScriptReact {
         TypeScriptReact
@@ -983,7 +947,6 @@ mod tests {
             None
         }
 
-        // jsx_element is a scope node in TSX
         if let Some(jsx) = find_node_of_kind(root, "jsx_element") {
             assert!(tsx.is_scope_node(jsx));
         }

@@ -34,7 +34,7 @@ async fn test_rust_hover_std_env_var() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -69,8 +69,8 @@ async fn test_rust_hover_std_env_var_os() {
     assert!(format!("{:?}", hover.unwrap()).contains("secret_key"));
 }
 
-// --- RUST DESTRUCTURING TESTS ---
-// Result/Option/match arm destructuring bindings
+
+
 
 #[tokio::test]
 async fn test_rust_hover_result_destructuring() {
@@ -90,12 +90,12 @@ async fn test_rust_hover_result_destructuring() {
         )
         .await;
 
-    // "val" is at positions 19-21 in: fn main() { let Ok(val) = std::env::var("DB_URL"); }
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 20), // On 'val' (19-21)
+                position: Position::new(0, 20), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -104,7 +104,7 @@ async fn test_rust_hover_result_destructuring() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on 'val' binding");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -125,12 +125,12 @@ async fn test_rust_hover_result_destructuring_var_short() {
         )
         .await;
 
-    // "val" is at positions 19-21 in: fn main() { let Ok(val) = env::var("DB_URL"); }
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 20), // On 'val' (19-21)
+                position: Position::new(0, 20), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -139,7 +139,7 @@ async fn test_rust_hover_result_destructuring_var_short() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on 'val' binding");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -161,12 +161,12 @@ async fn test_rust_hover_if_let() {
         )
         .await;
 
-    // "val" is at position 22-24 in: fn main() { if let Ok(val) = std::env::var("DB_URL") { ... } }
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 23), // On 'val' (22-24)
+                position: Position::new(0, 23), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -175,7 +175,7 @@ async fn test_rust_hover_if_let() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on 'val' binding in if let");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -196,12 +196,12 @@ async fn test_rust_hover_option_destructuring() {
         )
         .await;
 
-    // "val" is at position 21-23 in: fn main() { let Some(val) = std::env::var("DB_URL").ok(); }
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 22), // On 'val' (21-23)
+                position: Position::new(0, 22), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -222,12 +222,12 @@ async fn test_rust_hover_match_destructuring() {
     fixture.state.document_manager.open(uri.clone(), "rust".to_string(),
         "fn main() { match std::env::var(\"DB_URL\") { Ok(val) => println!(\"{}\", val), _ => () } }".to_string(), 0).await;
 
-    // "val" is at position 47-49 in: fn main() { match std::env::var("DB_URL") { Ok(val) => ... } }
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 48), // On 'val' (47-49)
+                position: Position::new(0, 48), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -239,7 +239,7 @@ async fn test_rust_hover_match_destructuring() {
         hover.is_some(),
         "Expected hover on 'val' binding in match arm"
     );
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -332,7 +332,7 @@ async fn test_rust_completion() {
 
 #[tokio::test]
 async fn test_rust_dotenv_macro_mock() {
-    // If we support dotenv!("VAR") syntax
+    
     let fixture = TestFixture::new().await;
     let uri = fixture.create_file("main.rs", "fn main() { dotenv!(\"DEBUG\"); }");
 
@@ -347,7 +347,7 @@ async fn test_rust_dotenv_macro_mock() {
         )
         .await;
 
-    // Assuming rust.rs supports macro syntax logic (might just look for string inside parens)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {

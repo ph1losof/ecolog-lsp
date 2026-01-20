@@ -37,7 +37,7 @@ async fn test_js_hover_direct() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -200,7 +200,7 @@ async fn test_js_diagnostics_undefined() {
 #[tokio::test]
 async fn test_js_object_alias_hover() {
     let fixture = TestFixture::new().await;
-    // Test hovering on a property accessed via object alias
+    
     let content = "const e = process.env; e.PORT;";
     let uri = fixture.create_file("test.js", content);
 
@@ -215,12 +215,12 @@ async fn test_js_object_alias_hover() {
         )
         .await;
 
-    // Hover on 'PORT' via alias 'e' (e.PORT starts at 23, PORT at 25)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 26), // On 'R' in PORT
+                position: Position::new(0, 26), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -229,10 +229,10 @@ async fn test_js_object_alias_hover() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("8080")); // PORT=8080
+    assert!(format!("{:?}", hover.unwrap()).contains("8080")); 
 }
 
-// --- TYPESCRIPT TESTS ---
+
 
 #[tokio::test]
 async fn test_ts_hover_type_cast() {
@@ -299,20 +299,20 @@ async fn test_ts_completion_on_alias() {
     )
     .await;
 
-    // Note: Alias tracking for completion might be partial, but let's test if it works or fails gracefully
+    
     if let Some(items) = completion {
         assert!(items.iter().any(|i| i.label == "PORT"));
     } else {
-        // If it fails, that's okay for now, but we want to know
-        // println!("TS Alias completion not supported");
+        
+        
     }
 }
 
-// --- JAVASCRIPT DESTRUCTURING TESTS ---
 
-// Test hover on the binding name 'apiKey' (not the property key 'API_KEY')
-// const { API_KEY: apiKey } = process.env;
-// Positions: API_KEY=8-14, apiKey=17-22
+
+
+
+
 #[tokio::test]
 async fn test_js_hover_destructuring_rename() {
     let fixture = TestFixture::new().await;
@@ -332,7 +332,7 @@ async fn test_js_hover_destructuring_rename() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 20), // On 'apiKey'
+                position: Position::new(0, 20), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -344,9 +344,9 @@ async fn test_js_hover_destructuring_rename() {
     assert!(format!("{:?}", hover.unwrap()).contains("secret_key"));
 }
 
-// Test hover on the property key 'API_KEY' (not the binding name 'apiKey')
-// const { API_KEY: apiKey } = process.env;
-// Positions: API_KEY=8-14, apiKey=17-22
+
+
+
 #[tokio::test]
 async fn test_js_hover_destructuring_property_key() {
     let fixture = TestFixture::new().await;
@@ -362,12 +362,12 @@ async fn test_js_hover_destructuring_property_key() {
         )
         .await;
 
-    // Test hover on property key 'API_KEY' (position 8-14)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 10), // 'I' of 'API_KEY'
+                position: Position::new(0, 10), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -397,7 +397,7 @@ async fn test_js_hover_destructuring_rename_bracket() {
         )
         .await;
 
-    // Position 55 is on 'apiKey' in console.log (positions 53-58)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -433,7 +433,7 @@ async fn test_js_hover_destructuring_with_default() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 14), // On 'port'
+                position: Position::new(0, 14), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -494,9 +494,9 @@ async fn test_js_diagnostics_destructuring_with_default_undefined() {
     assert!(diags.iter().any(|d| d.message.contains("not defined")));
 }
 
-// Test hover on multiple destructured bindings
-// const { API_KEY: apiKey, PORT: port, DB_URL: dbUrl } = process.env;
-// Positions: API_KEY=8-14, apiKey=17-22, PORT=25-28, port=31-34, DB_URL=37-42, dbUrl=45-49
+
+
+
 #[tokio::test]
 async fn test_js_destructuring_multiple() {
     let fixture = TestFixture::new().await;
@@ -515,12 +515,12 @@ async fn test_js_destructuring_multiple() {
         )
         .await;
 
-    // Test hover on 'apiKey' binding (position 17-22)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
-                position: Position::new(0, 17), // 'a' of 'apiKey'
+                position: Position::new(0, 17), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -531,12 +531,12 @@ async fn test_js_destructuring_multiple() {
     assert!(hover.is_some(), "Expected hover on apiKey binding");
     assert!(format!("{:?}", hover.unwrap()).contains("secret_key"));
 
-    // Test hover on 'port' binding (position 31-34)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
-                position: Position::new(0, 31), // 'p' of 'port'
+                position: Position::new(0, 31), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -547,12 +547,12 @@ async fn test_js_destructuring_multiple() {
     assert!(hover.is_some(), "Expected hover on port binding");
     assert!(format!("{:?}", hover.unwrap()).contains("8080"));
 
-    // Test hover on 'dbUrl' binding (position 45-49)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: uri.clone() },
-                position: Position::new(0, 45), // 'd' of 'dbUrl'
+                position: Position::new(0, 45), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -561,7 +561,7 @@ async fn test_js_destructuring_multiple() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on dbUrl binding");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -573,16 +573,16 @@ async fn test_js_destructuring_undefined_and_defined_mix() {
 
     let diags = compute_diagnostics(&uri, &fixture.state).await;
 
-    // Should only warn about MISSING_VAR
+    
     assert!(!diags.is_empty());
     assert!(diags.iter().any(|d| d.message.contains("MISSING_VAR")));
 }
 
-// --- TYPESCRIPT DESTRUCTURING TESTS ---
 
-// Test hover on destructured property key (API_KEY) in TypeScript
-// const { API_KEY: apiKey } = process.env;
-// Positions: API_KEY=8-14, apiKey=17-22
+
+
+
+
 #[tokio::test]
 async fn test_ts_hover_destructuring_rename() {
     let fixture = TestFixture::new().await;
@@ -598,12 +598,12 @@ async fn test_ts_hover_destructuring_rename() {
         )
         .await;
 
-    // Test hover on property key 'API_KEY' (position 8-14)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 10), // 'I' of 'API_KEY'
+                position: Position::new(0, 10), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -670,9 +670,9 @@ async fn test_ts_diagnostics_destructuring_rename_undefined() {
     assert!(diags.iter().any(|d| d.message.contains("not defined")));
 }
 
-// Test hover on destructured property key with type cast
-// const { API_KEY: apiKey } = process.env; const typed = apiKey as string;
-// Positions: API_KEY=8-14, apiKey=17-22
+
+
+
 #[tokio::test]
 async fn test_ts_destructuring_with_type_cast_and_rename() {
     let fixture = TestFixture::new().await;
@@ -691,12 +691,12 @@ async fn test_ts_destructuring_with_type_cast_and_rename() {
         )
         .await;
 
-    // Test hover on property key 'API_KEY' (position 8-14)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(0, 10), // 'I' of 'API_KEY'
+                position: Position::new(0, 10), 
             },
             work_done_progress_params: Default::default(),
         },

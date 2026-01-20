@@ -1,6 +1,6 @@
-//! Cross-module import tracking integration tests.
-//!
-//! Tests for hover, definition, and references on imported env vars.
+
+
+
 
 use abundantis::Abundantis;
 use ecolog_lsp::analysis::{
@@ -58,13 +58,13 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
     )
 }
 
-/// Test that hover works on an imported env var.
-///
-/// Setup:
-/// - change-settings.input.ts: export const a = process.env.ANOTHER
-/// - test.ts: import { a } from './change-settings.input'; a;
-///
-/// Expected: Hover on `a` in test.ts shows ANOTHER env var info.
+
+
+
+
+
+
+
 #[tokio::test]
 async fn test_hover_on_imported_env_var() {
     let timestamp = SystemTime::now()
@@ -74,18 +74,18 @@ async fn test_hover_on_imported_env_var() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_cross_module_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
     writeln!(env_file, "ANOTHER=test_value").unwrap();
 
-    // Create the exporting file
+    
     let config_path = temp_dir.join("change-settings.input.ts");
     let config_content = "export const a = process.env.ANOTHER;";
     let mut f = File::create(&config_path).unwrap();
     write!(f, "{}", config_content).unwrap();
 
-    // Create the importing file
+    
     let test_path = temp_dir.join("test.ts");
     let test_content = r#"import { a } from './change-settings.input';
 a;"#;
@@ -94,11 +94,11 @@ a;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing to populate the export index
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Verify exports were indexed
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
     assert!(exports.is_some(), "Should have exports for config file");
@@ -108,7 +108,7 @@ a;"#;
         "Should have 'a' export"
     );
 
-    // Open the test file (triggers document analysis)
+    
     let test_uri = Url::from_file_path(&test_path).unwrap();
     state
         .document_manager
@@ -120,10 +120,10 @@ a;"#;
         )
         .await;
 
-    // Wait for analysis
+    
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'a' (line 1, col 0) - the usage of imported `a`
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -151,7 +151,7 @@ a;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test the export extraction specifically.
+
 #[tokio::test]
 async fn test_export_extraction() {
     let timestamp = SystemTime::now()
@@ -161,7 +161,7 @@ async fn test_export_extraction() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_export_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create file with env var export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const dbUrl = process.env.DATABASE_URL;";
     let mut f = File::create(&config_path).unwrap();
@@ -169,11 +169,11 @@ async fn test_export_extraction() {
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Check exports
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
 
@@ -190,7 +190,7 @@ async fn test_export_extraction() {
     let db_url_export = exports.named_exports.get("dbUrl").unwrap();
     println!("dbUrl export resolution: {:?}", db_url_export.resolution);
 
-    // The resolution should be EnvVar
+    
     assert!(
         matches!(
             &db_url_export.resolution,
@@ -203,7 +203,7 @@ async fn test_export_extraction() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test the import context extraction.
+
 #[tokio::test]
 async fn test_import_context_extraction() {
     let timestamp = SystemTime::now()
@@ -213,7 +213,7 @@ async fn test_import_context_extraction() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_import_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create a file with imports
+    
     let test_path = temp_dir.join("test.ts");
     let test_content = r#"import { foo } from './config';
 import { bar as baz } from './utils';
@@ -224,7 +224,7 @@ foo; baz;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Open the file
+    
     let test_uri = Url::from_file_path(&test_path).unwrap();
     state
         .document_manager
@@ -238,13 +238,13 @@ foo; baz;"#;
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    // Check import context
+    
     let doc = state.document_manager.get(&test_uri).expect("Should have document");
     let import_ctx = &doc.import_context;
 
     println!("Import context aliases: {:?}", import_ctx.aliases);
 
-    // Check that foo is in aliases
+    
     assert!(
         import_ctx.aliases.contains_key("foo"),
         "Should have 'foo' in aliases"
@@ -253,7 +253,7 @@ foo; baz;"#;
     assert_eq!(module.as_str(), "./config");
     assert_eq!(original.as_str(), "foo");
 
-    // Check that baz (aliased from bar) is in aliases
+    
     assert!(
         import_ctx.aliases.contains_key("baz"),
         "Should have 'baz' in aliases"
@@ -262,7 +262,7 @@ foo; baz;"#;
     assert_eq!(module.as_str(), "./utils");
     assert_eq!(original.as_str(), "bar");
 
-    // Check default import
+    
     assert!(
         import_ctx.aliases.contains_key("defaultExport"),
         "Should have 'defaultExport' in aliases"
@@ -271,7 +271,7 @@ foo; baz;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test module resolution.
+
 #[tokio::test]
 async fn test_module_resolution() {
     let timestamp = SystemTime::now()
@@ -281,23 +281,23 @@ async fn test_module_resolution() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_module_res_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create files
+    
     File::create(temp_dir.join("config.ts")).unwrap();
     File::create(temp_dir.join("change-settings.input.ts")).unwrap();
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Test resolution
+    
     let test_uri = Url::from_file_path(temp_dir.join("test.ts")).unwrap();
     let lang = state.languages.get_for_uri(&test_uri).unwrap();
 
-    // Resolve ./config
+    
     let resolved = state.module_resolver.resolve_to_uri("./config", &test_uri, lang.as_ref());
     println!("Resolved ./config: {:?}", resolved);
     assert!(resolved.is_some(), "Should resolve ./config");
     assert!(resolved.unwrap().path().ends_with("config.ts"));
 
-    // Resolve ./change-settings.input
+    
     let resolved = state.module_resolver.resolve_to_uri("./change-settings.input", &test_uri, lang.as_ref());
     println!("Resolved ./change-settings.input: {:?}", resolved);
     assert!(resolved.is_some(), "Should resolve ./change-settings.input");
@@ -306,8 +306,8 @@ async fn test_module_resolution() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test destructured export extraction.
-/// `export const { DB_URL } = process.env;`
+
+
 #[tokio::test]
 async fn test_destructured_export_extraction() {
     let timestamp = SystemTime::now()
@@ -317,7 +317,7 @@ async fn test_destructured_export_extraction() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_destructured_export_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create file with destructured env export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const { DB_URL, API_KEY } = process.env;";
     let mut f = File::create(&config_path).unwrap();
@@ -325,11 +325,11 @@ async fn test_destructured_export_extraction() {
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Check exports
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
 
@@ -338,7 +338,7 @@ async fn test_destructured_export_extraction() {
     assert!(exports.is_some(), "Should have exports for the config file");
     let exports = exports.unwrap();
 
-    // Check DB_URL export
+    
     assert!(
         exports.named_exports.contains_key("DB_URL"),
         "Should have DB_URL export, got keys: {:?}",
@@ -357,7 +357,7 @@ async fn test_destructured_export_extraction() {
         db_url_export.resolution
     );
 
-    // Check API_KEY export
+    
     assert!(
         exports.named_exports.contains_key("API_KEY"),
         "Should have API_KEY export"
@@ -376,8 +376,8 @@ async fn test_destructured_export_extraction() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test aliased destructured export extraction.
-/// `export const { DB_URL: dbUrl } = process.env;`
+
+
 #[tokio::test]
 async fn test_aliased_destructured_export_extraction() {
     let timestamp = SystemTime::now()
@@ -387,7 +387,7 @@ async fn test_aliased_destructured_export_extraction() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_aliased_destruct_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create file with aliased destructured env export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const { DB_URL: dbUrl, API_KEY: apiKey } = process.env;";
     let mut f = File::create(&config_path).unwrap();
@@ -395,11 +395,11 @@ async fn test_aliased_destructured_export_extraction() {
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Check exports
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
 
@@ -408,7 +408,7 @@ async fn test_aliased_destructured_export_extraction() {
     assert!(exports.is_some(), "Should have exports for the config file");
     let exports = exports.unwrap();
 
-    // Check dbUrl export (aliased from DB_URL)
+    
     assert!(
         exports.named_exports.contains_key("dbUrl"),
         "Should have dbUrl export, got keys: {:?}",
@@ -419,7 +419,7 @@ async fn test_aliased_destructured_export_extraction() {
     println!("dbUrl export: {:?}", db_url_export);
     println!("dbUrl export resolution: {:?}", db_url_export.resolution);
 
-    // The exported name is "dbUrl", but it resolves to env var "DB_URL"
+    
     assert!(
         matches!(
             &db_url_export.resolution,
@@ -429,7 +429,7 @@ async fn test_aliased_destructured_export_extraction() {
         db_url_export.resolution
     );
 
-    // Check apiKey export (aliased from API_KEY)
+    
     assert!(
         exports.named_exports.contains_key("apiKey"),
         "Should have apiKey export"
@@ -448,8 +448,8 @@ async fn test_aliased_destructured_export_extraction() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test env object export extraction.
-/// `export const env = process.env;`
+
+
 #[tokio::test]
 async fn test_env_object_export_extraction() {
     let timestamp = SystemTime::now()
@@ -459,7 +459,7 @@ async fn test_env_object_export_extraction() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_env_object_export_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create file with env object export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const env = process.env;";
     let mut f = File::create(&config_path).unwrap();
@@ -467,11 +467,11 @@ async fn test_env_object_export_extraction() {
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Check exports
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
 
@@ -501,9 +501,9 @@ async fn test_env_object_export_extraction() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test hover on destructured imported env var.
-/// config.ts: export const { DB_URL } = process.env;
-/// test.ts: import { DB_URL } from './config'; DB_URL;
+
+
+
 #[tokio::test]
 async fn test_hover_on_destructured_import() {
     let timestamp = SystemTime::now()
@@ -513,18 +513,18 @@ async fn test_hover_on_destructured_import() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_destructured_hover_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres://localhost/test").unwrap();
+    writeln!(env_file, "DB_URL=postgres:
 
-    // Create the exporting file with destructured export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const { DB_URL } = process.env;";
     let mut f = File::create(&config_path).unwrap();
     write!(f, "{}", config_content).unwrap();
 
-    // Create the importing file
+    
     let test_path = temp_dir.join("test.ts");
     let test_content = r#"import { DB_URL } from './config';
 DB_URL;"#;
@@ -533,11 +533,11 @@ DB_URL;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Verify exports were indexed with correct resolution
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
     assert!(exports.is_some(), "Should have exports for config file");
@@ -547,7 +547,7 @@ DB_URL;"#;
         "Should have 'DB_URL' export"
     );
 
-    // Open the test file
+    
     let test_uri = Url::from_file_path(&test_path).unwrap();
     state
         .document_manager
@@ -561,7 +561,7 @@ DB_URL;"#;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'DB_URL' (line 1, col 0)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -589,9 +589,9 @@ DB_URL;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test hover on env object property access.
-/// config.ts: export const env = process.env;
-/// test.ts: import { env } from './config'; env.SECRET_KEY;
+
+
+
 #[tokio::test]
 async fn test_hover_on_env_object_import() {
     let timestamp = SystemTime::now()
@@ -601,18 +601,18 @@ async fn test_hover_on_env_object_import() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_env_object_hover_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
     writeln!(env_file, "SECRET_KEY=super_secret_123").unwrap();
 
-    // Create the exporting file with env object export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const env = process.env;";
     let mut f = File::create(&config_path).unwrap();
     write!(f, "{}", config_content).unwrap();
 
-    // Create the importing file that uses env.SECRET_KEY
+    
     let test_path = temp_dir.join("test.ts");
     let test_content = r#"import { env } from './config';
 env.SECRET_KEY;"#;
@@ -621,11 +621,11 @@ env.SECRET_KEY;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Open the test file
+    
     let test_uri = Url::from_file_path(&test_path).unwrap();
     state
         .document_manager
@@ -639,7 +639,7 @@ env.SECRET_KEY;"#;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'SECRET_KEY' (line 1, col 4) - after "env."
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -667,9 +667,9 @@ env.SECRET_KEY;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test default export.
-/// config.ts: const dbUrl = process.env.DATABASE_URL; export default dbUrl;
-/// test.ts: import dbUrl from './config'; dbUrl;
+
+
+
 #[tokio::test]
 async fn test_hover_on_default_export() {
     let timestamp = SystemTime::now()
@@ -679,19 +679,19 @@ async fn test_hover_on_default_export() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_default_export_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+    writeln!(env_file, "DATABASE_URL=postgres:
 
-    // Create the exporting file with default export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = r#"const dbUrl = process.env.DATABASE_URL;
 export default dbUrl;"#;
     let mut f = File::create(&config_path).unwrap();
     write!(f, "{}", config_content).unwrap();
 
-    // Create the importing file
+    
     let test_path = temp_dir.join("test.ts");
     let test_content = r#"import dbUrl from './config';
 dbUrl;"#;
@@ -700,11 +700,11 @@ dbUrl;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Verify default export was indexed
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
     assert!(exports.is_some(), "Should have exports for config file");
@@ -717,7 +717,7 @@ dbUrl;"#;
         "Should have default export"
     );
 
-    // Open the test file
+    
     let test_uri = Url::from_file_path(&test_path).unwrap();
     state
         .document_manager
@@ -731,7 +731,7 @@ dbUrl;"#;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'dbUrl' (line 1, col 0)
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -759,9 +759,9 @@ dbUrl;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test completion on imported env object.
-/// config.ts: export const env = process.env;
-/// test.ts: import { env } from './config'; env.|
+
+
+
 #[tokio::test]
 async fn test_completion_on_imported_env_object() {
     use ecolog_lsp::server::handlers::handle_completion;
@@ -774,19 +774,19 @@ async fn test_completion_on_imported_env_object() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_completion_import_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
     writeln!(env_file, "SECRET_KEY=super_secret_123").unwrap();
-    writeln!(env_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+    writeln!(env_file, "DATABASE_URL=postgres:
 
-    // Create the exporting file with env object export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const env = process.env;";
     let mut f = File::create(&config_path).unwrap();
     write!(f, "{}", config_content).unwrap();
 
-    // Create the importing file - cursor is after "env."
+    
     let test_path = temp_dir.join("test.ts");
     let test_content = r#"import { env } from './config';
 env."#;
@@ -795,11 +795,11 @@ env."#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Open the test file
+    
     let test_uri = Url::from_file_path(&test_path).unwrap();
     state
         .document_manager
@@ -813,7 +813,7 @@ env."#;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Request completion at "env.|" (line 1, col 4)
+    
     let completions = handle_completion(
         CompletionParams {
             text_document_position: TextDocumentPositionParams {
@@ -839,7 +839,7 @@ env."#;
         "Should have completion items"
     );
 
-    // Check that we have the expected env vars
+    
     let labels: Vec<_> = completions.iter().map(|c| c.label.as_str()).collect();
     println!("Completion labels: {:?}", labels);
 
@@ -855,14 +855,14 @@ env."#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test wildcard re-export resolution.
-/// index.ts: export * from "./config"
-/// config.ts: export const dbUrl = process.env.DATABASE_URL;
-/// app.ts: import { dbUrl } from "./index"; dbUrl;
-///
-/// This test verifies the fix for the wildcard re-export bug where the
-/// visited set was corrupted by a double-loop pattern, causing false
-/// cycle detection.
+
+
+
+
+
+
+
+
 #[tokio::test]
 async fn test_wildcard_reexport_env_var() {
     let timestamp = SystemTime::now()
@@ -872,24 +872,24 @@ async fn test_wildcard_reexport_env_var() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_wildcard_reexport_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DATABASE_URL=postgres://localhost/db").unwrap();
+    writeln!(env_file, "DATABASE_URL=postgres:
 
-    // Create the config file with env var export
+    
     let config_path = temp_dir.join("config.ts");
     let config_content = "export const dbUrl = process.env.DATABASE_URL;";
     let mut f = File::create(&config_path).unwrap();
     write!(f, "{}", config_content).unwrap();
 
-    // Create index file with wildcard re-export
+    
     let index_path = temp_dir.join("index.ts");
     let index_content = r#"export * from "./config";"#;
     let mut f = File::create(&index_path).unwrap();
     write!(f, "{}", index_content).unwrap();
 
-    // Create the importing file that imports through the wildcard
+    
     let app_path = temp_dir.join("app.ts");
     let app_content = r#"import { dbUrl } from './index';
 dbUrl;"#;
@@ -898,11 +898,11 @@ dbUrl;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Verify config exports were indexed
+    
     let config_uri = Url::from_file_path(&config_path).unwrap();
     let exports = state.workspace_index.get_exports(&config_uri);
     assert!(exports.is_some(), "Should have exports for config file");
@@ -912,7 +912,7 @@ dbUrl;"#;
         "Config should have 'dbUrl' export"
     );
 
-    // Verify index has wildcard re-exports
+    
     let index_uri = Url::from_file_path(&index_path).unwrap();
     let index_exports = state.workspace_index.get_exports(&index_uri);
     assert!(index_exports.is_some(), "Should have exports for index file");
@@ -923,7 +923,7 @@ dbUrl;"#;
         index_exports.wildcard_reexports
     );
 
-    // Open the app file
+    
     let app_uri = Url::from_file_path(&app_path).unwrap();
     state
         .document_manager
@@ -937,7 +937,7 @@ dbUrl;"#;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'dbUrl' (line 1, col 0) - should resolve through wildcard
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -965,11 +965,11 @@ dbUrl;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test wildcard re-export chain resolution.
-/// a.ts: export * from "./b"
-/// b.ts: export * from "./c"
-/// c.ts: export const x = process.env.X
-/// app.ts: import { x } from "./a"; x;
+
+
+
+
+
 #[tokio::test]
 async fn test_wildcard_reexport_chain() {
     let timestamp = SystemTime::now()
@@ -979,12 +979,12 @@ async fn test_wildcard_reexport_chain() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_wildcard_chain_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env file
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
     writeln!(env_file, "X=chain_value").unwrap();
 
-    // Create the chain: a -> b -> c
+    
     let c_path = temp_dir.join("c.ts");
     let c_content = "export const x = process.env.X;";
     let mut f = File::create(&c_path).unwrap();
@@ -1000,7 +1000,7 @@ async fn test_wildcard_reexport_chain() {
     let mut f = File::create(&a_path).unwrap();
     write!(f, "{}", a_content).unwrap();
 
-    // Create the importing file
+    
     let app_path = temp_dir.join("app.ts");
     let app_content = r#"import { x } from './a';
 x;"#;
@@ -1009,11 +1009,11 @@ x;"#;
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Open the app file
+    
     let app_uri = Url::from_file_path(&app_path).unwrap();
     state
         .document_manager
@@ -1027,7 +1027,7 @@ x;"#;
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    // Hover on 'x' (line 1, col 0) - should resolve through chain
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -1055,11 +1055,11 @@ x;"#;
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test that wildcard re-export cycle detection works correctly.
-/// a.ts: export * from "./b"
-/// b.ts: export * from "./a"  (cycle)
-///
-/// This should not hang and should return Unresolved gracefully.
+
+
+
+
+
 #[tokio::test]
 async fn test_wildcard_reexport_cycle_detection() {
     use ecolog_lsp::analysis::CrossModuleResolver;
@@ -1071,7 +1071,7 @@ async fn test_wildcard_reexport_cycle_detection() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_wildcard_cycle_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create circular wildcard re-exports
+    
     let a_path = temp_dir.join("a.ts");
     let a_content = r#"export * from "./b";"#;
     let mut f = File::create(&a_path).unwrap();
@@ -1084,11 +1084,11 @@ async fn test_wildcard_reexport_cycle_detection() {
 
     let state = setup_test_state(&temp_dir).await;
 
-    // Run workspace indexing
+    
     let config = default_config();
     state.indexer.index_workspace(&config).await.unwrap();
 
-    // Create cross-module resolver
+    
     let resolver = CrossModuleResolver::new(
         Arc::clone(&state.workspace_index),
         Arc::clone(&state.module_resolver),
@@ -1097,10 +1097,10 @@ async fn test_wildcard_reexport_cycle_detection() {
 
     let a_uri = Url::from_file_path(&a_path).unwrap();
 
-    // This should not hang - cycle detection should kick in
+    
     let result = resolver.resolve_import(&a_uri, "./b", "nonexistent", false);
 
-    // Should return Unresolved, not hang
+    
     assert!(
         matches!(result, ecolog_lsp::analysis::CrossModuleResolution::Unresolved),
         "Should return Unresolved for cyclic wildcard re-exports, got: {:?}",

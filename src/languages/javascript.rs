@@ -35,10 +35,6 @@ impl LanguageSupport for JavaScript {
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        // Trigger on:
-        // - `.` for process.env. and import.meta.env.
-        // - `"` and `'` for process.env[" and process.env['
-        // Server-side context validation ensures completions only appear in valid patterns
         &[".", "\"", "'"]
     }
 
@@ -132,10 +128,6 @@ impl LanguageSupport for JavaScript {
         }))
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // NEW: Enhanced Binding Resolution Queries
-    // ─────────────────────────────────────────────────────────────
-
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
             Query::new(
@@ -177,7 +169,6 @@ impl LanguageSupport for JavaScript {
     }
 
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        // Check for member_expression like process.env
         if node.kind() == "member_expression" {
             let object = node.child_by_field_name("object")?;
             let property = node.child_by_field_name("property")?;
@@ -185,14 +176,12 @@ impl LanguageSupport for JavaScript {
             let object_text = object.utf8_text(source).ok()?;
             let property_text = property.utf8_text(source).ok()?;
 
-            // process.env
             if object_text == "process" && property_text == "env" {
                 return Some(EnvSourceKind::Object {
                     canonical_name: "process.env".into(),
                 });
             }
 
-            // import.meta.env (for Vite, etc.)
             if object.kind() == "member_expression" {
                 let inner_object = object.child_by_field_name("object")?;
                 let inner_property = object.child_by_field_name("property")?;
@@ -214,18 +203,16 @@ impl LanguageSupport for JavaScript {
     }
 
     fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
-        // For pair_pattern like { KEY: alias }, the key is a property_identifier
         if node.kind() == "pair_pattern" {
             if let Some(key_node) = node.child_by_field_name("key") {
                 return key_node.utf8_text(source).ok().map(|s| s.into());
             }
         }
-        // For shorthand like { KEY }, the node itself is the key
+
         node.utf8_text(source).ok().map(|s| s.into())
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
-        // JavaScript/TypeScript supports double quotes, single quotes, and backticks (template literals)
         text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
 
@@ -239,7 +226,6 @@ impl LanguageSupport for JavaScript {
             .root_node()
             .descendant_for_byte_range(byte_offset, byte_offset)?;
 
-        // Check if we're on a property_identifier
         if node.kind() != "property_identifier" {
             return None;
         }
@@ -249,7 +235,6 @@ impl LanguageSupport for JavaScript {
             return None;
         }
 
-        // Get the object of the member expression
         let object_node = parent.child_by_field_name("object")?;
         if object_node.kind() != "identifier" {
             return None;
@@ -316,7 +301,6 @@ mod tests {
     fn test_grammar_compiles() {
         let js = get_js();
         let _grammar = js.grammar();
-        // If we get here without panic, grammar is valid
     }
 
     #[test]
@@ -398,7 +382,6 @@ mod tests {
         let tree = parser.parse(code, None).unwrap();
         let root = tree.root_node();
 
-        // Find member_expression node
         let mut cursor = root.walk();
 
         fn walk_tree(cursor: &mut tree_sitter::TreeCursor, js: &JavaScript, code: &str) -> bool {
@@ -441,7 +424,6 @@ mod tests {
         let code = "const x = env.DATABASE_URL;";
         let tree = parser.parse(code, None).unwrap();
 
-        // Offset for 'D' in DATABASE_URL
         let offset = code.find("DATABASE_URL").unwrap();
 
         let result = js.extract_property_access(&tree, code, offset);
@@ -461,7 +443,6 @@ mod tests {
         let tree = parser.parse(code, None).unwrap();
         let root = tree.root_node();
 
-        // Find shorthand_property_identifier_pattern node
         fn find_node<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
             if node.kind() == kind {
                 return Some(node);

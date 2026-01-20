@@ -3,15 +3,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 
-/// Registry of all supported languages
 pub struct LanguageRegistry {
-    /// Languages indexed by ID
     by_id: HashMap<&'static str, Arc<dyn LanguageSupport>>,
 
-    /// Languages indexed by file extension
     by_extension: HashMap<&'static str, Arc<dyn LanguageSupport>>,
 
-    /// Languages indexed by LSP language ID
     by_language_id: HashMap<&'static str, Arc<dyn LanguageSupport>>,
 }
 

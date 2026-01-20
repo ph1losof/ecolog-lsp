@@ -37,7 +37,7 @@ async fn test_py_hover_environ_getitem() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -158,7 +158,7 @@ async fn test_py_hover_from_import() {
         )
         .await;
 
-    // Depending on python.rs implementation, 'environ' without 'os.' might work if it tracks imports or just token matches
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -171,15 +171,15 @@ async fn test_py_hover_from_import() {
     )
     .await;
 
-    // Assert only if we expect it to work. Basic impl might fail import tracking.
-    // If it fails, we comment it out or mark distinct.
+    
+    
     if hover.is_some() {
         assert!(format!("{:?}", hover.unwrap()).contains("true"));
     }
 }
 
-// --- PYTHON WALRUS OPERATOR TESTS ---
-// Walrus operator (:=) tests - tests for named_expression bindings
+
+
 
 #[tokio::test]
 async fn test_py_hover_walrus_operator_environ_get() {
@@ -203,7 +203,7 @@ async fn test_py_hover_walrus_operator_environ_get() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(1, 6), // On 'db_url'
+                position: Position::new(1, 6), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -212,7 +212,7 @@ async fn test_py_hover_walrus_operator_environ_get() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -237,7 +237,7 @@ async fn test_py_hover_walrus_operator_getenv() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(1, 6), // On 'api_key'
+                position: Position::new(1, 6), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -271,7 +271,7 @@ async fn test_py_hover_walrus_operator_subscript() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(1, 6), // On 'port'
+                position: Position::new(1, 6), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -305,7 +305,7 @@ async fn test_py_hover_walrus_operator_while_loop() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(1, 8), // On 'val'
+                position: Position::new(1, 8), 
             },
             work_done_progress_params: Default::default(),
         },
@@ -373,7 +373,7 @@ async fn test_py_walrus_operator_multiple_in_if() {
     fixture.state.document_manager.open(uri.clone(), "python".to_string(), 
         "import os\nif (db_url := os.environ.get('DB_URL')) and (api_key := os.environ.get('API_KEY')):\n  print(db_url, api_key)".to_string(), 0).await;
 
-    // Test db_url
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -387,9 +387,9 @@ async fn test_py_walrus_operator_multiple_in_if() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 
-    // Test api_key
+    
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -415,7 +415,7 @@ async fn test_py_walrus_operator_undefined_and_defined_mix() {
 
     let diags = compute_diagnostics(&uri, &fixture.state).await;
 
-    // Should only warn about MISSING_VAR
+    
     assert!(!diags.is_empty());
     assert!(diags.iter().any(|d| d.message.contains("MISSING_VAR")));
 }

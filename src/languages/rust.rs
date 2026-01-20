@@ -12,7 +12,7 @@ static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
-// Enhanced binding resolution queries
+
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
@@ -107,10 +107,6 @@ impl LanguageSupport for Rust {
         }))
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Enhanced Binding Resolution Queries
-    // ─────────────────────────────────────────────────────────────
-
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
             Query::new(
@@ -132,9 +128,6 @@ impl LanguageSupport for Rust {
     }
 
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        // Check for std::env or env module references
-        // Rust env vars are typically accessed via function calls, not object access
-        // But we can detect if someone does: let env = std::env; and then uses env.var()
         if node.kind() == "scoped_identifier" {
             let text = node.utf8_text(source).ok()?;
             if text == "std::env" || text == "env" {
@@ -146,7 +139,7 @@ impl LanguageSupport for Rust {
 
         if node.kind() == "identifier" {
             let text = node.utf8_text(source).ok()?;
-            // Just "env" might be from a use statement
+
             if text == "env" {
                 return Some(EnvSourceKind::Object {
                     canonical_name: "std::env".into(),
@@ -162,8 +155,6 @@ impl LanguageSupport for Rust {
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        // Rust uses std::env::var("KEY"), env::var("KEY"), env!("KEY"), option_env!("KEY")
-        // Server-side context validation ensures completions only appear in valid patterns
         &["\""]
     }
 
@@ -186,8 +177,6 @@ impl LanguageSupport for Rust {
             .root_node()
             .descendant_for_byte_range(byte_offset, byte_offset)?;
 
-        // In Rust, we might be on the field_identifier inside a `field_expression`
-        // Check if current node or parent is a `field_expression`
         let field_expr = if node.kind() == "field_expression" {
             node
         } else if let Some(parent) = node.parent() {
@@ -200,11 +189,9 @@ impl LanguageSupport for Rust {
             return None;
         };
 
-        // Get the value (object) and field from the field_expression
         let value_node = field_expr.child_by_field_name("value")?;
         let field_node = field_expr.child_by_field_name("field")?;
 
-        // We want the value to be a simple identifier
         if value_node.kind() != "identifier" {
             return None;
         }

@@ -8,14 +8,14 @@ use tower_lsp::lsp_types::{
 #[tokio::test]
 async fn test_go_hover_getenv() {
     let fixture = TestFixture::new().await;
-    // Changed " _ =" to "val :=" just in case assignment vs short decl matters,
-    // though it shouldn't. Also doubled check position calculation.
-    // "  val := os.Getenv(\"DB_URL\")"
-    // 01234567890123456789012345678
-    // "  " (2) + "val" (3) + " " (1) + ":=" (2) + " " (1) = 9
-    // "os." (3) -> 12. "Getenv" (6) -> 18. "(" (1) -> 19.
-    // "\"" (1) -> 20. "D" -> 21. "B" -> 22.
-    // Position 22 should be safe.
+    
+    
+    
+    
+    
+    
+    
+    
     let content = "package main\nimport \"os\"\nfunc main() {\n  val := os.Getenv(\"DB_URL\")\n}";
     let uri = fixture.create_file("test.go", content);
 
@@ -38,7 +38,7 @@ async fn test_go_hover_getenv() {
     .await;
 
     assert!(hover.is_some(), "Hover failed for os.Getenv");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
 }
 
 #[tokio::test]
@@ -81,7 +81,7 @@ async fn test_go_hover_lookupenv() {
 async fn test_go_completion() {
     let fixture = TestFixture::new().await;
 
-    // Small delay to avoid potential race conditions with tree-sitter initialization
+    
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let content = "package main\nimport \"os\"\nfunc main() {\n  os.LookupEnv(\"\")\n}";
     let uri = fixture.create_file("test.go", content);
@@ -92,10 +92,10 @@ async fn test_go_completion() {
         .open(uri.clone(), "go".to_string(), content.to_string(), 0)
         .await;
 
-    // Position inside quotes.
-    // "  os.LookupEnv(\"\")"
-    // "  " (2) + "os." (3) = 5. "LookupEnv" (9) = 14. "(" (1) = 15. "\"" (1) = 16.
-    // Inside quote 17.
+    
+    
+    
+    
     let completion = handle_completion(
         tower_lsp::lsp_types::CompletionParams {
             text_document_position: TextDocumentPositionParams {

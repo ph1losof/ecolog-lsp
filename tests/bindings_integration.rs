@@ -16,7 +16,7 @@ use tower_lsp::lsp_types::{
 
 #[tokio::test]
 async fn test_bindings_integration() {
-    // Setup unique temp dir
+    
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -24,14 +24,14 @@ async fn test_bindings_integration() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_integ_test_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres://localhost:5432").unwrap();
+    writeln!(env_file, "DB_URL=postgres:
     writeln!(env_file, "API_KEY=secret_key").unwrap();
     writeln!(env_file, "JSON_BLOB=some_data").unwrap();
 
-    // Setup Server
+    
     let mut registry = LanguageRegistry::new();
     registry.register(Arc::new(ecolog_lsp::languages::javascript::JavaScript));
     registry.register(Arc::new(ecolog_lsp::languages::typescript::TypeScript));
@@ -67,7 +67,7 @@ async fn test_bindings_integration() {
         module_resolver,
     );
 
-    // --- TEST 1: JS Bracket Access ---
+    
     let js_path = temp_dir.join("bracket.js");
     let js_content = r#"
 const a = process.env['JSON_BLOB'];
@@ -105,7 +105,7 @@ a;
     assert!(hover.is_some(), "JS Bracket Access Hover failed");
     assert!(format!("{:?}", hover.unwrap()).contains("JSON_BLOB"));
 
-    // --- TEST 2: TS Destructuring ---
+    
     let ts_path = temp_dir.join("destruct.ts");
     let ts_content = r#"
 const { API_KEY } = process.env;
@@ -143,7 +143,7 @@ API_KEY;
     assert!(hover.is_some(), "TS Destructuring Hover failed");
     assert!(format!("{:?}", hover.unwrap()).contains("API_KEY"));
 
-    // --- TEST 3: TS Bracket Access ---
+    
     let ts_bracket_path = temp_dir.join("bracket.ts");
     let ts_bracket_content = r#"
 const b = process.env['JSON_BLOB'];
@@ -181,7 +181,7 @@ b;
     assert!(hover.is_some(), "TS Bracket Access Hover failed");
     assert!(format!("{:?}", hover.unwrap()).contains("JSON_BLOB"));
 
-    // --- TEST 4: Scope Isolation ---
+    
     let scope_path = temp_dir.join("scope.js");
     let scope_content = r#"
 function test() {
@@ -223,7 +223,7 @@ secret;
         "Scope Isolation Failed: Should not hover out-of-scope variable"
     );
 
-    // --- TEST 5: Object Alias Message ---
+    
     let alias_path = temp_dir.join("alias_msg.js");
     let alias_content = r#"
 const env = process.env;
@@ -244,7 +244,7 @@ env;
         .await;
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    // Hover on 'env' binding declaration (line 1, col 6)
+    
     let hover_decl = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -275,11 +275,11 @@ env;
         "Should not show (undefined) for object alias"
     );
 
-    // Cleanup
+    
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
-/// Test that destructuring patterns get diagnostics for undefined env vars
+
 #[tokio::test]
 async fn test_destructuring_diagnostics() {
     let timestamp = SystemTime::now()
@@ -289,12 +289,12 @@ async fn test_destructuring_diagnostics() {
     let temp_dir = std::env::temp_dir().join(format!("ecolog_destruct_diag_{}", timestamp));
     fs::create_dir_all(&temp_dir).unwrap();
 
-    // Create .env with only DB_URL defined
+    
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres://localhost:5432").unwrap();
+    writeln!(env_file, "DB_URL=postgres:
 
-    // Setup Server
+    
     let mut registry = LanguageRegistry::new();
     registry.register(Arc::new(ecolog_lsp::languages::javascript::JavaScript));
     let languages = Arc::new(registry);
@@ -328,7 +328,7 @@ async fn test_destructuring_diagnostics() {
         module_resolver,
     );
 
-    // Test 1: Direct property access - should get diagnostic for UNDEFINED_VAR
+    
     let js_direct = temp_dir.join("direct.js");
     let js_direct_content = "const a = process.env.UNDEFINED_VAR;";
     let mut f = File::create(&js_direct).unwrap();
@@ -359,7 +359,7 @@ async fn test_destructuring_diagnostics() {
         "Diagnostic should mention UNDEFINED_VAR"
     );
 
-    // Test 2: Shorthand destructuring - should get diagnostic for UNDEFINED_VAR
+    
     let js_destruct = temp_dir.join("destruct.js");
     let js_destruct_content = "const { UNDEFINED_VAR } = process.env;";
     let mut f = File::create(&js_destruct).unwrap();
@@ -390,7 +390,7 @@ async fn test_destructuring_diagnostics() {
         "Diagnostic should mention UNDEFINED_VAR"
     );
 
-    // Test 3: Renamed destructuring - should get diagnostic for UNDEFINED_VAR
+    
     let js_renamed = temp_dir.join("renamed.js");
     let js_renamed_content = "const { UNDEFINED_VAR: myVar } = process.env;";
     let mut f = File::create(&js_renamed).unwrap();
@@ -424,7 +424,7 @@ async fn test_destructuring_diagnostics() {
         "Diagnostic should mention UNDEFINED_VAR"
     );
 
-    // Test 4: Defined var should NOT have diagnostic
+    
     let js_defined = temp_dir.join("defined.js");
     let js_defined_content = "const { DB_URL } = process.env;";
     let mut f = File::create(&js_defined).unwrap();
@@ -452,6 +452,6 @@ async fn test_destructuring_diagnostics() {
         "Should NOT have diagnostic for defined DB_URL"
     );
 
-    // Cleanup
+    
     let _ = fs::remove_dir_all(&temp_dir);
 }

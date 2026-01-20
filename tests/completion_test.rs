@@ -17,9 +17,9 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_completion_context_js() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
 
-    // Incomplete syntax: "env."
+    
     let content = r#"
         const env = process.env;
         env.
@@ -28,7 +28,7 @@ async fn test_completion_context_js() {
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // Cursor at end of "env." (L2)
+    
     let pos = Position::new(2, 12);
 
     let ctx = doc_manager.check_completion_context(&uri, pos).await;
@@ -39,9 +39,9 @@ async fn test_completion_context_js() {
 #[tokio::test]
 async fn test_completion_context_python() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.py").unwrap();
+    let uri = Url::parse("file:
 
-    // "env."
+    
     let content = r#"
         env.
     "#;
@@ -49,7 +49,7 @@ async fn test_completion_context_python() {
         .open(uri.clone(), "python".into(), content.to_string(), 1)
         .await;
 
-    let pos = Position::new(1, 12); // "        env."
+    let pos = Position::new(1, 12); 
 
     let ctx = doc_manager.check_completion_context(&uri, pos).await;
     assert!(ctx.is_some(), "Should detect completion context for 'env.'");

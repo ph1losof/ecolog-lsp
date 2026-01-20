@@ -16,7 +16,7 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_definition_reference_exists() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.js").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 const api = process.env.API_KEY;
 "#;
@@ -24,7 +24,7 @@ const api = process.env.API_KEY;
         .open(uri.clone(), "javascript".into(), content.to_string(), 1)
         .await;
 
-    // Verify reference is detected (definition would jump to .env file)
+    
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(1, 26));
     assert!(
         ref1.is_some(),
@@ -36,7 +36,7 @@ const api = process.env.API_KEY;
 #[tokio::test]
 async fn test_definition_python_environ() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:///test.py").unwrap();
+    let uri = Url::parse("file:
     let content = r#"
 import os
 val = os.environ["DB_HOST"]
@@ -45,7 +45,7 @@ val = os.environ["DB_HOST"]
         .open(uri.clone(), "python".into(), content.to_string(), 1)
         .await;
 
-    // Verify reference is detected
+    
     let ref1 = doc_manager.get_env_reference_cloned(&uri, Position::new(2, 21));
     assert!(ref1.is_some(), "Reference should exist for Python environ");
     assert_eq!(ref1.unwrap().name, "DB_HOST");

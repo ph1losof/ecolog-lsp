@@ -12,7 +12,7 @@ static COMPLETION_QUERY: OnceLock<Query> = OnceLock::new();
 static REASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
-// Enhanced binding resolution queries
+
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
@@ -107,10 +107,6 @@ impl LanguageSupport for Go {
         }))
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Enhanced Binding Resolution Queries
-    // ─────────────────────────────────────────────────────────────
-
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
             Query::new(
@@ -123,16 +119,12 @@ impl LanguageSupport for Go {
 
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/go/scopes.scm"),
-            )
-            .expect("Failed to compile Go scope query")
+            Query::new(&self.grammar(), include_str!("../../queries/go/scopes.scm"))
+                .expect("Failed to compile Go scope query")
         }))
     }
 
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        // Check for os package reference
         if node.kind() == "identifier" {
             let text = node.utf8_text(source).ok()?;
             if text == "os" {
@@ -150,8 +142,6 @@ impl LanguageSupport for Go {
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        // Go uses os.Getenv("KEY") and os.LookupEnv("KEY")
-        // Server-side context validation ensures completions only appear in valid patterns
         &["\""]
     }
 
@@ -181,7 +171,6 @@ impl LanguageSupport for Go {
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
-        // Go supports double quotes, single quotes, and backticks (raw strings)
         text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
     }
 
@@ -195,8 +184,6 @@ impl LanguageSupport for Go {
             .root_node()
             .descendant_for_byte_range(byte_offset, byte_offset)?;
 
-        // In Go, we might be on the field_identifier inside a `selector_expression`
-        // Check if current node or parent is a `selector_expression`
         let selector = if node.kind() == "selector_expression" {
             node
         } else if let Some(parent) = node.parent() {
@@ -209,11 +196,9 @@ impl LanguageSupport for Go {
             return None;
         };
 
-        // Get the operand (object) and field from the selector_expression
         let operand_node = selector.child_by_field_name("operand")?;
         let field_node = selector.child_by_field_name("field")?;
 
-        // We want the operand to be a simple identifier
         if operand_node.kind() != "identifier" {
             return None;
         }

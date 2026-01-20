@@ -5,13 +5,10 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing with RUST_LOG env filter support
-    // Default to "info" if RUST_LOG is not set
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -19,18 +16,10 @@ async fn main() {
 
     let config_manager = ecolog_lsp::server::config::ConfigManager::new();
 
-    // Performance optimization: Load config and build Abundantis core in parallel.
-    // Abundantis is built with initial_root and default config, then updated
-    // with the actual config after both complete.
     let config_future = config_manager.load_from_workspace(&initial_root);
     let core_future = {
         let root = initial_root.clone();
-        async move {
-            abundantis::Abundantis::builder()
-                .root(&root)
-                .build()
-                .await
-        }
+        async move { abundantis::Abundantis::builder().root(&root).build().await }
     };
 
     let (config_result, core_result) = tokio::join!(config_future, core_future);
@@ -38,7 +27,6 @@ async fn main() {
     let config = config_result.expect("Failed to load configuration");
     let core = core_result.expect("Failed to initialize Ecolog core");
 
-    // Apply the loaded config to the core (fast O(1) updates)
     let abundantis_config = config.to_abundantis_config();
     core.resolution
         .update_resolution_config(abundantis_config.resolution);

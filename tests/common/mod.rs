@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tower_lsp::lsp_types::Url;
 
-// Global atomic counter to ensure unique temp directory names
+
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct TestFixture {
@@ -22,7 +22,7 @@ pub struct TestFixture {
 
 impl TestFixture {
     pub async fn new() -> Self {
-        // Setup unique temp dir using both timestamp and atomic counter to prevent collisions
+        
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -31,18 +31,18 @@ impl TestFixture {
         let temp_dir = std::env::temp_dir().join(format!("ecolog_test_{}_{}", timestamp, counter));
         fs::create_dir_all(&temp_dir).unwrap();
 
-        // Set CWD for Abundantis - REMOVED to avoid parallel test race conditions
-        // std::env::set_current_dir(&temp_dir).unwrap();
+        
+        
 
-        // Create standard .env
+        
         let env_path = temp_dir.join(".env");
         let mut env_file = File::create(&env_path).unwrap();
-        writeln!(env_file, "DB_URL=postgres://localhost:5432").unwrap();
+        writeln!(env_file, "DB_URL=postgres:
         writeln!(env_file, "API_KEY=secret_key").unwrap();
         writeln!(env_file, "DEBUG=true").unwrap();
         writeln!(env_file, "PORT=8080").unwrap();
 
-        // Setup Server
+        
         let mut registry = LanguageRegistry::new();
         registry.register(Arc::new(ecolog_lsp::languages::javascript::JavaScript));
         registry.register(Arc::new(ecolog_lsp::languages::typescript::TypeScript));
@@ -66,7 +66,7 @@ impl TestFixture {
 
         let config_manager = Arc::new(config_manager);
 
-        // Setup workspace index and indexer
+        
         let workspace_index = Arc::new(WorkspaceIndex::new());
         let module_resolver = Arc::new(ModuleResolver::new(temp_dir.clone()));
         let indexer = Arc::new(WorkspaceIndexer::new(
@@ -99,7 +99,7 @@ impl TestFixture {
         Url::from_file_path(&path).unwrap()
     }
 
-    /// Index the workspace
+    
     pub async fn index_workspace(&self) {
         let config = EcologConfig::default();
         self.state
