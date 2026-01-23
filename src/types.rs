@@ -1084,7 +1084,7 @@ mod tests {
     fn test_module_import_is_resolved() {
         let resolved = ModuleImport {
             module_specifier: "./config".into(),
-            resolved_uri: Some(Url::parse("file
+            resolved_uri: Some(Url::parse("file:///test/config.js").unwrap()),
             kind: ImportKind::Default,
             local_name: "config".into(),
             range: make_range(0, 0, 0, 30),
@@ -1160,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_document_state_new() {
-        let uri = Url::parse("file
+        let uri = Url::parse("file:///test/test.ts").unwrap();
         let state = DocumentState::new(uri.clone(), "typescript".into(), "const x = 1;".into(), 1);
 
         assert_eq!(state.uri, uri);
@@ -1172,7 +1172,7 @@ mod tests {
 
     #[test]
     fn test_document_state_has_intelligence() {
-        let uri = Url::parse("file
+        let uri = Url::parse("file:///test/test.ts").unwrap();
         let state = DocumentState::new(uri, "typescript".into(), "const x = 1;".into(), 1);
 
        

@@ -17,6 +17,12 @@ struct RangeIndexEntry {
     symbol_id: SymbolId,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct UsageRangeIndexEntry {
+    range: Range,
+    usage_index: usize,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct BindingGraph {
     symbols: Vec<Symbol>,
@@ -30,6 +36,12 @@ pub struct BindingGraph {
     usages: Vec<SymbolUsage>,
 
     destructure_range_index: Vec<RangeIndexEntry>,
+
+    /// Index for O(log n) symbol lookup by position (sorted by range start)
+    symbol_range_index: Vec<RangeIndexEntry>,
+
+    /// Index for O(log n) usage lookup by position (sorted by range start)
+    usage_range_index: Vec<UsageRangeIndexEntry>,
 
     next_symbol_id: u32,
 
@@ -45,6 +57,8 @@ impl BindingGraph {
             direct_references: Vec::new(),
             usages: Vec::new(),
             destructure_range_index: Vec::new(),
+            symbol_range_index: Vec::new(),
+            usage_range_index: Vec::new(),
             next_symbol_id: 0,
             next_scope_id: 1,
         };
@@ -84,6 +98,12 @@ impl BindingGraph {
                 symbol_id: id,
             });
         }
+
+        // Add to symbol range index for O(log n) position lookups
+        self.symbol_range_index.push(RangeIndexEntry {
+            range: symbol.name_range,
+            symbol_id: id,
+        });
 
         self.symbols.push(symbol);
         id
@@ -135,17 +155,28 @@ impl BindingGraph {
         self.lookup_symbol(name, scope).map(|s| s.id)
     }
 
+    /// O(log n) symbol lookup by position using the range index.
+    /// Must call `rebuild_range_index` after batch symbol additions.
     pub fn symbol_at_position(&self, position: Position) -> Option<&Symbol> {
-        for symbol in &self.symbols {
-            if Self::contains_position(symbol.name_range, position) {
-                return Some(symbol);
-            }
-        }
-        None
+        self.binary_search_range_index(&self.symbol_range_index, position)
+            .and_then(|id| self.get_symbol(id))
     }
 
+    /// Rebuilds all range indices for O(log n) position lookups.
+    /// Must be called after batch additions of symbols, usages, or destructured keys.
     pub fn rebuild_range_index(&mut self) {
-        self.destructure_range_index.sort_by(|a, b| {
+        let sort_fn = |a: &RangeIndexEntry, b: &RangeIndexEntry| {
+            a.range
+                .start
+                .line
+                .cmp(&b.range.start.line)
+                .then_with(|| a.range.start.character.cmp(&b.range.start.character))
+        };
+
+        self.destructure_range_index.sort_by(sort_fn);
+        self.symbol_range_index.sort_by(sort_fn);
+
+        self.usage_range_index.sort_by(|a, b| {
             a.range
                 .start
                 .line
@@ -154,14 +185,23 @@ impl BindingGraph {
         });
     }
 
-    pub fn symbol_at_destructure_key(&self, position: Position) -> Option<SymbolId> {
+    /// Generic binary search for range indices, returns SymbolId if found.
+    fn binary_search_range_index(
+        &self,
+        index: &[RangeIndexEntry],
+        position: Position,
+    ) -> Option<SymbolId> {
+        if index.is_empty() {
+            return None;
+        }
+
         let mut left = 0;
-        let mut right = self.destructure_range_index.len();
+        let mut right = index.len();
         let mut found_idx = None;
 
         while left < right {
             let mid = left + (right - left) / 2;
-            let entry = &self.destructure_range_index[mid];
+            let entry = &index[mid];
 
             if Self::contains_position(entry.range, position) {
                 return Some(entry.symbol_id);
@@ -178,19 +218,18 @@ impl BindingGraph {
             }
         }
 
+        // Check nearby entries for overlapping ranges
         if let Some(idx) = found_idx {
             for offset in 0..3 {
                 if let Some(i) = idx.checked_sub(offset) {
-                    if i < self.destructure_range_index.len() {
-                        let entry = &self.destructure_range_index[i];
+                    if let Some(entry) = index.get(i) {
                         if Self::contains_position(entry.range, position) {
                             return Some(entry.symbol_id);
                         }
                     }
                 }
                 let i = idx + offset + 1;
-                if i < self.destructure_range_index.len() {
-                    let entry = &self.destructure_range_index[i];
+                if let Some(entry) = index.get(i) {
                     if Self::contains_position(entry.range, position) {
                         return Some(entry.symbol_id);
                     }
@@ -199,6 +238,10 @@ impl BindingGraph {
         }
 
         None
+    }
+
+    pub fn symbol_at_destructure_key(&self, position: Position) -> Option<SymbolId> {
+        self.binary_search_range_index(&self.destructure_range_index, position)
     }
 
     pub fn add_scope(&mut self, mut scope: Scope) -> ScopeId {
@@ -253,6 +296,12 @@ impl BindingGraph {
     }
 
     pub fn add_usage(&mut self, usage: SymbolUsage) {
+        let usage_index = self.usages.len();
+        // Add to usage range index for O(log n) position lookups
+        self.usage_range_index.push(UsageRangeIndexEntry {
+            range: usage.range,
+            usage_index,
+        });
         self.usages.push(usage);
     }
 
@@ -266,12 +315,61 @@ impl BindingGraph {
         &mut self.usages
     }
 
+    /// O(log n) usage lookup by position using the range index.
+    /// Must call `rebuild_range_index` after batch usage additions.
     pub fn usage_at_position(&self, position: Position) -> Option<&SymbolUsage> {
-        for usage in &self.usages {
-            if Self::contains_position(usage.range, position) {
-                return Some(usage);
+        self.binary_search_usage_range_index(position)
+            .and_then(|idx| self.usages.get(idx))
+    }
+
+    /// Binary search for usage range index, returns usage index if found.
+    fn binary_search_usage_range_index(&self, position: Position) -> Option<usize> {
+        if self.usage_range_index.is_empty() {
+            return None;
+        }
+
+        let mut left = 0;
+        let mut right = self.usage_range_index.len();
+        let mut found_idx = None;
+
+        while left < right {
+            let mid = left + (right - left) / 2;
+            let entry = &self.usage_range_index[mid];
+
+            if Self::contains_position(entry.range, position) {
+                return Some(entry.usage_index);
+            }
+
+            if position.line < entry.range.start.line
+                || (position.line == entry.range.start.line
+                    && position.character < entry.range.start.character)
+            {
+                right = mid;
+            } else {
+                left = mid + 1;
+                found_idx = Some(mid);
             }
         }
+
+        // Check nearby entries for overlapping ranges
+        if let Some(idx) = found_idx {
+            for offset in 0..3 {
+                if let Some(i) = idx.checked_sub(offset) {
+                    if let Some(entry) = self.usage_range_index.get(i) {
+                        if Self::contains_position(entry.range, position) {
+                            return Some(entry.usage_index);
+                        }
+                    }
+                }
+                let i = idx + offset + 1;
+                if let Some(entry) = self.usage_range_index.get(i) {
+                    if Self::contains_position(entry.range, position) {
+                        return Some(entry.usage_index);
+                    }
+                }
+            }
+        }
+
         None
     }
 
@@ -387,6 +485,8 @@ impl BindingGraph {
         self.direct_references.clear();
         self.usages.clear();
         self.destructure_range_index.clear();
+        self.symbol_range_index.clear();
+        self.usage_range_index.clear();
         self.next_symbol_id = 0;
         self.next_scope_id = 1;
 

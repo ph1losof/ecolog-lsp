@@ -346,7 +346,7 @@ mod tests {
     }
 
     fn test_uri(name: &str) -> Url {
-        Url::parse(&format!("file:
+        Url::parse(&format!("file:///test/{}", name)).unwrap()
     }
 
     #[tokio::test]
@@ -712,7 +712,7 @@ console.log(DATABASE_URL);"#.to_string();
     async fn test_uri_by_extension_detection() {
         let manager = create_test_manager();
         
-        let uri = Url::parse("file:
+        let uri = Url::parse("file:///test/test.js").unwrap();
         let content = r#"const db = process.env.DATABASE_URL;"#.to_string();
 
         

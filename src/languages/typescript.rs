@@ -29,470 +29,325 @@ static TSX_ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static TSX_SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
-impl LanguageSupport for TypeScript {
-    fn id(&self) -> &'static str {
-        "typescript"
-    }
-
-    fn is_standard_env_object(&self, name: &str) -> bool {
-        name == "process.env" || name == "import.meta.env"
-    }
-
-    fn default_env_object_name(&self) -> Option<&'static str> {
-        Some("process.env")
-    }
-
-    fn known_env_modules(&self) -> &'static [&'static str] {
-        &["process"]
-    }
-
-    fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        &[".", "\"", "'"]
-    }
-
-    fn is_scope_node(&self, node: Node) -> bool {
-        match node.kind() {
-            "program"
-            | "function_declaration"
-            | "arrow_function"
-            | "function"
-            | "method_definition"
-            | "class_body"
-            | "statement_block"
-            | "for_statement"
-            | "if_statement"
-            | "else_clause"
-            | "try_statement"
-            | "catch_clause"
-            | "interface_declaration"
-            | "module" => true,
-            _ => false,
+/// Implements LanguageSupport for TypeScript-family languages.
+/// Both TypeScript and TypeScriptReact share nearly identical implementations,
+/// differing only in id, extensions, language_ids, grammar, and scope patterns.
+macro_rules! impl_typescript_language {
+    (
+        $struct_name:ty,
+        id: $id:literal,
+        language_ids: $lang_ids:expr,
+        extensions: $extensions:expr,
+        grammar: $grammar:expr,
+        extra_scope_patterns: [$($extra_scope:pat),*],
+        queries: {
+            reference: $ref_query:ident,
+            binding: $binding_query:ident,
+            completion: $completion_query:ident,
+            import: $import_query:ident,
+            reassignment: $reassign_query:ident,
+            identifier: $ident_query:ident,
+            export: $export_query:ident,
+            assignment: $assign_query:ident,
+            destructure: $destruct_query:ident,
+            scope: $scope_query:ident
         }
-    }
-
-    fn extensions(&self) -> &'static [&'static str] {
-        &["ts", "mts", "cts"]
-    }
-
-    fn language_ids(&self) -> &'static [&'static str] {
-        &["typescript"]
-    }
-
-    fn grammar(&self) -> Language {
-        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-    }
-
-    fn reference_query(&self) -> &Query {
-        TS_REFERENCE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/references.scm"),
-            )
-            .expect("Failed to compile TypeScript reference query")
-        })
-    }
-
-    fn binding_query(&self) -> Option<&Query> {
-        Some(TS_BINDING_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/bindings.scm"),
-            )
-            .expect("Failed to compile TypeScript binding query")
-        }))
-    }
-
-    fn completion_query(&self) -> Option<&Query> {
-        Some(TS_COMPLETION_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/completion.scm"),
-            )
-            .expect("Failed to compile TypeScript completion query")
-        }))
-    }
-
-    fn import_query(&self) -> Option<&Query> {
-        Some(TS_IMPORT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/imports.scm"),
-            )
-            .expect("Failed to compile TypeScript import query")
-        }))
-    }
-
-    fn reassignment_query(&self) -> Option<&Query> {
-        Some(TS_REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/reassignments.scm"),
-            )
-            .expect("Failed to compile TypeScript reassignment query")
-        }))
-    }
-
-    fn identifier_query(&self) -> Option<&Query> {
-        Some(TS_IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/identifiers.scm"),
-            )
-            .expect("Failed to compile TypeScript identifier query")
-        }))
-    }
-
-    fn export_query(&self) -> Option<&Query> {
-        Some(TS_EXPORT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/exports.scm"),
-            )
-            .expect("Failed to compile TypeScript export query")
-        }))
-    }
-
-    fn assignment_query(&self) -> Option<&Query> {
-        Some(TS_ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/assignments.scm"),
-            )
-            .expect("Failed to compile TypeScript assignment query")
-        }))
-    }
-
-    fn destructure_query(&self) -> Option<&Query> {
-        Some(TS_DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/destructures.scm"),
-            )
-            .expect("Failed to compile TypeScript destructure query")
-        }))
-    }
-
-    fn scope_query(&self) -> Option<&Query> {
-        Some(TS_SCOPE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/scopes.scm"),
-            )
-            .expect("Failed to compile TypeScript scope query")
-        }))
-    }
-
-    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        if node.kind() == "member_expression" {
-            let object = node.child_by_field_name("object")?;
-            let property = node.child_by_field_name("property")?;
-
-            let object_text = object.utf8_text(source).ok()?;
-            let property_text = property.utf8_text(source).ok()?;
-
-            if object_text == "process" && property_text == "env" {
-                return Some(EnvSourceKind::Object {
-                    canonical_name: "process.env".into(),
-                });
+    ) => {
+        impl LanguageSupport for $struct_name {
+            fn id(&self) -> &'static str {
+                $id
             }
 
-            if object.kind() == "member_expression" {
-                let inner_object = object.child_by_field_name("object")?;
-                let inner_property = object.child_by_field_name("property")?;
-                let inner_object_text = inner_object.utf8_text(source).ok()?;
-                let inner_property_text = inner_property.utf8_text(source).ok()?;
+            fn is_standard_env_object(&self, name: &str) -> bool {
+                name == "process.env" || name == "import.meta.env"
+            }
 
-                if inner_object_text == "import"
-                    && inner_property_text == "meta"
-                    && property_text == "env"
-                {
-                    return Some(EnvSourceKind::Object {
-                        canonical_name: "import.meta.env".into(),
-                    });
+            fn default_env_object_name(&self) -> Option<&'static str> {
+                Some("process.env")
+            }
+
+            fn known_env_modules(&self) -> &'static [&'static str] {
+                &["process"]
+            }
+
+            fn completion_trigger_characters(&self) -> &'static [&'static str] {
+                &[".", "\"", "'"]
+            }
+
+            fn is_scope_node(&self, node: Node) -> bool {
+                match node.kind() {
+                    "program"
+                    | "function_declaration"
+                    | "arrow_function"
+                    | "function"
+                    | "method_definition"
+                    | "class_body"
+                    | "statement_block"
+                    | "for_statement"
+                    | "if_statement"
+                    | "else_clause"
+                    | "try_statement"
+                    | "catch_clause"
+                    | "interface_declaration"
+                    | "module"
+                    $(| $extra_scope)* => true,
+                    _ => false,
                 }
             }
-        }
 
-        None
-    }
+            fn extensions(&self) -> &'static [&'static str] {
+                $extensions
+            }
 
-    fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
-        if node.kind() == "pair_pattern" {
-            if let Some(key_node) = node.child_by_field_name("key") {
-                return key_node.utf8_text(source).ok().map(|s| s.into());
+            fn language_ids(&self) -> &'static [&'static str] {
+                $lang_ids
+            }
+
+            fn grammar(&self) -> Language {
+                $grammar.into()
+            }
+
+            fn reference_query(&self) -> &Query {
+                $ref_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/references.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " reference query"))
+                })
+            }
+
+            fn binding_query(&self) -> Option<&Query> {
+                Some($binding_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/bindings.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " binding query"))
+                }))
+            }
+
+            fn completion_query(&self) -> Option<&Query> {
+                Some($completion_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/completion.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " completion query"))
+                }))
+            }
+
+            fn import_query(&self) -> Option<&Query> {
+                Some($import_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/imports.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " import query"))
+                }))
+            }
+
+            fn reassignment_query(&self) -> Option<&Query> {
+                Some($reassign_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/reassignments.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " reassignment query"))
+                }))
+            }
+
+            fn identifier_query(&self) -> Option<&Query> {
+                Some($ident_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/identifiers.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " identifier query"))
+                }))
+            }
+
+            fn export_query(&self) -> Option<&Query> {
+                Some($export_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/exports.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " export query"))
+                }))
+            }
+
+            fn assignment_query(&self) -> Option<&Query> {
+                Some($assign_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/assignments.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " assignment query"))
+                }))
+            }
+
+            fn destructure_query(&self) -> Option<&Query> {
+                Some($destruct_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/destructures.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " destructure query"))
+                }))
+            }
+
+            fn scope_query(&self) -> Option<&Query> {
+                Some($scope_query.get_or_init(|| {
+                    Query::new(
+                        &self.grammar(),
+                        include_str!("../../queries/typescript/scopes.scm"),
+                    )
+                    .expect(concat!("Failed to compile ", $id, " scope query"))
+                }))
+            }
+
+            fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+                typescript_is_env_source_node(node, source)
+            }
+
+            fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
+                typescript_extract_destructure_key(node, source)
+            }
+
+            fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
+                text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            }
+
+            fn extract_property_access(
+                &self,
+                tree: &tree_sitter::Tree,
+                content: &str,
+                byte_offset: usize,
+            ) -> Option<(CompactString, CompactString)> {
+                typescript_extract_property_access(tree, content, byte_offset)
             }
         }
-
-        node.utf8_text(source).ok().map(|s| s.into())
-    }
-
-    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
-        text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
-    }
-
-    fn extract_property_access(
-        &self,
-        tree: &tree_sitter::Tree,
-        content: &str,
-        byte_offset: usize,
-    ) -> Option<(CompactString, CompactString)> {
-        let node = tree
-            .root_node()
-            .descendant_for_byte_range(byte_offset, byte_offset)?;
-
-        if node.kind() != "property_identifier" {
-            return None;
-        }
-
-        let parent = node.parent()?;
-        if parent.kind() != "member_expression" {
-            return None;
-        }
-
-        let object_node = parent.child_by_field_name("object")?;
-        if object_node.kind() != "identifier" {
-            return None;
-        }
-
-        let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
-        let property_name = node.utf8_text(content.as_bytes()).ok()?;
-
-        Some((object_name.into(), property_name.into()))
-    }
+    };
 }
 
-impl LanguageSupport for TypeScriptReact {
-    fn id(&self) -> &'static str {
-        "typescriptreact"
-    }
+/// Shared implementation for detecting env source nodes in TypeScript-family languages.
+fn typescript_is_env_source_node(node: Node, source: &[u8]) -> Option<EnvSourceKind> {
+    if node.kind() == "member_expression" {
+        let object = node.child_by_field_name("object")?;
+        let property = node.child_by_field_name("property")?;
 
-    fn is_standard_env_object(&self, name: &str) -> bool {
-        name == "process.env" || name == "import.meta.env"
-    }
+        let object_text = object.utf8_text(source).ok()?;
+        let property_text = property.utf8_text(source).ok()?;
 
-    fn default_env_object_name(&self) -> Option<&'static str> {
-        Some("process.env")
-    }
-
-    fn known_env_modules(&self) -> &'static [&'static str] {
-        &["process"]
-    }
-
-    fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        &[".", "\"", "'"]
-    }
-
-    fn is_scope_node(&self, node: Node) -> bool {
-        match node.kind() {
-            "program"
-            | "function_declaration"
-            | "arrow_function"
-            | "function"
-            | "method_definition"
-            | "class_body"
-            | "statement_block"
-            | "for_statement"
-            | "if_statement"
-            | "else_clause"
-            | "try_statement"
-            | "catch_clause"
-            | "interface_declaration"
-            | "module"
-            | "jsx_element" => true,
-            _ => false,
+        if object_text == "process" && property_text == "env" {
+            return Some(EnvSourceKind::Object {
+                canonical_name: "process.env".into(),
+            });
         }
-    }
 
-    fn extensions(&self) -> &'static [&'static str] {
-        &["tsx"]
-    }
+        if object.kind() == "member_expression" {
+            let inner_object = object.child_by_field_name("object")?;
+            let inner_property = object.child_by_field_name("property")?;
+            let inner_object_text = inner_object.utf8_text(source).ok()?;
+            let inner_property_text = inner_property.utf8_text(source).ok()?;
 
-    fn language_ids(&self) -> &'static [&'static str] {
-        &["typescriptreact"]
-    }
-
-    fn grammar(&self) -> Language {
-        tree_sitter_typescript::LANGUAGE_TSX.into()
-    }
-
-    fn reference_query(&self) -> &Query {
-        TSX_REFERENCE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/references.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact reference query")
-        })
-    }
-
-    fn binding_query(&self) -> Option<&Query> {
-        Some(TSX_BINDING_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/bindings.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact binding query")
-        }))
-    }
-
-    fn completion_query(&self) -> Option<&Query> {
-        Some(TSX_COMPLETION_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/completion.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact completion query")
-        }))
-    }
-
-    fn import_query(&self) -> Option<&Query> {
-        Some(TSX_IMPORT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/imports.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact import query")
-        }))
-    }
-
-    fn reassignment_query(&self) -> Option<&Query> {
-        Some(TSX_REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/reassignments.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact reassignment query")
-        }))
-    }
-
-    fn identifier_query(&self) -> Option<&Query> {
-        Some(TSX_IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/identifiers.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact identifier query")
-        }))
-    }
-
-    fn export_query(&self) -> Option<&Query> {
-        Some(TSX_EXPORT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/exports.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact export query")
-        }))
-    }
-
-    fn assignment_query(&self) -> Option<&Query> {
-        Some(TSX_ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/assignments.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact assignment query")
-        }))
-    }
-
-    fn destructure_query(&self) -> Option<&Query> {
-        Some(TSX_DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/destructures.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact destructure query")
-        }))
-    }
-
-    fn scope_query(&self) -> Option<&Query> {
-        Some(TSX_SCOPE_QUERY.get_or_init(|| {
-            Query::new(
-                &self.grammar(),
-                include_str!("../../queries/typescript/scopes.scm"),
-            )
-            .expect("Failed to compile TypeScriptReact scope query")
-        }))
-    }
-
-    fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
-        if node.kind() == "member_expression" {
-            let object = node.child_by_field_name("object")?;
-            let property = node.child_by_field_name("property")?;
-
-            let object_text = object.utf8_text(source).ok()?;
-            let property_text = property.utf8_text(source).ok()?;
-
-            if object_text == "process" && property_text == "env" {
+            if inner_object_text == "import"
+                && inner_property_text == "meta"
+                && property_text == "env"
+            {
                 return Some(EnvSourceKind::Object {
-                    canonical_name: "process.env".into(),
+                    canonical_name: "import.meta.env".into(),
                 });
             }
-
-            if object.kind() == "member_expression" {
-                let inner_object = object.child_by_field_name("object")?;
-                let inner_property = object.child_by_field_name("property")?;
-                let inner_object_text = inner_object.utf8_text(source).ok()?;
-                let inner_property_text = inner_property.utf8_text(source).ok()?;
-
-                if inner_object_text == "import"
-                    && inner_property_text == "meta"
-                    && property_text == "env"
-                {
-                    return Some(EnvSourceKind::Object {
-                        canonical_name: "import.meta.env".into(),
-                    });
-                }
-            }
         }
-
-        None
     }
 
-    fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
-        if node.kind() == "pair_pattern" {
-            if let Some(key_node) = node.child_by_field_name("key") {
-                return key_node.utf8_text(source).ok().map(|s| s.into());
-            }
-        }
-
-        node.utf8_text(source).ok().map(|s| s.into())
-    }
-
-    fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
-        text.trim_matches(|c| c == '"' || c == '\'' || c == '`')
-    }
-
-    fn extract_property_access(
-        &self,
-        tree: &tree_sitter::Tree,
-        content: &str,
-        byte_offset: usize,
-    ) -> Option<(CompactString, CompactString)> {
-        let node = tree
-            .root_node()
-            .descendant_for_byte_range(byte_offset, byte_offset)?;
-
-        if node.kind() != "property_identifier" {
-            return None;
-        }
-
-        let parent = node.parent()?;
-        if parent.kind() != "member_expression" {
-            return None;
-        }
-
-        let object_node = parent.child_by_field_name("object")?;
-        if object_node.kind() != "identifier" {
-            return None;
-        }
-
-        let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
-        let property_name = node.utf8_text(content.as_bytes()).ok()?;
-
-        Some((object_name.into(), property_name.into()))
-    }
+    None
 }
+
+/// Shared implementation for extracting destructure keys in TypeScript-family languages.
+fn typescript_extract_destructure_key(node: Node, source: &[u8]) -> Option<CompactString> {
+    if node.kind() == "pair_pattern" {
+        if let Some(key_node) = node.child_by_field_name("key") {
+            return key_node.utf8_text(source).ok().map(|s| s.into());
+        }
+    }
+
+    node.utf8_text(source).ok().map(|s| s.into())
+}
+
+/// Shared implementation for extracting property access in TypeScript-family languages.
+fn typescript_extract_property_access(
+    tree: &tree_sitter::Tree,
+    content: &str,
+    byte_offset: usize,
+) -> Option<(CompactString, CompactString)> {
+    let node = tree
+        .root_node()
+        .descendant_for_byte_range(byte_offset, byte_offset)?;
+
+    if node.kind() != "property_identifier" {
+        return None;
+    }
+
+    let parent = node.parent()?;
+    if parent.kind() != "member_expression" {
+        return None;
+    }
+
+    let object_node = parent.child_by_field_name("object")?;
+    if object_node.kind() != "identifier" {
+        return None;
+    }
+
+    let object_name = object_node.utf8_text(content.as_bytes()).ok()?;
+    let property_name = node.utf8_text(content.as_bytes()).ok()?;
+
+    Some((object_name.into(), property_name.into()))
+}
+
+impl_typescript_language!(
+    TypeScript,
+    id: "typescript",
+    language_ids: &["typescript"],
+    extensions: &["ts", "mts", "cts"],
+    grammar: tree_sitter_typescript::LANGUAGE_TYPESCRIPT,
+    extra_scope_patterns: [],
+    queries: {
+        reference: TS_REFERENCE_QUERY,
+        binding: TS_BINDING_QUERY,
+        completion: TS_COMPLETION_QUERY,
+        import: TS_IMPORT_QUERY,
+        reassignment: TS_REASSIGNMENT_QUERY,
+        identifier: TS_IDENTIFIER_QUERY,
+        export: TS_EXPORT_QUERY,
+        assignment: TS_ASSIGNMENT_QUERY,
+        destructure: TS_DESTRUCTURE_QUERY,
+        scope: TS_SCOPE_QUERY
+    }
+);
+
+impl_typescript_language!(
+    TypeScriptReact,
+    id: "typescriptreact",
+    language_ids: &["typescriptreact"],
+    extensions: &["tsx"],
+    grammar: tree_sitter_typescript::LANGUAGE_TSX,
+    extra_scope_patterns: ["jsx_element"],
+    queries: {
+        reference: TSX_REFERENCE_QUERY,
+        binding: TSX_BINDING_QUERY,
+        completion: TSX_COMPLETION_QUERY,
+        import: TSX_IMPORT_QUERY,
+        reassignment: TSX_REASSIGNMENT_QUERY,
+        identifier: TSX_IDENTIFIER_QUERY,
+        export: TSX_EXPORT_QUERY,
+        assignment: TSX_ASSIGNMENT_QUERY,
+        destructure: TSX_DESTRUCTURE_QUERY,
+        scope: TSX_SCOPE_QUERY
+    }
+);
 
 #[cfg(test)]
 mod tests {

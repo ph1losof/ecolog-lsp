@@ -592,7 +592,7 @@ mod tests {
         create_file(
             temp_dir.path(),
             ".env",
-            "API_KEY=secret\nDB_URL=postgres:
+            "API_KEY=secret\nDB_URL=postgres://localhost/db",
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;

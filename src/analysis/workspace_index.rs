@@ -489,7 +489,7 @@ mod tests {
     use super::*;
 
     fn url(path: &str) -> Url {
-        Url::parse(&format!("file:
+        Url::parse(&format!("file://{}", path)).unwrap()
     }
 
     fn make_entry(env_vars: &[&str], is_env_file: bool) -> FileIndexEntry {
