@@ -141,7 +141,7 @@ async fn get_env_var_in_env_file(
             Some(c) => c,
             None => {
                 if let Ok(path) = uri.to_file_path() {
-                    tokio::fs::read_to_string(&path).await.ok()?
+                    std::sync::Arc::new(tokio::fs::read_to_string(&path).await.ok()?)
                 } else {
                     return None;
                 }

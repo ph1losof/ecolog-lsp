@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -119,10 +120,43 @@ impl EcologConfig {
     }
 }
 
+/// Cached feature flags for lock-free access in hot paths.
+/// These atomics are updated when config changes.
+#[derive(Default)]
+pub struct CachedFeatureFlags {
+    pub hover: AtomicBool,
+    pub completion: AtomicBool,
+    pub diagnostics: AtomicBool,
+    pub definition: AtomicBool,
+    pub inlay_hints: AtomicBool,
+}
+
+impl CachedFeatureFlags {
+    fn new() -> Self {
+        Self {
+            hover: AtomicBool::new(true),
+            completion: AtomicBool::new(true),
+            diagnostics: AtomicBool::new(true),
+            definition: AtomicBool::new(true),
+            inlay_hints: AtomicBool::new(false),
+        }
+    }
+
+    fn update_from(&self, features: &FeatureConfig) {
+        self.hover.store(features.hover, Ordering::Relaxed);
+        self.completion.store(features.completion, Ordering::Relaxed);
+        self.diagnostics.store(features.diagnostics, Ordering::Relaxed);
+        self.definition.store(features.definition, Ordering::Relaxed);
+        self.inlay_hints.store(features.inlay_hints, Ordering::Relaxed);
+    }
+}
+
 pub struct ConfigManager {
     config: Arc<RwLock<EcologConfig>>,
-
     init_settings: Arc<RwLock<Option<serde_json::Value>>>,
+    /// Cached feature flags for lock-free access.
+    /// Updated whenever config is loaded or updated.
+    pub cached_features: CachedFeatureFlags,
 }
 
 impl Default for ConfigManager {
@@ -136,7 +170,38 @@ impl ConfigManager {
         Self {
             config: Arc::new(RwLock::new(EcologConfig::default())),
             init_settings: Arc::new(RwLock::new(None)),
+            cached_features: CachedFeatureFlags::new(),
         }
+    }
+
+    /// Check if hover feature is enabled (lock-free).
+    #[inline]
+    pub fn is_hover_enabled(&self) -> bool {
+        self.cached_features.hover.load(Ordering::Relaxed)
+    }
+
+    /// Check if completion feature is enabled (lock-free).
+    #[inline]
+    pub fn is_completion_enabled(&self) -> bool {
+        self.cached_features.completion.load(Ordering::Relaxed)
+    }
+
+    /// Check if diagnostics feature is enabled (lock-free).
+    #[inline]
+    pub fn is_diagnostics_enabled(&self) -> bool {
+        self.cached_features.diagnostics.load(Ordering::Relaxed)
+    }
+
+    /// Check if definition feature is enabled (lock-free).
+    #[inline]
+    pub fn is_definition_enabled(&self) -> bool {
+        self.cached_features.definition.load(Ordering::Relaxed)
+    }
+
+    /// Check if inlay hints feature is enabled (lock-free).
+    #[inline]
+    pub fn is_inlay_hints_enabled(&self) -> bool {
+        self.cached_features.inlay_hints.load(Ordering::Relaxed)
     }
 
     pub fn get_config(&self) -> Arc<RwLock<EcologConfig>> {
@@ -176,6 +241,9 @@ impl ConfigManager {
 
         Self::apply_source_defaults(&mut config);
 
+        // Update cached feature flags for lock-free access
+        self.cached_features.update_from(&config.features);
+
         let mut lock = self.config.write().await;
         *lock = config.clone();
 
@@ -194,6 +262,9 @@ impl ConfigManager {
     }
 
     pub async fn update(&self, new_config: EcologConfig) {
+        // Update cached feature flags for lock-free access
+        self.cached_features.update_from(&new_config.features);
+
         let mut lock = self.config.write().await;
         *lock = new_config;
     }

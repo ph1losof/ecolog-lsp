@@ -8,11 +8,31 @@ use crate::types::FileExportEntry;
 use compact_str::CompactString;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use quick_cache::sync::Cache;
 use rustc_hash::FxHashSet;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 use tower_lsp::lsp_types::{Range, Url};
+
+/// Maximum number of module resolution cache entries.
+/// This bounds memory growth from import resolution.
+const MAX_MODULE_RESOLUTION_CACHE_SIZE: usize = 2000;
+
+/// Key type for module resolution cache that implements proper hashing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModuleResolutionKey {
+    importer: Url,
+    specifier: CompactString,
+}
+
+impl Hash for ModuleResolutionKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.importer.as_str().hash(state);
+        self.specifier.hash(state);
+    }
+}
 
 
 
@@ -108,34 +128,34 @@ impl IndexState {
 
 
 pub struct WorkspaceIndex {
-    
+
     env_to_files: DashMap<CompactString, FxHashSet<Url>>,
 
-    
+
     file_entries: DashMap<Url, FileIndexEntry>,
 
-    
+
     state: RwLock<IndexState>,
 
-    
-    
-    
-    
-    
+
+
+
+
+
     export_index: DashMap<Url, FileExportEntry>,
 
-    
-    
+
+
     env_export_to_files: DashMap<CompactString, FxHashSet<Url>>,
 
-    
-    
-    
-    module_resolution_cache: DashMap<(Url, CompactString), Option<Url>>,
+    /// LRU cache for module resolution with bounded size.
+    /// Key: (importer_url, specifier), Value: resolved URL or None for failed lookups.
+    /// Bounded to MAX_MODULE_RESOLUTION_CACHE_SIZE entries to prevent unbounded memory growth.
+    module_resolution_cache: Cache<ModuleResolutionKey, Option<Url>>,
 }
 
 impl WorkspaceIndex {
-    
+
     pub fn new() -> Self {
         Self {
             env_to_files: DashMap::new(),
@@ -143,7 +163,7 @@ impl WorkspaceIndex {
             state: RwLock::new(IndexState::default()),
             export_index: DashMap::new(),
             env_export_to_files: DashMap::new(),
-            module_resolution_cache: DashMap::new(),
+            module_resolution_cache: Cache::new(MAX_MODULE_RESOLUTION_CACHE_SIZE),
         }
     }
 
@@ -236,16 +256,18 @@ impl WorkspaceIndex {
             .unwrap_or(false)
     }
 
-    
-    
+    /// Get cached module resolution result.
+    /// Returns Some(Some(url)) if resolved, Some(None) if confirmed not resolvable, None if not cached.
     pub fn cached_module_resolution(
         &self,
         importer: &Url,
         specifier: &str,
     ) -> Option<Option<Url>> {
-        self.module_resolution_cache
-            .get(&(importer.clone(), CompactString::from(specifier)))
-            .map(|r| r.clone())
+        let key = ModuleResolutionKey {
+            importer: importer.clone(),
+            specifier: CompactString::from(specifier),
+        };
+        self.module_resolution_cache.get(&key)
     }
 
     
@@ -377,37 +399,38 @@ impl WorkspaceIndex {
         }
     }
 
-    
+    /// Cache a module resolution result.
     pub fn cache_module_resolution(
         &self,
         importer: &Url,
         specifier: &str,
         resolved: Option<Url>,
     ) {
-        self.module_resolution_cache
-            .insert((importer.clone(), CompactString::from(specifier)), resolved);
+        let key = ModuleResolutionKey {
+            importer: importer.clone(),
+            specifier: CompactString::from(specifier),
+        };
+        self.module_resolution_cache.insert(key, resolved);
     }
 
-    
-    
-    
-    
-    
-    pub fn invalidate_resolution_cache(&self, changed_uri: &Url) {
-        
-        self.module_resolution_cache.retain(|_, resolved| {
-            resolved.as_ref() != Some(changed_uri)
-        });
-
-        
-        self.module_resolution_cache.retain(|(importer, _), _| {
-            importer != changed_uri
-        });
+    /// Invalidate module resolution cache entries related to a changed file.
+    /// Since quick_cache doesn't support retain, we clear the entire cache when a file changes.
+    /// This is safe since entries will be re-cached on demand, and the bounded cache
+    /// prevents unbounded growth even with frequent invalidation.
+    pub fn invalidate_resolution_cache(&self, _changed_uri: &Url) {
+        // Clear the entire cache - entries will be re-cached on demand.
+        // This is simpler and still efficient since the cache is bounded.
+        self.module_resolution_cache.clear();
     }
 
-    
+    /// Clear all module resolution cache entries.
     pub fn clear_resolution_cache(&self) {
         self.module_resolution_cache.clear();
+    }
+
+    /// Get module resolution cache statistics for monitoring.
+    pub fn module_cache_len(&self) -> usize {
+        self.module_resolution_cache.len()
     }
 
     
@@ -793,22 +816,23 @@ mod tests {
         let config = url("/config.js");
         let utils = url("/utils.js");
 
-        
+        // Cache some resolutions
         index.cache_module_resolution(&app, "./config", Some(config.clone()));
         index.cache_module_resolution(&app, "./utils", Some(utils.clone()));
         index.cache_module_resolution(&config, "./utils", Some(utils.clone()));
 
-        
+        // Verify all cached
+        assert!(index.cached_module_resolution(&app, "./config").is_some());
+        assert!(index.cached_module_resolution(&app, "./utils").is_some());
+        assert!(index.cached_module_resolution(&config, "./utils").is_some());
+
+        // Invalidate clears entire cache (LRU cache doesn't support selective retain)
         index.invalidate_resolution_cache(&config);
 
-        
+        // All entries should be gone after invalidation
         assert!(index.cached_module_resolution(&app, "./config").is_none());
-
-        
         assert!(index.cached_module_resolution(&config, "./utils").is_none());
-
-        
-        assert!(index.cached_module_resolution(&app, "./utils").is_some());
+        assert!(index.cached_module_resolution(&app, "./utils").is_none());
     }
 
     #[test]

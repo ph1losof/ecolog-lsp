@@ -88,10 +88,10 @@ impl DocumentManager {
         
         let (content, language_id) = {
             if let Some(mut entry) = self.documents.get_mut(uri) {
-                
+                // Apply full document changes
                 for change in changes {
                     if change.range.is_none() {
-                        entry.state.content = change.text;
+                        entry.state.content = std::sync::Arc::new(change.text);
                     }
                 }
                 entry.state.version = version;
@@ -316,7 +316,11 @@ impl DocumentManager {
         self.documents.iter().map(|entry| entry.key().clone()).collect()
     }
 
-    
+    /// Returns the number of open documents.
+    pub fn document_count(&self) -> usize {
+        self.documents.len()
+    }
+
     pub fn query_engine(&self) -> &Arc<QueryEngine> {
         &self.query_engine
     }
@@ -455,7 +459,7 @@ func main() {
 
         let doc = manager.get(&uri).unwrap();
         assert_eq!(doc.version, 2);
-        assert_eq!(doc.content, new_content);
+        assert_eq!(doc.content.as_str(), new_content);
     }
 
     #[tokio::test]
@@ -705,7 +709,7 @@ console.log(DATABASE_URL);"#.to_string();
 
         let doc = manager.get(&uri).unwrap();
         assert_eq!(doc.version, 3);
-        assert_eq!(doc.content, "const x = 3;");
+        assert_eq!(doc.content.as_str(), "const x = 3;");
     }
 
     #[tokio::test]

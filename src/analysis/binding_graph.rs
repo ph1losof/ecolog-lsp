@@ -249,29 +249,30 @@ impl BindingGraph {
                 .then_with(|| a.range.start.character.cmp(&b.range.start.character))
         });
 
-        // Build resolution cache for all symbols
-        self.build_resolution_cache();
-
-        // Build env var index for O(1) lookup by name (uses cached resolutions)
+        // Build env var index (resolution cache is populated lazily as needed)
         self.build_env_var_index();
     }
 
-    /// Pre-computes resolution for all symbols.
-    fn build_resolution_cache(&mut self) {
-        self.resolution_cache.clear();
-
-        // Collect symbol IDs first to avoid borrow issues
-        let symbol_ids: Vec<SymbolId> = self.symbols.iter().map(|s| s.id).collect();
-
-        for symbol_id in symbol_ids {
-            let resolved = self.resolve_to_env_with_depth(symbol_id, MAX_CHAIN_DEPTH, 0);
-            self.resolution_cache.insert(symbol_id, resolved);
+    /// Helper to get or compute a symbol's resolution, caching the result.
+    /// This avoids pre-computing all resolutions and only computes on-demand.
+    fn get_or_compute_resolution(&mut self, symbol_id: SymbolId) -> Option<ResolvedEnv> {
+        // Check cache first
+        if let Some(cached) = self.resolution_cache.get(&symbol_id) {
+            return cached.clone();
         }
+
+        // Compute and cache
+        let resolved = self.resolve_to_env_with_depth(symbol_id, MAX_CHAIN_DEPTH, 0);
+        self.resolution_cache.insert(symbol_id, resolved.clone());
+        resolved
     }
 
     /// Builds the env_var_index for fast lookup of all locations referencing a given env var.
+    /// Also populates the resolution cache lazily as symbols are processed.
     fn build_env_var_index(&mut self) {
+        // Retain capacity to reduce allocations on rebuild
         self.env_var_index.clear();
+        self.resolution_cache.clear();
 
         // Track seen ranges for deduplication
         let mut seen_ranges: FxHashSet<(u32, u32, u32, u32)> = FxHashSet::default();
@@ -296,16 +297,22 @@ impl BindingGraph {
             }
         }
 
-        // Index symbols that resolve to env vars (use cache for O(1) lookup)
-        for symbol in &self.symbols {
-            if let Some(Some(ResolvedEnv::Variable(name))) =
-                self.resolution_cache.get(&symbol.id).cloned()
-            {
+        // Collect symbol data to avoid borrow issues
+        let symbol_data: Vec<_> = self
+            .symbols
+            .iter()
+            .map(|s| (s.id, s.name.clone(), s.name_range, s.destructured_key_range))
+            .collect();
+
+        // Index symbols that resolve to env vars
+        for (symbol_id, symbol_name, name_range, destructured_key_range) in symbol_data {
+            let resolved = self.get_or_compute_resolution(symbol_id);
+            if let Some(ResolvedEnv::Variable(name)) = resolved {
                 // Determine the range to index
-                let index_range = if let Some(key_range) = symbol.destructured_key_range {
+                let index_range = if let Some(key_range) = destructured_key_range {
                     Some(key_range)
-                } else if symbol.name.as_str() == name.as_str() {
-                    Some(symbol.name_range)
+                } else if symbol_name.as_str() == name.as_str() {
+                    Some(name_range)
                 } else {
                     None
                 };
@@ -324,40 +331,55 @@ impl BindingGraph {
                             .push(EnvVarLocation {
                                 range,
                                 kind: EnvVarLocationKind::BindingDeclaration,
-                                binding_name: Some(symbol.name.clone()),
+                                binding_name: Some(symbol_name),
                             });
                     }
                 }
             }
         }
 
-        // Index usages (use cache for O(1) lookup)
-        for usage in &self.usages {
-            if let Some(resolved) = self.resolution_cache.get(&usage.symbol_id).and_then(|r| r.clone()) {
+        // Collect usage data to avoid borrow issues
+        let usage_data: Vec<_> = self
+            .usages
+            .iter()
+            .map(|u| {
+                (
+                    u.symbol_id,
+                    u.range,
+                    u.property_access.clone(),
+                    u.property_access_range,
+                )
+            })
+            .collect();
+
+        // Index usages
+        for (symbol_id, usage_range, property_access, property_access_range) in usage_data {
+            let resolved = self.get_or_compute_resolution(symbol_id);
+            if let Some(resolved) = resolved {
                 match &resolved {
                     ResolvedEnv::Variable(name) => {
                         let range_key = (
-                            usage.range.start.line,
-                            usage.range.start.character,
-                            usage.range.end.line,
-                            usage.range.end.character,
+                            usage_range.start.line,
+                            usage_range.start.character,
+                            usage_range.end.line,
+                            usage_range.end.character,
                         );
                         if seen_ranges.insert(range_key) {
                             let binding_name =
-                                self.get_symbol(usage.symbol_id).map(|s| s.name.clone());
+                                self.get_symbol(symbol_id).map(|s| s.name.clone());
                             self.env_var_index
                                 .entry(name.clone())
                                 .or_default()
                                 .push(EnvVarLocation {
-                                    range: usage.range,
+                                    range: usage_range,
                                     kind: EnvVarLocationKind::BindingUsage,
                                     binding_name,
                                 });
                         }
                     }
                     ResolvedEnv::Object(_) => {
-                        if let Some(prop) = &usage.property_access {
-                            let range = usage.property_access_range.unwrap_or(usage.range);
+                        if let Some(prop) = &property_access {
+                            let range = property_access_range.unwrap_or(usage_range);
                             let range_key = (
                                 range.start.line,
                                 range.start.character,
@@ -366,7 +388,7 @@ impl BindingGraph {
                             );
                             if seen_ranges.insert(range_key) {
                                 let binding_name =
-                                    self.get_symbol(usage.symbol_id).map(|s| s.name.clone());
+                                    self.get_symbol(symbol_id).map(|s| s.name.clone());
                                 self.env_var_index
                                     .entry(prop.clone())
                                     .or_default()

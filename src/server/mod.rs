@@ -10,6 +10,7 @@ pub use error::LspError;
 use crate::analysis::{DocumentManager, QueryEngine};
 use crate::languages::LanguageRegistry;
 use crate::server::state::ServerState;
+use futures::future::join_all;
 use std::sync::Arc;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -184,6 +185,28 @@ impl LspServer {
             tracing::debug!("Failed to refresh inlay hints: {}", e);
         }
     }
+
+    /// Refresh diagnostics for all open documents in parallel
+    async fn refresh_all_diagnostics(&self) {
+        let uris: Vec<_> = self.state.document_manager.all_uris();
+        let state = &self.state;
+
+        let futures: Vec<_> = uris
+            .iter()
+            .map(|uri| {
+                let uri = uri.clone();
+                async move {
+                    let diagnostics = handlers::compute_diagnostics(&uri, state).await;
+                    (uri, diagnostics)
+                }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+        for (uri, diagnostics) in results {
+            self.client.publish_diagnostics(uri, diagnostics, None).await;
+        }
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -335,15 +358,27 @@ impl LanguageServer for LspServer {
             }
         });
 
+        let document_manager = Arc::clone(&self.state.document_manager);
+        let workspace_index = Arc::clone(&self.state.workspace_index);
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             let mut heartbeat_count = 0u64;
             loop {
                 interval.tick().await;
                 heartbeat_count += 1;
+
+                // Collect memory metrics
+                let doc_count = document_manager.document_count();
+                let index_stats = workspace_index.stats();
+                let module_cache_len = workspace_index.module_cache_len();
+
                 tracing::info!(
-                    "LSP heartbeat #{} - async runtime responsive",
-                    heartbeat_count
+                    "LSP heartbeat #{} - docs={} indexed_files={} env_vars={} module_cache={}",
+                    heartbeat_count,
+                    doc_count,
+                    index_stats.total_files,
+                    index_stats.total_env_vars,
+                    module_cache_len
                 );
             }
         });
@@ -483,13 +518,7 @@ impl LanguageServer for LspServer {
                         )
                         .await;
 
-                        for uri in self.state.document_manager.all_uris() {
-                            let diagnostics =
-                                handlers::compute_diagnostics(&uri, &self.state).await;
-                            self.client
-                                .publish_diagnostics(uri, diagnostics, None)
-                                .await;
-                        }
+                        self.refresh_all_diagnostics().await;
                         // Refresh inlay hints when env files change
                         self.refresh_inlay_hints().await;
                     }
@@ -504,13 +533,7 @@ impl LanguageServer for LspServer {
                         )
                         .await;
 
-                        for uri in self.state.document_manager.all_uris() {
-                            let diagnostics =
-                                handlers::compute_diagnostics(&uri, &self.state).await;
-                            self.client
-                                .publish_diagnostics(uri, diagnostics, None)
-                                .await;
-                        }
+                        self.refresh_all_diagnostics().await;
                         // Refresh inlay hints when env files are deleted
                         self.refresh_inlay_hints().await;
                     }
@@ -567,13 +590,8 @@ impl LanguageServer for LspServer {
             "ecolog.workspace.setRoot",
         ];
         if refresh_commands.contains(&command.as_str()) {
-            // Refresh diagnostics for all open documents
-            for uri in self.state.document_manager.all_uris() {
-                let diagnostics = handlers::compute_diagnostics(&uri, &self.state).await;
-                self.client
-                    .publish_diagnostics(uri, diagnostics, None)
-                    .await;
-            }
+            // Refresh diagnostics for all open documents (in parallel)
+            self.refresh_all_diagnostics().await;
             // Refresh inlay hints
             self.refresh_inlay_hints().await;
         }

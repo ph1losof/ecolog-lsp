@@ -151,22 +151,20 @@ impl ImportContext {
 
 #[derive(Debug)]
 pub struct DocumentState {
-   
+
     pub uri: Url,
 
-   
-    pub content: String,
+    /// Document content wrapped in Arc for cheap cloning.
+    /// This avoids expensive string copies when accessing document state
+    /// across async boundaries or concurrent handlers.
+    pub content: std::sync::Arc<String>,
 
-   
     pub version: i32,
 
-   
     pub language_id: CompactString,
 
-   
     pub tree: Option<Tree>,
 
-   
     pub import_context: ImportContext,
 }
 
@@ -174,7 +172,7 @@ impl DocumentState {
     pub fn new(uri: Url, language_id: CompactString, content: String, version: i32) -> Self {
         Self {
             uri,
-            content,
+            content: std::sync::Arc::new(content),
             version,
             language_id,
             tree: None,
@@ -1164,7 +1162,7 @@ mod tests {
         let state = DocumentState::new(uri.clone(), "typescript".into(), "const x = 1;".into(), 1);
 
         assert_eq!(state.uri, uri);
-        assert_eq!(state.content, "const x = 1;");
+        assert_eq!(state.content.as_str(), "const x = 1;");
         assert_eq!(state.version, 1);
         assert_eq!(state.language_id, "typescript");
         assert!(state.tree.is_none());

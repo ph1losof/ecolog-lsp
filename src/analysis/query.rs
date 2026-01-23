@@ -10,9 +10,9 @@ use tokio::sync::Mutex;
 use tower_lsp::lsp_types::Range as LspRange;
 use tree_sitter::{Parser, Query, QueryCursor, QueryMatch, Tree};
 
-const MAX_PARSERS_PER_LANGUAGE: usize = 4;
+const MAX_PARSERS_PER_LANGUAGE: usize = 8;
 
-const MAX_CURSORS: usize = 8;
+const MAX_CURSORS: usize = 16;
 
 pub struct ParserPool {
     parsers: HashMap<&'static str, Vec<Parser>>,
