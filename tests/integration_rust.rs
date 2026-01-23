@@ -332,7 +332,7 @@ async fn test_rust_completion() {
 
 #[tokio::test]
 async fn test_rust_dotenv_macro_mock() {
-    
+
     let fixture = TestFixture::new().await;
     let uri = fixture.create_file("main.rs", "fn main() { dotenv!(\"DEBUG\"); }");
 
@@ -347,7 +347,7 @@ async fn test_rust_dotenv_macro_mock() {
         )
         .await;
 
-    
+
     let hover = handle_hover(
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -363,4 +363,176 @@ async fn test_rust_dotenv_macro_mock() {
     if hover.is_some() {
         assert!(format!("{:?}", hover.unwrap()).contains("true"));
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// New Pattern Tests: dotenv/dotenvy, struct init, const/static, method chains
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_rust_hover_dotenv_var() {
+    let fixture = TestFixture::new().await;
+    let content = r#"fn main() { let db = dotenv::var("DB_URL"); }"#;
+    let uri = fixture.create_file("main.rs", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "rust".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(0, 36),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for dotenv::var");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_rust_hover_dotenvy_var() {
+    let fixture = TestFixture::new().await;
+    let content = r#"fn main() { let db = dotenvy::var("DB_URL"); }"#;
+    let uri = fixture.create_file("main.rs", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "rust".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(0, 37),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for dotenvy::var");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_rust_hover_method_chain_unwrap() {
+    let fixture = TestFixture::new().await;
+    let content = r#"fn main() { let db = env::var("DB_URL").unwrap(); }"#;
+    let uri = fixture.create_file("main.rs", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "rust".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(0, 33),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for method chain unwrap");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_rust_hover_try_expression() {
+    let fixture = TestFixture::new().await;
+    let content = r#"fn get_db() -> Result<String, std::env::VarError> { let db = env::var("DB_URL")?; Ok(db) }"#;
+    let uri = fixture.create_file("main.rs", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "rust".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(0, 73),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for try expression");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_rust_hover_const_env_macro() {
+    let fixture = TestFixture::new().await;
+    let content = r#"const DB: &str = env!("DB_URL"); fn main() {}"#;
+    let uri = fixture.create_file("main.rs", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "rust".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(0, 24),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for const env! macro");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_rust_hover_static_env_macro() {
+    let fixture = TestFixture::new().await;
+    let content = r#"static DB: &str = env!("DB_URL"); fn main() {}"#;
+    let uri = fixture.create_file("main.rs", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "rust".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(0, 25),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for static env! macro");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }

@@ -3,5 +3,5 @@
     operand: (identifier) @object
     field: (field_identifier) @func)
   (#eq? @object "os")
-  (#match? @func "^(Getenv|LookupEnv)$")
+  (#match? @func "^(Getenv|LookupEnv|Setenv|Unsetenv)$")
 ) @completion_target

@@ -150,7 +150,7 @@ pub(crate) async fn get_env_var_usages_in_file(
     env_var_name: &str,
 ) -> Vec<crate::analysis::resolver::EnvVarUsageLocation> {
     if let Some(graph_ref) = state.document_manager.get_binding_graph(uri) {
-        let resolver = BindingResolver::new(&*graph_ref);
+        let resolver = BindingResolver::new(&graph_ref);
         return resolver.find_env_var_usages(env_var_name);
     }
 

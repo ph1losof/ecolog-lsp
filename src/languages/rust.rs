@@ -14,6 +14,7 @@ static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Rust {
@@ -117,6 +118,16 @@ impl LanguageSupport for Rust {
         }))
     }
 
+    fn destructure_query(&self) -> Option<&Query> {
+        Some(DESTRUCTURE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/rust/destructures.scm"),
+            )
+            .expect("Failed to compile Rust destructure query")
+        }))
+    }
+
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
             Query::new(
@@ -155,16 +166,24 @@ impl LanguageSupport for Rust {
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        &["\""]
+        &["(\"", "('"]
     }
 
     fn is_scope_node(&self, node: tree_sitter::Node) -> bool {
-        match node.kind() {
-            "function_item" | "closure_expression" | "block" | "for_expression"
-            | "if_expression" | "loop_expression" | "while_expression" | "match_expression"
-            | "impl_item" | "trait_item" | "mod_item" => true,
-            _ => false,
-        }
+        matches!(
+            node.kind(),
+            "function_item"
+                | "closure_expression"
+                | "block"
+                | "for_expression"
+                | "if_expression"
+                | "loop_expression"
+                | "while_expression"
+                | "match_expression"
+                | "impl_item"
+                | "trait_item"
+                | "mod_item"
+        )
     }
 
     fn extract_property_access(
@@ -302,6 +321,12 @@ mod tests {
     fn test_scope_query_compiles() {
         let rs = get_rust();
         assert!(rs.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_destructure_query_compiles() {
+        let rs = get_rust();
+        assert!(rs.destructure_query().is_some());
     }
 
     #[test]

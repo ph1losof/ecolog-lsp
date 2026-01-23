@@ -316,10 +316,8 @@ impl AnalysisPipeline {
                 if let Some(sym) = graph.get_symbol_mut(symbol_id) {
                     sym.origin = SymbolOrigin::Symbol { target: target_id };
                 }
-            } else {
-                if let Some(sym) = graph.get_symbol_mut(symbol_id) {
-                    sym.origin = SymbolOrigin::UnresolvedSymbol { source_name };
-                }
+            } else if let Some(sym) = graph.get_symbol_mut(symbol_id) {
+                sym.origin = SymbolOrigin::UnresolvedSymbol { source_name };
             }
         }
 
@@ -408,20 +406,16 @@ impl AnalysisPipeline {
             let scope = graph.scope_at_position(range.start);
 
             if let Some(symbol) = graph.lookup_symbol(&name, scope) {
-                if range.start.line > symbol.declaration_range.end.line
-                    || (range.start.line == symbol.declaration_range.end.line
-                        && range.start.character > symbol.declaration_range.end.character)
-                {
-                    if range != symbol.name_range {
-                        let usage = SymbolUsage {
-                            symbol_id: symbol.id,
-                            range,
-                            scope,
-                            property_access: None,
-                            property_access_range: None,
-                        };
-                        graph.add_usage(usage);
-                    }
+                if (range.start.line > symbol.declaration_range.end.line || (range.start.line == symbol.declaration_range.end.line
+                        && range.start.character > symbol.declaration_range.end.character)) && range != symbol.name_range {
+                    let usage = SymbolUsage {
+                        symbol_id: symbol.id,
+                        range,
+                        scope,
+                        property_access: None,
+                        property_access_range: None,
+                    };
+                    graph.add_usage(usage);
                 }
             }
         }
@@ -443,10 +437,11 @@ impl AnalysisPipeline {
         for (name, range) in &reassignments {
             let reassignment_scope = graph.scope_at_position(range.start);
 
-            for symbol in graph.symbols() {
-                if &symbol.name == name {
+            // Use name-only index for O(1) lookup instead of scanning all symbols
+            for symbol_id in graph.lookup_symbols_by_name(name) {
+                if let Some(symbol) = graph.get_symbol(symbol_id) {
                     if Self::is_scope_visible(graph, symbol.scope, reassignment_scope) {
-                        symbols_to_invalidate.push(symbol.id);
+                        symbols_to_invalidate.push(symbol_id);
                     }
                 }
             }

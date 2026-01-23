@@ -3,7 +3,7 @@ use crate::types::{
     SymbolUsage,
 };
 use compact_str::CompactString;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use tower_lsp::lsp_types::{Position, Range};
 
@@ -23,6 +23,30 @@ struct UsageRangeIndexEntry {
     usage_index: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScopeRangeIndexEntry {
+    range: Range,
+    scope_id: ScopeId,
+    /// Cached size for efficient comparison (smaller = more specific scope)
+    size: u64,
+}
+
+/// A location where an env var is referenced
+#[derive(Debug, Clone)]
+pub struct EnvVarLocation {
+    pub range: Range,
+    pub kind: EnvVarLocationKind,
+    pub binding_name: Option<CompactString>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvVarLocationKind {
+    DirectReference,
+    BindingDeclaration,
+    BindingUsage,
+    PropertyAccess,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct BindingGraph {
     symbols: Vec<Symbol>,
@@ -30,6 +54,9 @@ pub struct BindingGraph {
     scopes: Vec<Scope>,
 
     name_index: FxHashMap<(CompactString, ScopeId), SmallVec<[SymbolId; 2]>>,
+
+    /// Index for fast lookup of all symbols by name only (ignoring scope)
+    name_only_index: FxHashMap<CompactString, SmallVec<[SymbolId; 4]>>,
 
     direct_references: Vec<EnvReference>,
 
@@ -43,6 +70,15 @@ pub struct BindingGraph {
     /// Index for O(log n) usage lookup by position (sorted by range start)
     usage_range_index: Vec<UsageRangeIndexEntry>,
 
+    /// Index for O(log n) scope lookup by position (sorted by range start)
+    scope_range_index: Vec<ScopeRangeIndexEntry>,
+
+    /// Index for O(1) lookup of all usages of a given env var name
+    env_var_index: FxHashMap<CompactString, Vec<EnvVarLocation>>,
+
+    /// Cache for resolved env vars (symbol_id -> resolved result)
+    resolution_cache: FxHashMap<SymbolId, Option<ResolvedEnv>>,
+
     next_symbol_id: u32,
 
     next_scope_id: u32,
@@ -54,11 +90,15 @@ impl BindingGraph {
             symbols: Vec::new(),
             scopes: Vec::new(),
             name_index: FxHashMap::default(),
+            name_only_index: FxHashMap::default(),
             direct_references: Vec::new(),
             usages: Vec::new(),
             destructure_range_index: Vec::new(),
             symbol_range_index: Vec::new(),
             usage_range_index: Vec::new(),
+            scope_range_index: Vec::new(),
+            env_var_index: FxHashMap::default(),
+            resolution_cache: FxHashMap::default(),
             next_symbol_id: 0,
             next_scope_id: 1,
         };
@@ -89,7 +129,13 @@ impl BindingGraph {
         let key = (symbol.name.clone(), symbol.scope);
         self.name_index
             .entry(key)
-            .or_insert_with(SmallVec::new)
+            .or_default()
+            .push(id);
+
+        // Also add to name-only index for fast name lookups across all scopes
+        self.name_only_index
+            .entry(symbol.name.clone())
+            .or_default()
             .push(id);
 
         if let Some(key_range) = symbol.destructured_key_range {
@@ -155,6 +201,16 @@ impl BindingGraph {
         self.lookup_symbol(name, scope).map(|s| s.id)
     }
 
+    /// Look up all symbols with the given name across all scopes.
+    /// Returns an iterator over symbol IDs. O(1) lookup.
+    pub fn lookup_symbols_by_name(&self, name: &str) -> impl Iterator<Item = SymbolId> + '_ {
+        self.name_only_index
+            .get(name)
+            .map(|ids| ids.iter().copied())
+            .into_iter()
+            .flatten()
+    }
+
     /// O(log n) symbol lookup by position using the range index.
     /// Must call `rebuild_range_index` after batch symbol additions.
     pub fn symbol_at_position(&self, position: Position) -> Option<&Symbol> {
@@ -183,6 +239,153 @@ impl BindingGraph {
                 .cmp(&b.range.start.line)
                 .then_with(|| a.range.start.character.cmp(&b.range.start.character))
         });
+
+        // Sort scopes by range start for binary search
+        self.scope_range_index.sort_by(|a, b| {
+            a.range
+                .start
+                .line
+                .cmp(&b.range.start.line)
+                .then_with(|| a.range.start.character.cmp(&b.range.start.character))
+        });
+
+        // Build resolution cache for all symbols
+        self.build_resolution_cache();
+
+        // Build env var index for O(1) lookup by name (uses cached resolutions)
+        self.build_env_var_index();
+    }
+
+    /// Pre-computes resolution for all symbols.
+    fn build_resolution_cache(&mut self) {
+        self.resolution_cache.clear();
+
+        // Collect symbol IDs first to avoid borrow issues
+        let symbol_ids: Vec<SymbolId> = self.symbols.iter().map(|s| s.id).collect();
+
+        for symbol_id in symbol_ids {
+            let resolved = self.resolve_to_env_with_depth(symbol_id, MAX_CHAIN_DEPTH, 0);
+            self.resolution_cache.insert(symbol_id, resolved);
+        }
+    }
+
+    /// Builds the env_var_index for fast lookup of all locations referencing a given env var.
+    fn build_env_var_index(&mut self) {
+        self.env_var_index.clear();
+
+        // Track seen ranges for deduplication
+        let mut seen_ranges: FxHashSet<(u32, u32, u32, u32)> = FxHashSet::default();
+
+        // Index direct references
+        for reference in &self.direct_references {
+            let range_key = (
+                reference.name_range.start.line,
+                reference.name_range.start.character,
+                reference.name_range.end.line,
+                reference.name_range.end.character,
+            );
+            if seen_ranges.insert(range_key) {
+                self.env_var_index
+                    .entry(reference.name.clone())
+                    .or_default()
+                    .push(EnvVarLocation {
+                        range: reference.name_range,
+                        kind: EnvVarLocationKind::DirectReference,
+                        binding_name: None,
+                    });
+            }
+        }
+
+        // Index symbols that resolve to env vars (use cache for O(1) lookup)
+        for symbol in &self.symbols {
+            if let Some(Some(ResolvedEnv::Variable(name))) =
+                self.resolution_cache.get(&symbol.id).cloned()
+            {
+                // Determine the range to index
+                let index_range = if let Some(key_range) = symbol.destructured_key_range {
+                    Some(key_range)
+                } else if symbol.name.as_str() == name.as_str() {
+                    Some(symbol.name_range)
+                } else {
+                    None
+                };
+
+                if let Some(range) = index_range {
+                    let range_key = (
+                        range.start.line,
+                        range.start.character,
+                        range.end.line,
+                        range.end.character,
+                    );
+                    if seen_ranges.insert(range_key) {
+                        self.env_var_index
+                            .entry(name.clone())
+                            .or_default()
+                            .push(EnvVarLocation {
+                                range,
+                                kind: EnvVarLocationKind::BindingDeclaration,
+                                binding_name: Some(symbol.name.clone()),
+                            });
+                    }
+                }
+            }
+        }
+
+        // Index usages (use cache for O(1) lookup)
+        for usage in &self.usages {
+            if let Some(resolved) = self.resolution_cache.get(&usage.symbol_id).and_then(|r| r.clone()) {
+                match &resolved {
+                    ResolvedEnv::Variable(name) => {
+                        let range_key = (
+                            usage.range.start.line,
+                            usage.range.start.character,
+                            usage.range.end.line,
+                            usage.range.end.character,
+                        );
+                        if seen_ranges.insert(range_key) {
+                            let binding_name =
+                                self.get_symbol(usage.symbol_id).map(|s| s.name.clone());
+                            self.env_var_index
+                                .entry(name.clone())
+                                .or_default()
+                                .push(EnvVarLocation {
+                                    range: usage.range,
+                                    kind: EnvVarLocationKind::BindingUsage,
+                                    binding_name,
+                                });
+                        }
+                    }
+                    ResolvedEnv::Object(_) => {
+                        if let Some(prop) = &usage.property_access {
+                            let range = usage.property_access_range.unwrap_or(usage.range);
+                            let range_key = (
+                                range.start.line,
+                                range.start.character,
+                                range.end.line,
+                                range.end.character,
+                            );
+                            if seen_ranges.insert(range_key) {
+                                let binding_name =
+                                    self.get_symbol(usage.symbol_id).map(|s| s.name.clone());
+                                self.env_var_index
+                                    .entry(prop.clone())
+                                    .or_default()
+                                    .push(EnvVarLocation {
+                                        range,
+                                        kind: EnvVarLocationKind::PropertyAccess,
+                                        binding_name,
+                                    });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get all locations where the given env var is used. O(1) lookup.
+    pub fn get_env_var_locations(&self, env_var_name: &str) -> Option<&Vec<EnvVarLocation>> {
+        self.env_var_index.get(env_var_name)
     }
 
     /// Generic binary search for range indices, returns SymbolId if found.
@@ -250,6 +453,13 @@ impl BindingGraph {
         self.next_scope_id += 1;
         scope.id = id;
 
+        // Add to scope range index for O(log n) position lookups
+        self.scope_range_index.push(ScopeRangeIndexEntry {
+            range: scope.range,
+            scope_id: id,
+            size: Self::range_size(scope.range),
+        });
+
         self.scopes.push(scope);
         id
     }
@@ -264,16 +474,44 @@ impl BindingGraph {
         &self.scopes
     }
 
+    /// O(log n) scope lookup by position using the range index.
+    /// Returns the most specific (smallest) scope containing the position.
+    /// Must call `rebuild_range_index` after batch scope additions.
     pub fn scope_at_position(&self, position: Position) -> ScopeId {
+        // If index is empty or only has root, fall back to root
+        if self.scope_range_index.is_empty() {
+            return ScopeId::root();
+        }
+
         let mut best_scope = ScopeId::root();
         let mut best_size = u64::MAX;
 
-        for scope in &self.scopes {
-            if Self::contains_position(scope.range, position) {
-                let size = Self::range_size(scope.range);
-                if size < best_size {
-                    best_size = size;
-                    best_scope = scope.id;
+        // Binary search to find the rightmost scope that starts at or before position
+        let search_idx = self.scope_range_index.partition_point(|entry| {
+            entry.range.start.line < position.line
+                || (entry.range.start.line == position.line
+                    && entry.range.start.character <= position.character)
+        });
+
+        // Check scopes up to and around the search point
+        // Scopes that start before position might still contain it
+        let start_idx = search_idx.saturating_sub(self.scope_range_index.len().min(32));
+        let end_idx = search_idx.min(self.scope_range_index.len());
+
+        for i in start_idx..end_idx {
+            let entry = &self.scope_range_index[i];
+            if Self::contains_position(entry.range, position) && entry.size < best_size {
+                best_size = entry.size;
+                best_scope = entry.scope_id;
+            }
+        }
+
+        // Also check the root scope if it wasn't in the index
+        if let Some(root) = self.scopes.first() {
+            if Self::contains_position(root.range, position) {
+                let root_size = Self::range_size(root.range);
+                if root_size < best_size {
+                    best_scope = root.id;
                 }
             }
         }
@@ -373,7 +611,13 @@ impl BindingGraph {
         None
     }
 
+    /// Resolve a symbol to its env var or env object. Uses cached results if available.
     pub fn resolve_to_env(&self, symbol_id: SymbolId) -> Option<ResolvedEnv> {
+        // Try cache first (O(1) lookup)
+        if let Some(cached) = self.resolution_cache.get(&symbol_id) {
+            return cached.clone();
+        }
+        // Fall back to walking the chain (for queries before rebuild_range_index)
         self.resolve_to_env_with_depth(symbol_id, MAX_CHAIN_DEPTH, 0)
     }
 
@@ -482,11 +726,15 @@ impl BindingGraph {
         self.symbols.clear();
         self.scopes.clear();
         self.name_index.clear();
+        self.name_only_index.clear();
         self.direct_references.clear();
         self.usages.clear();
         self.destructure_range_index.clear();
         self.symbol_range_index.clear();
         self.usage_range_index.clear();
+        self.scope_range_index.clear();
+        self.env_var_index.clear();
+        self.resolution_cache.clear();
         self.next_symbol_id = 0;
         self.next_scope_id = 1;
 

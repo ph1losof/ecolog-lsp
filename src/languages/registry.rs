@@ -11,6 +11,12 @@ pub struct LanguageRegistry {
     by_language_id: HashMap<&'static str, Arc<dyn LanguageSupport>>,
 }
 
+impl Default for LanguageRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LanguageRegistry {
     pub fn new() -> Self {
         Self {

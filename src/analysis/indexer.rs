@@ -83,7 +83,7 @@ impl WorkspaceIndexer {
         
         
         
-        let parallelism = (num_cpus::get() / 2).max(1).min(4);
+        let parallelism = (num_cpus::get() / 2).clamp(1, 4);
         let semaphore = Arc::new(Semaphore::new(parallelism));
         let mut handles = Vec::with_capacity(file_count);
 

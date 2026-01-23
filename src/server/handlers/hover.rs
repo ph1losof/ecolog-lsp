@@ -9,6 +9,17 @@ use tower_lsp::lsp_types::{
     Hover, HoverContents, HoverParams, MarkupContent, MarkupKind, Position, Range, Url,
 };
 
+/// Context for hover operations on imported env object properties
+struct ImportedEnvPropertyHoverContext<'a> {
+    uri: &'a Url,
+    position: Position,
+    property_name: &'a compact_str::CompactString,
+    property_range: &'a Range,
+    import_ctx: &'a ImportContext,
+    tree: &'a Option<tree_sitter::Tree>,
+    content: &'a str,
+}
+
 pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Hover> {
     let uri = &params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
@@ -90,13 +101,13 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             "[HANDLE_HOVER_EXIT] found elapsed_ms={}",
             start.elapsed().as_millis()
         );
-        return Some(Hover {
+        Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: markdown,
             }),
             range: Some(hover_range),
-        });
+        })
     } else {
         if let Some(crate::types::BindingKind::Object) = binding_kind {
             let b_name = binding_name.as_deref().unwrap_or(env_var_name.as_str());
@@ -123,7 +134,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             "[HANDLE_HOVER_EXIT] not_found elapsed_ms={}",
             start.elapsed().as_millis()
         );
-        return None;
+        None
     }
 }
 
@@ -147,17 +158,16 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
     let (module_path, original_name) = match import_ctx.aliases.get(&identifier_name) {
         Some(alias) => alias.clone(),
         None => {
-            return handle_hover_on_imported_env_object_property(
+            let ctx = ImportedEnvPropertyHoverContext {
                 uri,
                 position,
-                &identifier_name,
-                &identifier_range,
-                &import_ctx,
-                &tree,
-                &content,
-                state,
-            )
-            .await;
+                property_name: &identifier_name,
+                property_range: &identifier_range,
+                import_ctx: &import_ctx,
+                tree: &tree,
+                content: &content,
+            };
+            return handle_hover_on_imported_env_object_property(&ctx, state).await;
         }
     };
 
@@ -211,28 +221,22 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
 }
 
 async fn handle_hover_on_imported_env_object_property(
-    uri: &Url,
-    position: Position,
-    property_name: &compact_str::CompactString,
-    property_range: &Range,
-    import_ctx: &ImportContext,
-    tree: &Option<tree_sitter::Tree>,
-    content: &str,
+    ctx: &ImportedEnvPropertyHoverContext<'_>,
     state: &ServerState,
 ) -> Option<Hover> {
-    let tree = tree.as_ref()?;
+    let tree = ctx.tree.as_ref()?;
 
-    let language = state.languages.get_for_uri(uri)?;
+    let language = state.languages.get_for_uri(ctx.uri)?;
 
-    let rope = ropey::Rope::from_str(content);
-    let line_start = rope.try_line_to_char(position.line as usize).ok()?;
-    let char_offset = line_start + position.character as usize;
+    let rope = ropey::Rope::from_str(ctx.content);
+    let line_start = rope.try_line_to_char(ctx.position.line as usize).ok()?;
+    let char_offset = line_start + ctx.position.character as usize;
     let byte_offset = rope.try_char_to_byte(char_offset).ok()?;
 
     let (object_name, _extracted_property) =
-        language.extract_property_access(tree, content, byte_offset)?;
+        language.extract_property_access(tree, ctx.content, byte_offset)?;
 
-    let (module_path, original_name) = import_ctx.aliases.get(object_name.as_str())?;
+    let (module_path, original_name) = ctx.import_ctx.aliases.get(object_name.as_str())?;
 
     if !module_path.starts_with("./") && !module_path.starts_with("../") {
         return None;
@@ -246,10 +250,10 @@ async fn handle_hover_on_imported_env_object_property(
 
     let is_default = original_name == module_path;
 
-    match cross_resolver.resolve_import(uri, module_path, original_name, is_default) {
+    match cross_resolver.resolve_import(ctx.uri, module_path, original_name, is_default) {
         CrossModuleResolution::EnvObject { .. } => {
-            let env_var_name = property_name.as_str();
-            let file_path = uri.to_file_path().ok()?;
+            let env_var_name = ctx.property_name.as_str();
+            let file_path = ctx.uri.to_file_path().ok()?;
 
             let markdown = if let Some(resolved) =
                 resolve_env_var_value(env_var_name, &file_path, state).await
@@ -267,7 +271,7 @@ async fn handle_hover_on_imported_env_object_property(
                     kind: MarkupKind::Markdown,
                     value: markdown,
                 }),
-                range: Some(*property_range),
+                range: Some(*ctx.property_range),
             })
         }
         _ => None,

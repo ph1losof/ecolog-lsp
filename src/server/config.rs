@@ -5,11 +5,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Default)]
 pub struct EcologConfig {
     #[serde(default)]
     pub features: FeatureConfig,
     #[serde(default)]
     pub strict: StrictConfig,
+    #[serde(default)]
+    pub inlay_hints: InlayHintConfig,
     #[serde(default)]
     pub workspace: abundantis::config::WorkspaceConfig,
     #[serde(default)]
@@ -32,6 +35,8 @@ pub struct FeatureConfig {
     pub diagnostics: bool,
     #[serde(default = "true_bool")]
     pub definition: bool,
+    #[serde(default)]
+    pub inlay_hints: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -49,6 +54,45 @@ impl Default for FeatureConfig {
             completion: true,
             diagnostics: true,
             definition: true,
+            inlay_hints: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InlayHintConfig {
+    #[serde(default = "true_bool")]
+    pub direct_references: bool,
+
+    #[serde(default = "true_bool")]
+    pub binding_declarations: bool,
+
+    #[serde(default)]
+    pub binding_usages: bool,
+
+    #[serde(default = "true_bool")]
+    pub property_accesses: bool,
+
+    #[serde(default = "default_max_hint_length")]
+    pub max_value_length: usize,
+
+    #[serde(default)]
+    pub max_hints_per_line: usize,
+}
+
+fn default_max_hint_length() -> usize {
+    30
+}
+
+impl Default for InlayHintConfig {
+    fn default() -> Self {
+        Self {
+            direct_references: true,
+            binding_declarations: true,
+            binding_usages: false,
+            property_accesses: true,
+            max_value_length: default_max_hint_length(),
+            max_hints_per_line: 0,
         }
     }
 }
@@ -62,19 +106,6 @@ impl Default for StrictConfig {
     }
 }
 
-impl Default for EcologConfig {
-    fn default() -> Self {
-        Self {
-            features: FeatureConfig::default(),
-            strict: StrictConfig::default(),
-            workspace: abundantis::config::WorkspaceConfig::default(),
-            resolution: abundantis::config::ResolutionConfig::default(),
-            interpolation: abundantis::config::InterpolationConfig::default(),
-            cache: abundantis::config::CacheConfig::default(),
-            sources: abundantis::config::SourcesConfig::default(),
-        }
-    }
-}
 
 impl EcologConfig {
     pub fn to_abundantis_config(&self) -> abundantis::config::AbundantisConfig {
@@ -92,6 +123,12 @@ pub struct ConfigManager {
     config: Arc<RwLock<EcologConfig>>,
 
     init_settings: Arc<RwLock<Option<serde_json::Value>>>,
+}
+
+impl Default for ConfigManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConfigManager {
@@ -112,7 +149,7 @@ impl ConfigManager {
     }
 
     pub async fn load_from_workspace(&self, root: &Path) -> Result<EcologConfig, String> {
-        let mut config_json = serde_json::to_value(&EcologConfig::default())
+        let mut config_json = serde_json::to_value(EcologConfig::default())
             .map_err(|e| format!("Failed to serialize defaults: {}", e))?;
 
         {

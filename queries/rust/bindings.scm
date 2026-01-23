@@ -214,3 +214,117 @@
   (#eq? @_env "env")
   (#any-of? @_variant "Ok" "Some")
   (#any-of? @_fn "var" "var_os")) @env_binding
+
+;; ═════════════════════════════════════════════════════════════════════════
+;; const/static items with env!()
+;; ═════════════════════════════════════════════════════════════════════════
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const DB: &str = env!("DATABASE_URL");
+;; ───────────────────────────────────────────────────────────────────────────
+(const_item
+  name: (identifier) @binding_name
+  value: (macro_invocation
+    macro: (identifier) @_macro
+    (token_tree
+      (string_literal
+        (string_content) @bound_env_var)
+      (_)?))
+  (#any-of? @_macro "env" "option_env")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; static DB: &str = env!("DATABASE_URL");
+;; ───────────────────────────────────────────────────────────────────────────
+(static_item
+  name: (identifier) @binding_name
+  value: (macro_invocation
+    macro: (identifier) @_macro
+    (token_tree
+      (string_literal
+        (string_content) @bound_env_var)
+      (_)?))
+  (#any-of? @_macro "env" "option_env")) @env_binding
+
+;; Note: Struct field initialization patterns (Config { db: env::var("DB") })
+;; are detected via the reference queries rather than binding queries,
+;; as the env var reference within the field value is captured directly.
+
+;; ═════════════════════════════════════════════════════════════════════════
+;; dotenv / dotenvy crate bindings
+;; ═════════════════════════════════════════════════════════════════════════
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; let x = dotenv::var("VAR") / dotenvy::var("VAR")
+;; ───────────────────────────────────────────────────────────────────────────
+(let_declaration
+  pattern: (identifier) @binding_name
+  value: (call_expression
+    function: (scoped_identifier
+      path: (identifier) @_crate
+      name: (identifier) @_fn)
+    arguments: (arguments
+      (string_literal
+        (string_content) @bound_env_var)
+      (_)?))
+  (#any-of? @_crate "dotenv" "dotenvy")
+  (#eq? @_fn "var")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; let x = dotenv::var("VAR")? / let x = dotenvy::var("VAR")?
+;; ───────────────────────────────────────────────────────────────────────────
+(let_declaration
+  pattern: (identifier) @binding_name
+  value: (try_expression
+    (call_expression
+      function: (scoped_identifier
+        path: (identifier) @_crate
+        name: (identifier) @_fn)
+      arguments: (arguments
+        (string_literal
+          (string_content) @bound_env_var)
+        (_)?)))
+  (#any-of? @_crate "dotenv" "dotenvy")
+  (#eq? @_fn "var")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; let x = env::var("VAR")? - try expression
+;; ───────────────────────────────────────────────────────────────────────────
+(let_declaration
+  pattern: (identifier) @binding_name
+  value: (try_expression
+    (call_expression
+      function: (scoped_identifier
+        path: [(scoped_identifier
+          path: (identifier)
+          name: (identifier) @_path)
+        (identifier) @_path]
+        name: (identifier) @_fn)
+      arguments: (arguments
+        (string_literal
+          (string_content) @bound_env_var)
+        (_)?)))
+  (#any-of? @_path "env" "std")
+  (#any-of? @_fn "var" "var_os")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; let x = env::var("VAR").unwrap() - method chain
+;; ───────────────────────────────────────────────────────────────────────────
+(let_declaration
+  pattern: (identifier) @binding_name
+  value: (call_expression
+    function: (field_expression
+      value: (call_expression
+        function: (scoped_identifier
+          path: [(scoped_identifier
+            path: (identifier)
+            name: (identifier) @_path)
+          (identifier) @_path]
+          name: (identifier) @_fn)
+        arguments: (arguments
+          (string_literal
+            (string_content) @bound_env_var)
+          (_)?))
+      field: (field_identifier) @_method))
+  (#any-of? @_path "env" "std")
+  (#any-of? @_fn "var" "var_os")
+  (#any-of? @_method "unwrap" "unwrap_or" "unwrap_or_else" "unwrap_or_default" "expect")) @env_binding

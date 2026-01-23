@@ -18,6 +18,12 @@ pub struct ParserPool {
     parsers: HashMap<&'static str, Vec<Parser>>,
 }
 
+impl Default for ParserPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParserPool {
     pub fn new() -> Self {
         Self {
@@ -53,6 +59,12 @@ pub struct QueryEngine {
     parser_pool: Arc<Mutex<ParserPool>>,
 
     cursor_pool: Arc<Mutex<Vec<QueryCursor>>>,
+}
+
+impl Default for QueryEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl QueryEngine {
@@ -141,6 +153,7 @@ impl QueryEngine {
             let mut var_name = None;
             let mut _default_value: Option<CompactString> = None;
             let mut object_name: Option<CompactString> = None;
+            let mut has_module_capture = false;
             let access_type = AccessType::Property;
 
             for capture in m.captures {
@@ -156,29 +169,43 @@ impl QueryEngine {
                         let clean_text = language.strip_quotes(text);
                         _default_value = Some(CompactString::from(clean_text));
                     }
-                } else if idx == idx_object || idx == idx_module {
+                } else if idx == idx_module {
+                    // @module captures are used in queries with explicit predicates
+                    // (e.g., os.environ.get where #eq? @_object "environ" validates)
+                    // so we skip is_standard_env_object validation for these
+                    has_module_capture = true;
                     object_name = capture
                         .node
                         .utf8_text(src)
                         .ok()
-                        .map(|s| CompactString::from(s));
+                        .map(CompactString::from);
+                } else if idx == idx_object {
+                    object_name = capture
+                        .node
+                        .utf8_text(src)
+                        .ok()
+                        .map(CompactString::from);
                 }
             }
 
             if let (Some(full), Some(name_r), Some(name)) = (full_range, name_range, var_name) {
-                if let Some(obj) = object_name {
-                    let is_std = language.is_standard_env_object(&obj);
+                // Only validate @object captures (alias patterns like `env["VAR"]`)
+                // @module captures are pre-validated by query predicates
+                if !has_module_capture {
+                    if let Some(obj) = &object_name {
+                        let is_std = language.is_standard_env_object(obj);
 
-                    if !is_std {
-                        let mut is_valid_alias = false;
-                        if let Some((module, _orig)) = import_ctx.aliases.get(&obj) {
-                            if language.known_env_modules().contains(&module.as_str()) {
-                                is_valid_alias = true;
+                        if !is_std {
+                            let mut is_valid_alias = false;
+                            if let Some((module, _orig)) = import_ctx.aliases.get(obj) {
+                                if language.known_env_modules().contains(&module.as_str()) {
+                                    is_valid_alias = true;
+                                }
                             }
-                        }
 
-                        if !is_valid_alias {
-                            return None;
+                            if !is_valid_alias {
+                                return None;
+                            }
                         }
                     }
                 }
@@ -237,6 +264,31 @@ impl QueryEngine {
                         };
 
                         if point >= start && valid_end {
+                            // Validate the character context for all completion targets
+                            // This prevents false positives like `process.env'` triggering completions
+                            // Valid triggers: dot access (`.`), bracket+quote (`["`, `['`), paren+quote (`("`, `('`)
+
+                            // Calculate byte offset for the cursor position
+                            let mut byte_offset = point.column; // Assume line 0
+                            let mut current_line = 0;
+
+                            for (i, &b) in src.iter().enumerate() {
+                                if b == b'\n' {
+                                    current_line += 1;
+                                    if current_line == point.row {
+                                        byte_offset = i + 1 + point.column;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            byte_offset = byte_offset.min(src.len());
+
+                            // Delegate to language-specific validation
+                            if !language.is_valid_completion_trigger(src, byte_offset) {
+                                continue;
+                            }
+
                             is_target = true;
                         }
                     } else if idx == idx_object {
@@ -252,7 +304,7 @@ impl QueryEngine {
                             if !language.is_standard_env_object(text) {
                                 if let Some(parent) = capture.node.parent() {
                                     if parent.kind() == "member_expression" {
-                                        if let Some(parent_text) = parent.utf8_text(src).ok() {
+                                        if let Ok(parent_text) = parent.utf8_text(src) {
                                             if !parent_text.contains('\n')
                                                 && language.is_standard_env_object(parent_text)
                                             {
@@ -265,7 +317,7 @@ impl QueryEngine {
                             }
                         }
 
-                        obj_name = node_text.map(|s| CompactString::from(s));
+                        obj_name = node_text.map(CompactString::from);
                     }
                 }
 
@@ -419,13 +471,13 @@ impl QueryEngine {
                         .node
                         .utf8_text(src)
                         .ok()
-                        .map(|s| CompactString::from(s));
+                        .map(CompactString::from);
                 } else if idx == idx_alias_name {
                     alias = capture
                         .node
                         .utf8_text(src)
                         .ok()
-                        .map(|s| CompactString::from(s));
+                        .map(CompactString::from);
                 } else if idx == idx_import_stmt {
                     stmt_range = Some(capture.node.range());
                 }
@@ -468,7 +520,7 @@ impl QueryEngine {
                             .node
                             .utf8_text(src)
                             .ok()
-                            .map(|s| CompactString::from(s));
+                            .map(CompactString::from);
                     }
                 }
                 None
@@ -690,10 +742,7 @@ impl QueryEngine {
                             .map(|s| CompactString::from(language.strip_quotes(s)));
                     } else if idx == idx_export_stmt {
                         declaration_range = Some(ts_to_lsp_range(capture.node.range()));
-                    } else if idx == idx_default_export {
-                        is_default = true;
-                        declaration_range = Some(ts_to_lsp_range(capture.node.range()));
-                    } else if idx == idx_cjs_default_export {
+                    } else if idx == idx_default_export || idx == idx_cjs_default_export {
                         is_default = true;
                         declaration_range = Some(ts_to_lsp_range(capture.node.range()));
                     } else if idx == idx_cjs_named_export {
@@ -1157,6 +1206,96 @@ const { API_KEY: apiKey } = env;"#;
         let _context = engine
             .check_completion_context(&js, &tree, code.as_bytes(), pos)
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_check_completion_context_bare_single_quote_no_trigger() {
+        let engine = create_engine();
+        let js = JavaScript;
+        // process.env' should NOT trigger completions (bare quote without bracket)
+        let code = "process.env'";
+        let tree = parse_js(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 12);
+
+        let context = engine
+            .check_completion_context(&js, &tree, code.as_bytes(), pos)
+            .await;
+        assert!(
+            context.is_none(),
+            "Bare single quote after env object should not trigger completions"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_completion_context_bare_double_quote_no_trigger() {
+        let engine = create_engine();
+        let js = JavaScript;
+        // process.env" should NOT trigger completions (bare quote without bracket)
+        let code = "process.env\"";
+        let tree = parse_js(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 12);
+
+        let context = engine
+            .check_completion_context(&js, &tree, code.as_bytes(), pos)
+            .await;
+        assert!(
+            context.is_none(),
+            "Bare double quote after env object should not trigger completions"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_completion_context_bracket_double_quote_triggers() {
+        let engine = create_engine();
+        let js = JavaScript;
+        // process.env[" should trigger completions
+        let code = "process.env[\"";
+        let tree = parse_js(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 13);
+
+        let context = engine
+            .check_completion_context(&js, &tree, code.as_bytes(), pos)
+            .await;
+        assert!(
+            context.is_some(),
+            "Bracket with double quote should trigger completions"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_completion_context_bracket_single_quote_triggers() {
+        let engine = create_engine();
+        let js = JavaScript;
+        // process.env[' should trigger completions
+        let code = "process.env['";
+        let tree = parse_js(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 13);
+
+        let context = engine
+            .check_completion_context(&js, &tree, code.as_bytes(), pos)
+            .await;
+        assert!(
+            context.is_some(),
+            "Bracket with single quote should trigger completions"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_completion_context_python_bare_quote_no_trigger() {
+        let engine = create_engine();
+        let py = Python;
+        // os.environ' should NOT trigger completions
+        let code = "os.environ'";
+        let tree = parse_python(&engine, code);
+        let pos = tower_lsp::lsp_types::Position::new(0, 11);
+
+        let context = engine
+            .check_completion_context(&py, &tree, code.as_bytes(), pos)
+            .await;
+        assert!(
+            context.is_none(),
+            "Bare quote after Python env object should not trigger completions"
+        );
     }
 
     #[tokio::test]

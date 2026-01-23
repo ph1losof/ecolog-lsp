@@ -280,8 +280,10 @@ async fn handle_execute_command_inner(
 
             state.config.set_precedence(new_precedence.clone()).await;
 
-            let mut new_resolution_config = abundantis::config::ResolutionConfig::default();
-            new_resolution_config.precedence = new_precedence.clone();
+            let new_resolution_config = abundantis::config::ResolutionConfig {
+                precedence: new_precedence.clone(),
+                ..Default::default()
+            };
             state
                 .core
                 .resolution
@@ -352,8 +354,10 @@ async fn handle_execute_command_inner(
 
             state.config.set_interpolation_enabled(enabled).await;
 
-            let mut new_interpolation_config = abundantis::config::InterpolationConfig::default();
-            new_interpolation_config.enabled = enabled;
+            let new_interpolation_config = abundantis::config::InterpolationConfig {
+                enabled,
+                ..Default::default()
+            };
             state
                 .core
                 .resolution

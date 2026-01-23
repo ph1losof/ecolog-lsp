@@ -35,25 +35,25 @@ impl LanguageSupport for JavaScript {
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        &[".", "\"", "'"]
+        &[".", "[\"", "['"]
     }
 
     fn is_scope_node(&self, node: Node) -> bool {
-        match node.kind() {
+        matches!(
+            node.kind(),
             "program"
-            | "function_declaration"
-            | "arrow_function"
-            | "function"
-            | "method_definition"
-            | "class_body"
-            | "statement_block"
-            | "for_statement"
-            | "if_statement"
-            | "else_clause"
-            | "try_statement"
-            | "catch_clause" => true,
-            _ => false,
-        }
+                | "function_declaration"
+                | "arrow_function"
+                | "function"
+                | "method_definition"
+                | "class_body"
+                | "statement_block"
+                | "for_statement"
+                | "if_statement"
+                | "else_clause"
+                | "try_statement"
+                | "catch_clause"
+        )
     }
 
     fn extensions(&self) -> &'static [&'static str] {

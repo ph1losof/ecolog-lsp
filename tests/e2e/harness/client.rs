@@ -473,7 +473,7 @@ impl LspTestClient {
         )
     }
 
-    
+
     pub fn execute_command(
         &self,
         command: &str,
@@ -484,6 +484,27 @@ impl LspTestClient {
             Some(json!({
                 "command": command,
                 "arguments": arguments
+            })),
+        )
+    }
+
+    /// Request inlay hints for a range within a document
+    pub fn inlay_hint(
+        &self,
+        uri: &str,
+        start_line: u32,
+        start_character: u32,
+        end_line: u32,
+        end_character: u32,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "textDocument/inlayHint",
+            Some(json!({
+                "textDocument": { "uri": uri },
+                "range": {
+                    "start": { "line": start_line, "character": start_character },
+                    "end": { "line": end_line, "character": end_character }
+                }
             })),
         )
     }

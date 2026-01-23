@@ -1,41 +1,32 @@
 ;; ═════════════════════════════════════════════════════════════════════════
-;; Go Environment Variable Reference Queries
+;; Rust Destructuring Pattern Queries (from env-holding structs/vars)
 ;; ═════════════════════════════════════════════════════════════════════════
+;; Rust tracks struct destructuring and field access from config objects
 
 ;; ───────────────────────────────────────────────────────────────────────────
-;; os.Getenv("VAR")
-;; os.LookupEnv("VAR")
+;; let Config { db, api } = config; (struct destructuring - shorthand)
 ;; ───────────────────────────────────────────────────────────────────────────
-(call_expression
-  function: (selector_expression
-    operand: (identifier) @object
-    field: (field_identifier) @_fn)
-  arguments: (argument_list
-    (interpreted_string_literal) @env_var_name
-    (_)?)
-  (#any-of? @_fn "Getenv" "LookupEnv" "Setenv" "Unsetenv")) @env_access
-
-;; ═════════════════════════════════════════════════════════════════════════
-;; viper library patterns (popular config library)
-;; ═════════════════════════════════════════════════════════════════════════
+(let_declaration
+  pattern: (struct_pattern
+    type: (_) @destructure_source
+    (field_pattern
+      name: (shorthand_field_identifier) @destructure_target))) @destructure
 
 ;; ───────────────────────────────────────────────────────────────────────────
-;; viper.GetString("VAR")
-;; viper.GetInt("VAR")
-;; viper.GetBool("VAR")
+;; let Config { db: database_url, .. } = config; (renamed field)
 ;; ───────────────────────────────────────────────────────────────────────────
-(call_expression
-  function: (selector_expression
-    operand: (identifier) @_pkg
-    field: (field_identifier) @_fn)
-  arguments: (argument_list
-    (interpreted_string_literal) @env_var_name
-    (_)?)
-  (#eq? @_pkg "viper")
-  (#any-of? @_fn "GetString" "GetInt" "GetBool" "GetFloat64" "GetDuration" "Get")) @env_access
+(let_declaration
+  pattern: (struct_pattern
+    type: (_) @destructure_source
+    (field_pattern
+      name: (field_identifier) @destructure_key
+      pattern: (identifier) @destructure_target))) @destructure
 
 ;; ───────────────────────────────────────────────────────────────────────────
-;; godotenv patterns
-;; godotenv.Load() + os.Getenv is the typical pattern
+;; let val = config.db; (field access from struct)
 ;; ───────────────────────────────────────────────────────────────────────────
-;; Note: godotenv.Load() just loads .env files, actual access is still through os.Getenv
+(let_declaration
+  pattern: (identifier) @destructure_target
+  value: (field_expression
+    value: (identifier) @destructure_source
+    field: (field_identifier) @destructure_key)) @destructure

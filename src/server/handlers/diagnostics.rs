@@ -4,6 +4,13 @@ use korni::{Error as KorniError, ParseOptions};
 use std::time::Instant;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
+/// Type alias for diagnostic analysis results: (direct references, env var symbols, property accesses)
+type DiagnosticAnalysisResult = (
+    Vec<crate::types::EnvReference>,
+    Vec<(compact_str::CompactString, Range)>,
+    Vec<(compact_str::CompactString, Range)>,
+);
+
 pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnostic> {
     tracing::debug!("[COMPUTE_DIAGNOSTICS_ENTER] uri={}", uri);
     let start = Instant::now();
@@ -31,11 +38,7 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
         doc.content.clone()
     };
 
-    let (references, env_var_symbols, property_accesses): (
-        Vec<crate::types::EnvReference>,
-        Vec<(compact_str::CompactString, Range)>,
-        Vec<(compact_str::CompactString, Range)>,
-    ) = {
+    let (references, env_var_symbols, property_accesses): DiagnosticAnalysisResult = {
         if let Some(graph) = state.document_manager.get_binding_graph(uri) {
             let refs = graph.direct_references().to_vec();
 

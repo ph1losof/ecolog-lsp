@@ -14,6 +14,7 @@ static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Python {
@@ -22,7 +23,7 @@ impl LanguageSupport for Python {
     }
 
     fn is_standard_env_object(&self, name: &str) -> bool {
-        name == "os" || name == "os.environ"
+        name == "os.environ" || name == "os"
     }
 
     fn default_env_object_name(&self) -> Option<&'static str> {
@@ -30,17 +31,17 @@ impl LanguageSupport for Python {
     }
 
     fn is_scope_node(&self, node: Node) -> bool {
-        match node.kind() {
+        matches!(
+            node.kind(),
             "module"
-            | "function_definition"
-            | "class_definition"
-            | "for_statement"
-            | "if_statement"
-            | "try_statement"
-            | "with_statement"
-            | "while_statement" => true,
-            _ => false,
-        }
+                | "function_definition"
+                | "class_definition"
+                | "for_statement"
+                | "if_statement"
+                | "try_statement"
+                | "with_statement"
+                | "while_statement"
+        )
     }
 
     fn extensions(&self) -> &'static [&'static str] {
@@ -135,6 +136,16 @@ impl LanguageSupport for Python {
         }))
     }
 
+    fn destructure_query(&self) -> Option<&Query> {
+        Some(DESTRUCTURE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/python/destructures.scm"),
+            )
+            .expect("Failed to compile Python destructure query")
+        }))
+    }
+
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
             Query::new(
@@ -173,11 +184,11 @@ impl LanguageSupport for Python {
     }
 
     fn known_env_modules(&self) -> &'static [&'static str] {
-        &["os"]
+        &["os", "dotenv", "decouple"]
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        &[".", "\"", "'"]
+        &[".", "[\"", "['", "(\"", "('"]
     }
 
     fn strip_quotes<'a>(&self, text: &'a str) -> &'a str {
@@ -248,8 +259,8 @@ mod tests {
     #[test]
     fn test_is_standard_env_object() {
         let py = get_python();
-        assert!(py.is_standard_env_object("os"));
         assert!(py.is_standard_env_object("os.environ"));
+        assert!(py.is_standard_env_object("os")); // "os" is valid for function-call patterns like os.getenv()
         assert!(!py.is_standard_env_object("process"));
     }
 
@@ -322,6 +333,12 @@ mod tests {
     fn test_scope_query_compiles() {
         let py = get_python();
         assert!(py.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_destructure_query_compiles() {
+        let py = get_python();
+        assert!(py.destructure_query().is_some());
     }
 
     #[test]

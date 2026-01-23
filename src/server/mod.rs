@@ -154,13 +154,11 @@ impl LspServer {
             util::safe_refresh(&self.state.core, abundantis::RefreshOptions::preserve_all()).await;
 
             vars
+        } else if let Some(graph_ref) = self.state.document_manager.get_binding_graph(uri) {
+            let resolver = BindingResolver::new(&graph_ref);
+            resolver.all_env_vars().into_iter().collect()
         } else {
-            if let Some(graph_ref) = self.state.document_manager.get_binding_graph(uri) {
-                let resolver = BindingResolver::new(&*graph_ref);
-                resolver.all_env_vars().into_iter().collect()
-            } else {
-                FxHashSet::default()
-            }
+            FxHashSet::default()
         };
 
         self.state.workspace_index.update_file(
@@ -172,6 +170,19 @@ impl LspServer {
                 path,
             },
         );
+    }
+
+    /// Request the client to refresh all inlay hints
+    async fn refresh_inlay_hints(&self) {
+        // workspace/inlayHint/refresh is a server-to-client request
+        // that tells the client to re-request inlay hints for all open documents
+        if let Err(e) = self
+            .client
+            .send_request::<tower_lsp::lsp_types::request::InlayHintRefreshRequest>(())
+            .await
+        {
+            tracing::debug!("Failed to refresh inlay hints: {}", e);
+        }
     }
 }
 
@@ -232,6 +243,7 @@ impl LanguageServer for LspServer {
                     },
                 }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -478,6 +490,8 @@ impl LanguageServer for LspServer {
                                 .publish_diagnostics(uri, diagnostics, None)
                                 .await;
                         }
+                        // Refresh inlay hints when env files change
+                        self.refresh_inlay_hints().await;
                     }
                 }
                 FileChangeType::DELETED => {
@@ -497,6 +511,8 @@ impl LanguageServer for LspServer {
                                 .publish_diagnostics(uri, diagnostics, None)
                                 .await;
                         }
+                        // Refresh inlay hints when env files are deleted
+                        self.refresh_inlay_hints().await;
                     }
                 }
                 _ => {}
@@ -508,10 +524,7 @@ impl LanguageServer for LspServer {
         let uri = &params.text_document_position.text_document.uri;
         tracing::debug!("[HANDLER_ENTER] completion uri={}", uri);
         let start = std::time::Instant::now();
-        let result = match handlers::handle_completion(params, &self.state).await {
-            Some(items) => Some(CompletionResponse::Array(items)),
-            None => None,
-        };
+        let result = handlers::handle_completion(params, &self.state).await.map(CompletionResponse::Array);
         tracing::debug!(
             "[HANDLER_EXIT] completion result={} elapsed_ms={}",
             if result.is_some() { "some" } else { "none" },
@@ -546,13 +559,23 @@ impl LanguageServer for LspServer {
 
         let result = handlers::handle_execute_command(params, &self.state).await;
 
-        if command == "ecolog.source.setPrecedence" || command == "ecolog.interpolation.set" {
+        // Commands that affect env var resolution should refresh diagnostics and inlay hints
+        let refresh_commands = [
+            "ecolog.source.setPrecedence",
+            "ecolog.interpolation.set",
+            "ecolog.file.setActive",
+            "ecolog.workspace.setRoot",
+        ];
+        if refresh_commands.contains(&command.as_str()) {
+            // Refresh diagnostics for all open documents
             for uri in self.state.document_manager.all_uris() {
                 let diagnostics = handlers::compute_diagnostics(&uri, &self.state).await;
                 self.client
                     .publish_diagnostics(uri, diagnostics, None)
                     .await;
             }
+            // Refresh inlay hints
+            self.refresh_inlay_hints().await;
         }
 
         tracing::debug!(
@@ -615,6 +638,19 @@ impl LanguageServer for LspServer {
         let result = handlers::handle_workspace_symbol(params, &self.state).await;
         tracing::debug!(
             "[HANDLER_EXIT] workspace_symbol result={} elapsed_ms={}",
+            if result.is_some() { "some" } else { "none" },
+            start.elapsed().as_millis()
+        );
+        Ok(result)
+    }
+
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = &params.text_document.uri;
+        tracing::debug!("[HANDLER_ENTER] inlay_hint uri={}", uri);
+        let start = std::time::Instant::now();
+        let result = handlers::handle_inlay_hints(params, &self.state).await;
+        tracing::debug!(
+            "[HANDLER_EXIT] inlay_hint result={} elapsed_ms={}",
             if result.is_some() { "some" } else { "none" },
             start.elapsed().as_millis()
         );

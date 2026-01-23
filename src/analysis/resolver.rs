@@ -1,4 +1,4 @@
-use crate::analysis::binding_graph::BindingGraph;
+use crate::analysis::binding_graph::{BindingGraph, EnvVarLocationKind};
 use crate::types::{
     BindingKind, EnvBinding, EnvBindingUsage, EnvReference, ResolvedEnv, ScopeId, Symbol, SymbolId,
     SymbolUsage,
@@ -234,15 +234,30 @@ impl<'a> BindingResolver<'a> {
     }
 
     pub fn direct_reference_at_position(&self, position: Position) -> Option<&'a EnvReference> {
-        for reference in self.graph.direct_references() {
-            if BindingGraph::contains_position(reference.name_range, position) {
-                return Some(reference);
-            }
-        }
-        None
+        self.graph.direct_references().iter().find(|&reference| BindingGraph::contains_position(reference.name_range, position))
     }
 
+    /// Find all usages of a given env var name.
+    /// Uses O(1) index lookup if available, falls back to O(n) scan otherwise.
     pub fn find_env_var_usages(&self, env_var_name: &str) -> Vec<EnvVarUsageLocation> {
+        // Try the pre-built index first for O(1) lookup
+        if let Some(locations) = self.graph.get_env_var_locations(env_var_name) {
+            return locations
+                .iter()
+                .map(|loc| EnvVarUsageLocation {
+                    range: loc.range,
+                    kind: Self::convert_location_kind(loc.kind),
+                    binding_name: loc.binding_name.clone(),
+                })
+                .collect();
+        }
+
+        // Fall back to scanning (for when rebuild_range_index hasn't been called)
+        self.find_env_var_usages_scan(env_var_name)
+    }
+
+    /// Scan-based fallback for finding env var usages (O(n))
+    fn find_env_var_usages_scan(&self, env_var_name: &str) -> Vec<EnvVarUsageLocation> {
         let mut locations = Vec::new();
         let mut seen_ranges = std::collections::HashSet::new();
 
@@ -265,31 +280,29 @@ impl<'a> BindingResolver<'a> {
         }
 
         for symbol in self.graph.symbols() {
-            if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
-                if let ResolvedEnv::Variable(name) = &resolved {
-                    if name == env_var_name {
-                        let rename_range = if let Some(key_range) = symbol.destructured_key_range {
-                            Some(key_range)
-                        } else if symbol.name.as_str() == env_var_name {
-                            Some(symbol.name_range)
-                        } else {
-                            None
-                        };
+            if let Some(ResolvedEnv::Variable(name)) = self.graph.resolve_to_env(symbol.id) {
+                if name == env_var_name {
+                    let rename_range = if let Some(key_range) = symbol.destructured_key_range {
+                        Some(key_range)
+                    } else if symbol.name.as_str() == env_var_name {
+                        Some(symbol.name_range)
+                    } else {
+                        None
+                    };
 
-                        if let Some(range) = rename_range {
-                            let range_key = (
-                                range.start.line,
-                                range.start.character,
-                                range.end.line,
-                                range.end.character,
-                            );
-                            if seen_ranges.insert(range_key) {
-                                locations.push(EnvVarUsageLocation {
-                                    range,
-                                    kind: UsageKind::BindingDeclaration,
-                                    binding_name: Some(symbol.name.clone()),
-                                });
-                            }
+                    if let Some(range) = rename_range {
+                        let range_key = (
+                            range.start.line,
+                            range.start.character,
+                            range.end.line,
+                            range.end.character,
+                        );
+                        if seen_ranges.insert(range_key) {
+                            locations.push(EnvVarUsageLocation {
+                                range,
+                                kind: UsageKind::BindingDeclaration,
+                                binding_name: Some(symbol.name.clone()),
+                            });
                         }
                     }
                 }
@@ -349,6 +362,16 @@ impl<'a> BindingResolver<'a> {
         }
 
         locations
+    }
+
+    /// Convert from binding_graph's EnvVarLocationKind to resolver's UsageKind
+    fn convert_location_kind(kind: EnvVarLocationKind) -> UsageKind {
+        match kind {
+            EnvVarLocationKind::DirectReference => UsageKind::DirectReference,
+            EnvVarLocationKind::BindingDeclaration => UsageKind::BindingDeclaration,
+            EnvVarLocationKind::BindingUsage => UsageKind::BindingUsage,
+            EnvVarLocationKind::PropertyAccess => UsageKind::PropertyAccess,
+        }
     }
 
     pub fn all_env_vars(&self) -> Vec<CompactString> {

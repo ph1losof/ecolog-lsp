@@ -410,12 +410,224 @@ async fn test_py_walrus_operator_multiple_in_if() {
 async fn test_py_walrus_operator_undefined_and_defined_mix() {
     let fixture = TestFixture::new().await;
     let uri = fixture.create_file("test.py", "import os\nif (db_url := os.environ.get('DB_URL')) and (missing := os.environ.get('MISSING_VAR')):\n  print(db_url, missing)");
-    fixture.state.document_manager.open(uri.clone(), "python".to_string(), 
+    fixture.state.document_manager.open(uri.clone(), "python".to_string(),
         "import os\nif (db_url := os.environ.get('DB_URL')) and (missing := os.environ.get('MISSING_VAR')):\n  print(db_url, missing)".to_string(), 0).await;
 
     let diags = compute_diagnostics(&uri, &fixture.state).await;
 
-    
+
     assert!(!diags.is_empty());
     assert!(diags.iter().any(|d| d.message.contains("MISSING_VAR")));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// New Pattern Tests: decouple, function defaults, dict literals, alias subscript
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_py_hover_decouple_config() {
+    let fixture = TestFixture::new().await;
+    let content = "from decouple import config\ndb = config('DB_URL')";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(1, 14),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for decouple config()");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_py_hover_function_default_getenv() {
+    let fixture = TestFixture::new().await;
+    let content = "import os\ndef connect(db=os.getenv('DB_URL')):\n  pass";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(1, 25),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(
+        hover.is_some(),
+        "Expected hover for env var in function default"
+    );
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_py_hover_function_default_environ_subscript() {
+    let fixture = TestFixture::new().await;
+    let content = "import os\ndef connect(port=os.environ['PORT']):\n  pass";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(1, 30),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(
+        hover.is_some(),
+        "Expected hover for environ subscript in function default"
+    );
+    assert!(format!("{:?}", hover.unwrap()).contains("8080"));
+}
+
+#[tokio::test]
+async fn test_py_hover_dict_literal_environ() {
+    let fixture = TestFixture::new().await;
+    let content = "import os\nconfig = {'db': os.environ['DB_URL']}";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(1, 30),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(
+        hover.is_some(),
+        "Expected hover for environ in dict literal"
+    );
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_py_hover_dict_literal_getenv() {
+    let fixture = TestFixture::new().await;
+    let content = "import os\nconfig = {'port': os.getenv('PORT')}";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(1, 30),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(
+        hover.is_some(),
+        "Expected hover for getenv in dict literal"
+    );
+    assert!(format!("{:?}", hover.unwrap()).contains("8080"));
+}
+
+#[tokio::test]
+async fn test_py_hover_config_class_environ() {
+    let fixture = TestFixture::new().await;
+    let content = "import os\nclass Config:\n    DB = os.environ['DB_URL']";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(2, 22),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for environ in config class");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_py_hover_config_class_getenv() {
+    let fixture = TestFixture::new().await;
+    let content = "import os\nclass Config:\n    PORT = os.getenv('PORT')";
+    let uri = fixture.create_file("test.py", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "python".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(2, 23),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for getenv in config class");
+    assert!(format!("{:?}", hover.unwrap()).contains("8080"));
 }

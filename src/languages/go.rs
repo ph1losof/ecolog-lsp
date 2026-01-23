@@ -14,6 +14,7 @@ static IDENTIFIER_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
+static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 
 impl LanguageSupport for Go {
@@ -117,6 +118,16 @@ impl LanguageSupport for Go {
         }))
     }
 
+    fn destructure_query(&self) -> Option<&Query> {
+        Some(DESTRUCTURE_QUERY.get_or_init(|| {
+            Query::new(
+                &self.grammar(),
+                include_str!("../../queries/go/destructures.scm"),
+            )
+            .expect("Failed to compile Go destructure query")
+        }))
+    }
+
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
             Query::new(&self.grammar(), include_str!("../../queries/go/scopes.scm"))
@@ -142,21 +153,21 @@ impl LanguageSupport for Go {
     }
 
     fn completion_trigger_characters(&self) -> &'static [&'static str] {
-        &["\""]
+        &["(\"", "('"]
     }
 
     fn is_scope_node(&self, node: tree_sitter::Node) -> bool {
-        match node.kind() {
+        matches!(
+            node.kind(),
             "function_declaration"
-            | "method_declaration"
-            | "func_literal"
-            | "block"
-            | "for_statement"
-            | "if_statement"
-            | "switch_statement"
-            | "select_statement" => true,
-            _ => false,
-        }
+                | "method_declaration"
+                | "func_literal"
+                | "block"
+                | "for_statement"
+                | "if_statement"
+                | "switch_statement"
+                | "select_statement"
+        )
     }
 
     fn extract_var_name(
@@ -307,6 +318,12 @@ mod tests {
     fn test_scope_query_compiles() {
         let go = get_go();
         assert!(go.scope_query().is_some());
+    }
+
+    #[test]
+    fn test_destructure_query_compiles() {
+        let go = get_go();
+        assert!(go.destructure_query().is_some());
     }
 
     #[test]

@@ -113,3 +113,162 @@ async fn test_go_completion() {
     assert!(completion.is_some(), "Completion failed for os.Getenv");
     assert!(completion.unwrap().iter().any(|i| i.label == "PORT"));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// New Pattern Tests: struct init, multiple assignment, conditional binding, viper
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_go_hover_struct_init() {
+    let fixture = TestFixture::new().await;
+    let content = r#"package main
+import "os"
+type Config struct { DB string }
+func main() {
+  cfg := Config{DB: os.Getenv("DB_URL")}
+}"#;
+    let uri = fixture.create_file("test.go", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "go".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(4, 33),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for struct field init");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_go_hover_lookupenv_with_ok() {
+    let fixture = TestFixture::new().await;
+    let content = r#"package main
+import "os"
+func main() {
+  val, ok := os.LookupEnv("DB_URL")
+  if ok { println(val) }
+}"#;
+    let uri = fixture.create_file("test.go", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "go".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(3, 28),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for LookupEnv with ok");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_go_hover_if_init() {
+    let fixture = TestFixture::new().await;
+    let content = r#"package main
+import "os"
+func main() {
+  if val, ok := os.LookupEnv("DB_URL"); ok {
+    println(val)
+  }
+}"#;
+    let uri = fixture.create_file("test.go", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "go".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(3, 31),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for if statement init");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_go_hover_viper_getstring() {
+    let fixture = TestFixture::new().await;
+    let content = r#"package main
+import "github.com/spf13/viper"
+func main() {
+  db := viper.GetString("DB_URL")
+}"#;
+    let uri = fixture.create_file("test.go", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "go".to_string(), content.to_string(), 0)
+        .await;
+
+    let hover = handle_hover(
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri },
+                position: Position::new(3, 26),
+            },
+            work_done_progress_params: Default::default(),
+        },
+        &fixture.state,
+    )
+    .await;
+
+    assert!(hover.is_some(), "Expected hover for viper.GetString");
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+}
+
+#[tokio::test]
+async fn test_go_diagnostics_undefined() {
+    let fixture = TestFixture::new().await;
+    let content = r#"package main
+import "os"
+func main() {
+  val := os.Getenv("MISSING_VAR")
+  println(val)
+}"#;
+    let uri = fixture.create_file("test.go", content);
+
+    fixture
+        .state
+        .document_manager
+        .open(uri.clone(), "go".to_string(), content.to_string(), 0)
+        .await;
+
+    let diags = compute_diagnostics(&uri, &fixture.state).await;
+
+    assert!(!diags.is_empty());
+    assert!(diags.iter().any(|d| d.message.contains("not defined")));
+}

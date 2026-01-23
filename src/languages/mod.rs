@@ -103,6 +103,36 @@ pub trait LanguageSupport: Send + Sync {
         &[]
     }
 
+    /// Validates if the characters before cursor form a valid completion trigger.
+    /// Returns true if completion should proceed, false to skip.
+    fn is_valid_completion_trigger(&self, source: &[u8], byte_offset: usize) -> bool {
+        if byte_offset == 0 {
+            return false;
+        }
+
+        let triggers = self.completion_trigger_characters();
+
+        // Check single-char triggers
+        let one_before = source[byte_offset - 1];
+        for trigger in triggers {
+            if trigger.len() == 1 && trigger.as_bytes()[0] == one_before {
+                return true;
+            }
+        }
+
+        // Check two-char triggers (like "[\"" or "('")
+        if byte_offset >= 2 {
+            let two_before = &source[byte_offset - 2..byte_offset];
+            for trigger in triggers {
+                if trigger.len() == 2 && trigger.as_bytes() == two_before {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     fn is_scope_node(&self, _node: Node) -> bool {
         _node.kind() == "program" || _node.kind() == "source_file" || _node.kind() == "module"
     }

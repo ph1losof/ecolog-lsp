@@ -36,10 +36,8 @@ pub async fn handle_completion(
 
     if is_strict {
         let position = params.text_document_position.position;
-        if !state.document_manager.check_completion(uri, position).await {
-            if !check_imported_env_object_completion(uri, position, state).await {
-                return None;
-            }
+        if !state.document_manager.check_completion(uri, position).await && !check_imported_env_object_completion(uri, position, state).await {
+            return None;
         }
     }
 

@@ -126,7 +126,7 @@ async fn resolve_cross_module_env_var(
             identifier_name,
             range: identifier_range,
             source: EnvVarSource::CrossModule {
-                module_path: module_path.into(),
+                module_path,
             },
         }),
         _ => None,
