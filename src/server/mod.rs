@@ -112,6 +112,7 @@ impl LspServer {
 
     async fn update_workspace_index_for_document(&self, uri: &Url) {
         use crate::analysis::{workspace_index::FileIndexEntry, BindingResolver};
+        use crate::server::handlers::util::KorniEntryExt;
         use compact_str::CompactString;
         use korni::ParseOptions;
         use rustc_hash::FxHashSet;
@@ -140,13 +141,8 @@ impl LspServer {
                 let entries = korni::parse_with_options(content, ParseOptions::full());
                 entries
                     .into_iter()
-                    .filter_map(|entry| {
-                        if let korni::Entry::Pair(kv) = entry {
-                            Some(CompactString::from(kv.key.as_ref()))
-                        } else {
-                            None
-                        }
-                    })
+                    .filter_map(|e| e.as_valid_pair())
+                    .map(|kv| CompactString::from(kv.key.as_ref()))
                     .collect()
             } else {
                 FxHashSet::default()

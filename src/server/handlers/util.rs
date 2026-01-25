@@ -194,3 +194,21 @@ pub(crate) async fn get_identifier_at_position(
 
     None
 }
+
+/// Extension methods for korni `Entry` filtering.
+///
+/// This trait provides a unified way to filter `.env` file entries,
+/// skipping comments and extracting only valid key-value pairs.
+pub trait KorniEntryExt<'a> {
+    /// Returns the key-value pair if this entry is a non-comment pair.
+    fn as_valid_pair(self) -> Option<Box<korni::KeyValuePair<'a>>>;
+}
+
+impl<'a> KorniEntryExt<'a> for korni::Entry<'a> {
+    fn as_valid_pair(self) -> Option<Box<korni::KeyValuePair<'a>>> {
+        match self {
+            korni::Entry::Pair(kv) if !kv.is_comment => Some(kv),
+            _ => None,
+        }
+    }
+}

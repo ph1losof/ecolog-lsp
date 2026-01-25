@@ -169,6 +169,10 @@ impl LanguageSupport for Rust {
         &["(\"", "('"]
     }
 
+    fn comment_node_kinds(&self) -> &'static [&'static str] {
+        &["line_comment", "block_comment"]
+    }
+
     fn is_scope_node(&self, node: tree_sitter::Node) -> bool {
         matches!(
             node.kind(),

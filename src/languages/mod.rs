@@ -103,6 +103,12 @@ pub trait LanguageSupport: Send + Sync {
         &[]
     }
 
+    /// Returns the node kinds that represent comments in this language.
+    /// Used to filter out env var matches that appear inside comments.
+    fn comment_node_kinds(&self) -> &'static [&'static str] {
+        &["comment"]
+    }
+
     /// Validates if the characters before cursor form a valid completion trigger.
     /// Returns true if completion should proceed, false to skip.
     fn is_valid_completion_trigger(&self, source: &[u8], byte_offset: usize) -> bool {

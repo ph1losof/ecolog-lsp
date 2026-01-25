@@ -1,7 +1,7 @@
 use crate::analysis::{
     AnalysisPipeline, BindingGraph, BindingResolver, CrossModuleResolution, CrossModuleResolver,
 };
-use crate::server::handlers::util::{get_identifier_at_position, korni_span_to_range};
+use crate::server::handlers::util::{get_identifier_at_position, korni_span_to_range, KorniEntryExt};
 use crate::server::state::ServerState;
 use crate::types::ImportContext;
 use korni::ParseOptions;
@@ -202,14 +202,12 @@ pub(crate) async fn find_env_definition(state: &ServerState, env_var_name: &str)
             if let Ok(content) = tokio::fs::read_to_string(&env_path).await {
                 let entries = korni::parse_with_options(&content, ParseOptions::full());
 
-                for entry in entries {
-                    if let korni::Entry::Pair(kv) = entry {
-                        if kv.key.as_ref() == env_var_name {
-                            if let Some(key_span) = kv.key_span {
-                                let range = korni_span_to_range(&content, key_span);
-                                let uri = Url::from_file_path(&env_path).ok()?;
-                                return Some(Location { uri, range });
-                            }
+                for kv in entries.into_iter().filter_map(|e| e.as_valid_pair()) {
+                    if kv.key.as_ref() == env_var_name {
+                        if let Some(key_span) = kv.key_span {
+                            let range = korni_span_to_range(&content, key_span);
+                            let uri = Url::from_file_path(&env_path).ok()?;
+                            return Some(Location { uri, range });
                         }
                     }
                 }

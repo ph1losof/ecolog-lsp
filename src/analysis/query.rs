@@ -8,9 +8,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_lsp::lsp_types::Range as LspRange;
-use tree_sitter::{Parser, Query, QueryCursor, QueryMatch, Tree};
+use tree_sitter::{Node, Parser, Query, QueryCursor, QueryMatch, Tree};
 
 const MAX_PARSERS_PER_LANGUAGE: usize = 8;
+
+/// Checks if a node is inside a comment by walking up the tree.
+/// Returns true if any ancestor node is a comment type.
+fn is_in_comment(node: &Node, comment_kinds: &[&str]) -> bool {
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if comment_kinds.contains(&parent.kind()) {
+            return true;
+        }
+        current = parent.parent();
+    }
+    false
+}
 
 const MAX_CURSORS: usize = 16;
 
@@ -132,6 +145,32 @@ impl QueryEngine {
         results
     }
 
+    /// Execute query, automatically skipping matches inside comments.
+    ///
+    /// This is a convenience wrapper around `execute_query` that filters out
+    /// any matches where the first capture is inside a comment node.
+    pub async fn execute_query_skip_comments<'a, F, T>(
+        &self,
+        query: &Query,
+        tree: &'a Tree,
+        source: &'a [u8],
+        comment_kinds: &[&str],
+        mut extractor: F,
+    ) -> Vec<T>
+    where
+        F: FnMut(&QueryMatch<'_, 'a>, &[u8]) -> Option<T>,
+    {
+        self.execute_query(query, tree, source, |m, src| {
+            if let Some(first_capture) = m.captures.first() {
+                if is_in_comment(&first_capture.node, comment_kinds) {
+                    return None;
+                }
+            }
+            extractor(m, src)
+        })
+        .await
+    }
+
     pub async fn extract_references(
         &self,
         language: &dyn LanguageSupport,
@@ -147,7 +186,9 @@ impl QueryEngine {
         let idx_object = query.capture_index_for_name("object");
         let idx_module = query.capture_index_for_name("module");
 
-        self.execute_query(query, tree, source, |m, src| {
+        let comment_kinds = language.comment_node_kinds();
+
+        self.execute_query_skip_comments(query, tree, source, comment_kinds, |m, src| {
             let mut full_range = None;
             let mut name_range = None;
             let mut var_name = None;
@@ -352,7 +393,9 @@ impl QueryEngine {
         let idx_env_binding = query.capture_index_for_name("env_binding");
         let idx_env_object_binding = query.capture_index_for_name("env_object_binding");
 
-        self.execute_query(query, tree, source, |m, src| {
+        let comment_kinds = language.comment_node_kinds();
+
+        self.execute_query_skip_comments(query, tree, source, comment_kinds, |m, src| {
             let mut binding_name: Option<CompactString> = None;
             let mut env_var_name: Option<CompactString> = None;
             let mut binding_range = None;
@@ -1448,5 +1491,72 @@ x = os.environ.get("API_KEY")"#;
             .await;
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "DATABASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_env_in_line_comment_ignored() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"// Use process.env.COMMENTED_VAR to configure
+const real = process.env.REAL_VAR;"#;
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine
+            .extract_references(&js, &tree, code.as_bytes(), &import_ctx)
+            .await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "REAL_VAR");
+    }
+
+    #[tokio::test]
+    async fn test_env_in_block_comment_ignored() {
+        let engine = create_engine();
+        let js = JavaScript;
+        let code = r#"/* Also process.env.BLOCK_COMMENT */
+const real = process.env.REAL_VAR;"#;
+        let tree = parse_js(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine
+            .extract_references(&js, &tree, code.as_bytes(), &import_ctx)
+            .await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "REAL_VAR");
+    }
+
+    #[tokio::test]
+    async fn test_rust_env_in_comment_ignored() {
+        let engine = create_engine();
+        let rs = Rust;
+        let code = r#"fn main() {
+    // std::env::var("COMMENTED_VAR")
+    let x = std::env::var("REAL_VAR").unwrap();
+}"#;
+        let tree = parse_rust(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine
+            .extract_references(&rs, &tree, code.as_bytes(), &import_ctx)
+            .await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "REAL_VAR");
+    }
+
+    #[tokio::test]
+    async fn test_python_env_in_comment_ignored() {
+        let engine = create_engine();
+        let py = Python;
+        let code = r#"import os
+# os.environ.get("COMMENTED_VAR")
+x = os.environ.get("REAL_VAR")"#;
+        let tree = parse_python(&engine, code);
+        let import_ctx = ImportContext::new();
+
+        let refs = engine
+            .extract_references(&py, &tree, code.as_bytes(), &import_ctx)
+            .await;
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "REAL_VAR");
     }
 }

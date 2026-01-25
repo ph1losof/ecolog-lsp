@@ -7,6 +7,7 @@ use crate::analysis::workspace_index::{FileIndexEntry, WorkspaceIndex};
 use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver, QueryEngine};
 use crate::languages::LanguageRegistry;
 use crate::server::config::EcologConfig;
+use crate::server::handlers::util::KorniEntryExt;
 use crate::types::{ExportResolution, FileExportEntry, ImportContext, SymbolId, SymbolOrigin};
 use anyhow::Result;
 use compact_str::CompactString;
@@ -268,10 +269,8 @@ impl WorkspaceIndexer {
 
         entries
             .into_iter()
-            .filter_map(|entry| match entry {
-                korni::Entry::Pair(kv) => Some(CompactString::from(kv.key.as_ref())),
-                _ => None,
-            })
+            .filter_map(|e| e.as_valid_pair())
+            .map(|kv| CompactString::from(kv.key.as_ref()))
             .collect()
     }
 

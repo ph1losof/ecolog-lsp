@@ -1,7 +1,7 @@
 use crate::server::handlers::references::{
     find_env_definition, get_env_var_at_position, get_env_var_usages_in_file,
 };
-use crate::server::handlers::util::{is_valid_env_var_name, korni_span_to_range};
+use crate::server::handlers::util::{is_valid_env_var_name, korni_span_to_range, KorniEntryExt};
 use crate::server::state::ServerState;
 use korni::ParseOptions;
 use std::collections::HashMap;
@@ -151,18 +151,16 @@ async fn get_env_var_in_env_file(
 
     let entries = korni::parse_with_options(&content, ParseOptions::full());
 
-    for entry in entries {
-        if let korni::Entry::Pair(kv) = entry {
-            if let Some(key_span) = kv.key_span {
-                let range = korni_span_to_range(&content, key_span);
+    for kv in entries.into_iter().filter_map(|e| e.as_valid_pair()) {
+        if let Some(key_span) = kv.key_span {
+            let range = korni_span_to_range(&content, key_span);
 
-                if position.line >= range.start.line
-                    && position.line <= range.end.line
-                    && position.character >= range.start.character
-                    && position.character <= range.end.character
-                {
-                    return Some((kv.key.as_ref().to_string(), range));
-                }
+            if position.line >= range.start.line
+                && position.line <= range.end.line
+                && position.character >= range.start.character
+                && position.character <= range.end.character
+            {
+                return Some((kv.key.as_ref().to_string(), range));
             }
         }
     }

@@ -80,12 +80,24 @@ async fn handle_execute_command_inner(
             Some(json!({ "variables": var_list, "count": var_list.len() }))
         }
         "ecolog.generateEnvExample" => {
-            let mut env_vars: Vec<String> = state
-                .workspace_index
-                .all_env_vars()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect();
+            let root = crate::server::util::get_workspace_root(&state.core.workspace).await;
+
+            // Collect from both sources
+            let mut env_vars: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            // Source 1: Variables defined in .env files
+            let defined_vars = crate::server::util::safe_all_for_file(&state.core, &root).await;
+            for var in defined_vars {
+                env_vars.insert(var.key.to_string());
+            }
+
+            // Source 2: Variables referenced in code files
+            for var in state.workspace_index.all_env_vars() {
+                env_vars.insert(var.to_string());
+            }
+
+            // Sort for consistent output
+            let mut env_vars: Vec<String> = env_vars.into_iter().collect();
             env_vars.sort();
 
             if env_vars.is_empty() {
