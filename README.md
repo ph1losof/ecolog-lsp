@@ -10,7 +10,7 @@ A language-agnostic Language Server Protocol (LSP) implementation for environmen
 - **Semantic Tokens**: Syntax highlighting for environment variable references
 - **Diagnostics**: Warnings for undefined or misconfigured environment variables
 - **Value Masking**: Secure handling of sensitive values in editor tooltips
-- **Multi-language Support**: Works across JavaScript, TypeScript, Python, Rust, and Go
+- **Multi-language Support**: Works across JavaScript, TypeScript, Python, Rust, Lua and Go
 
 ## Supported Languages
 
@@ -18,6 +18,7 @@ A language-agnostic Language Server Protocol (LSP) implementation for environmen
 - TypeScript
 - Python
 - Rust
+- Lua
 - Go
 
 Each language has custom tree-sitter queries to accurately detect environment variable access patterns specific to that language's idioms.
@@ -128,7 +129,7 @@ if not configs.ecolog then
   configs.ecolog = {
     default_config = {
       cmd = {'/path/to/ecolog-lsp'},
-      filetypes = {'javascript', 'typescript', 'python', 'rust', 'go'},
+      filetypes = {'javascript', 'typescript', 'python', 'rust', 'lua', 'go'},
       root_dir = lspconfig.util.root_pattern('.env', '.git'),
       settings = {},
     },

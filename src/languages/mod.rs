@@ -4,6 +4,7 @@ use tree_sitter::{Language, Node, Query};
 
 pub mod go;
 pub mod javascript;
+pub mod lua;
 pub mod python;
 pub mod registry;
 pub mod rust;

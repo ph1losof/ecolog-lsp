@@ -1,6 +1,6 @@
 [package]
 name = "ecolog-lsp"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "MIT"
 description = "Language Agnostic LSP for Environment Variables"
@@ -23,6 +23,7 @@ tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.23"
 tree-sitter-rust = "0.23"
 tree-sitter-go = "0.23"
+tree-sitter-lua = "0.2"
 
 # Data Structures
 dashmap = "6.0"
