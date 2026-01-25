@@ -269,7 +269,7 @@ impl WorkspaceIndexer {
 
         entries
             .into_iter()
-            .filter_map(|e| e.as_valid_pair())
+            .filter_map(|e| e.into_valid_pair())
             .map(|kv| CompactString::from(kv.key.as_ref()))
             .collect()
     }

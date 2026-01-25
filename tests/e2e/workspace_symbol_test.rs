@@ -11,7 +11,7 @@ fn test_workspace_symbol_empty_query_returns_all() {
     client.initialize().expect("Initialize failed");
 
     
-    workspace.create_file(".env", "DB_URL=postgres:
+    workspace.create_file(".env", "DB_URL=postgres://localhost");
 
     
     let uri = workspace.file_uri("test.js");
@@ -49,7 +49,7 @@ fn test_workspace_symbol_query_filtering() {
     client.initialize().expect("Initialize failed");
 
     
-    workspace.create_file(".env", "DATABASE_URL=postgres:
+    workspace.create_file(".env", "DATABASE_URL=postgres://localhost");
 
     
     let uri = workspace.file_uri("test.js");
@@ -102,7 +102,7 @@ fn test_workspace_symbol_case_insensitive() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    workspace.create_file(".env", "DATABASE_URL=postgres:
+    workspace.create_file(".env", "DATABASE_URL=postgres://localhost");
 
     let uri = workspace.file_uri("test.js");
     let content = "process.env.DATABASE_URL;";
@@ -179,10 +179,10 @@ fn test_workspace_symbol_points_to_env_definition() {
 #[test]
 fn test_workspace_symbol_empty_workspace() {
     let workspace = TempWorkspace::new();
+    workspace.create_file(".env", ""); // Clear default env vars
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    
     let uri = workspace.file_uri("test.js");
     let content = "const x = 1;";
     workspace.create_file("test.js", content);

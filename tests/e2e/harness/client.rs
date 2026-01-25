@@ -111,12 +111,13 @@ impl LspTestClient {
         let pending_responses = Arc::new(RwLock::new(HashMap::new()));
         let notifications = Arc::new(RwLock::new(Vec::new()));
 
-        
+
         let pending_clone = Arc::clone(&pending_responses);
         let notifications_clone = Arc::clone(&notifications);
+        let stdin_clone = Arc::clone(&stdin);
 
         let reader_handle = thread::spawn(move || {
-            Self::read_messages(stdout, pending_clone, notifications_clone);
+            Self::read_messages(stdout, pending_clone, notifications_clone, stdin_clone);
         });
 
         Ok(Self {
@@ -129,21 +130,22 @@ impl LspTestClient {
         })
     }
 
-    
+
     fn read_messages(
         stdout: ChildStdout,
         pending: Arc<RwLock<HashMap<i64, Value>>>,
         notifications: Arc<RwLock<Vec<JsonRpcNotification>>>,
+        stdin: Arc<Mutex<ChildStdin>>,
     ) {
         let mut reader = BufReader::new(stdout);
 
         loop {
-            
+
             let mut content_length: Option<usize> = None;
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    return; 
+                    return;
                 }
                 let line = line.trim();
                 if line.is_empty() {
@@ -158,7 +160,7 @@ impl LspTestClient {
                 continue;
             };
 
-            
+
             let mut content = vec![0u8; len];
             if std::io::Read::read_exact(&mut reader, &mut content).is_err() {
                 return;
@@ -168,14 +170,28 @@ impl LspTestClient {
                 continue;
             };
 
-            
+
             if let Some(id) = message.get("id").and_then(|v| v.as_i64()) {
-                
+
                 if message.get("result").is_some() || message.get("error").is_some() {
                     pending.write().unwrap().insert(id, message);
+                } else if message.get("method").is_some() {
+                    // Server-to-client request: respond with empty success
+                    let response = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": null
+                    });
+                    let content = serde_json::to_string(&response).unwrap();
+                    let header = format!("Content-Length: {}\r\n\r\n", content.len());
+                    if let Ok(mut stdin_guard) = stdin.lock() {
+                        let _ = stdin_guard.write_all(header.as_bytes());
+                        let _ = stdin_guard.write_all(content.as_bytes());
+                        let _ = stdin_guard.flush();
+                    }
                 }
             } else if message.get("method").is_some() {
-                
+
                 if let Ok(notif) = serde_json::from_value::<JsonRpcNotification>(message) {
                     notifications.write().unwrap().push(notif);
                 }
@@ -304,7 +320,7 @@ impl LspTestClient {
     pub fn initialize(&self) -> Result<Value, Box<dyn std::error::Error>> {
         let init_params = json!({
             "processId": std::process::id(),
-            "rootUri": format!("file:
+            "rootUri": format!("file://{}", self.workspace_root.display()),
             "rootPath": self.workspace_root.display().to_string(),
             "capabilities": {
                 "textDocument": {
@@ -484,6 +500,15 @@ impl LspTestClient {
             Some(json!({
                 "command": command,
                 "arguments": arguments
+            })),
+        )
+    }
+
+    pub fn workspace_symbol(&self, query: &str) -> Result<Value, Box<dyn std::error::Error>> {
+        self.request(
+            "workspace/symbol",
+            Some(json!({
+                "query": query
             })),
         )
     }

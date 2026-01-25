@@ -30,7 +30,7 @@ impl TempWorkspace {
         fs::create_dir_all(&root).expect("Failed to create temp workspace");
 
         
-        let env_content = r#"DB_URL=postgres:
+        let env_content = r#"DB_URL=postgres://localhost
 API_KEY=secret_key_123
 DEBUG=true
 PORT=8080
@@ -63,7 +63,7 @@ PORT=8080
     
     pub fn file_uri(&self, relative_path: &str) -> String {
         let path = self.root.join(relative_path);
-        format!("file:
+        format!("file://{}", path.display())
     }
 
     
@@ -163,7 +163,7 @@ mod tests {
     fn test_file_uri() {
         let workspace = TempWorkspace::new();
         let uri = workspace.file_uri("test.js");
-        assert!(uri.starts_with("file:
+        assert!(uri.starts_with("file://"));
         assert!(uri.ends_with("test.js"));
     }
 

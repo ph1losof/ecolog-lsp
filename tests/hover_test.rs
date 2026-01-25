@@ -17,7 +17,7 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_hover_direct_access() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = r#"
 const api = process.env.API_KEY;
 "#;
@@ -34,7 +34,7 @@ const api = process.env.API_KEY;
 #[tokio::test]
 async fn test_hover_object_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = r#"
 const env = process.env;
 const secret = env.SECRET;
@@ -52,7 +52,7 @@ const secret = env.SECRET;
 #[tokio::test]
 async fn test_hover_subscript_access() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = r#"
 const env = process.env;
 const db = env["DATABASE_URL"];
@@ -70,7 +70,7 @@ const db = env["DATABASE_URL"];
 #[tokio::test]
 async fn test_repro_integration_js_single_line() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = "const a = process.env.DB_URL;";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)

@@ -29,12 +29,8 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_js_hover_only_on_var_name_dot_notation() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
 
-    
-    
-    
-    
     let content = "const a = process.env.DB_URL;";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)
@@ -71,12 +67,8 @@ async fn test_js_hover_only_on_var_name_dot_notation() {
 #[tokio::test]
 async fn test_js_hover_only_on_var_name_bracket_notation() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
 
-    
-    
-    
-    
     let content = "const a = process.env['DB_URL'];";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)
@@ -112,12 +104,8 @@ async fn test_js_hover_only_on_var_name_bracket_notation() {
 #[tokio::test]
 async fn test_ts_hover_only_on_var_name_process_env() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.ts").unwrap();
 
-    
-    
-    
-    
     let content = "const a = process.env.VITE_API;";
     doc_manager
         .open(uri.clone(), "typescript".into(), content.to_string(), 0)
@@ -147,13 +135,8 @@ async fn test_ts_hover_only_on_var_name_process_env() {
 #[tokio::test]
 async fn test_py_hover_only_on_var_name_environ_subscript() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.py").unwrap();
 
-    
-    
-    
-    
-    
     let content = "import os\nx = os.environ['DB_URL']";
     doc_manager
         .open(uri.clone(), "python".into(), content.to_string(), 0)
@@ -186,13 +169,8 @@ async fn test_py_hover_only_on_var_name_environ_subscript() {
 #[tokio::test]
 async fn test_py_hover_only_on_var_name_getenv() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.py").unwrap();
 
-    
-    
-    
-    
-    
     let content = "import os\nx = os.getenv('DB_URL')";
     doc_manager
         .open(uri.clone(), "python".into(), content.to_string(), 0)
@@ -218,12 +196,8 @@ async fn test_py_hover_only_on_var_name_getenv() {
 #[tokio::test]
 async fn test_rust_hover_only_on_var_name_std_env_var() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.rs").unwrap();
 
-    
-    
-    
-    
     let content = r#"fn main() { std::env::var("DB_URL"); }"#;
     doc_manager
         .open(uri.clone(), "rust".into(), content.to_string(), 0)
@@ -253,12 +227,8 @@ async fn test_rust_hover_only_on_var_name_std_env_var() {
 #[tokio::test]
 async fn test_rust_hover_only_on_var_name_env_macro() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.rs").unwrap();
 
-    
-    
-    
-    
     let content = r#"fn main() { env!("DB_URL"); }"#;
     doc_manager
         .open(uri.clone(), "rust".into(), content.to_string(), 0)
@@ -291,16 +261,8 @@ async fn test_rust_hover_only_on_var_name_env_macro() {
 #[tokio::test]
 async fn test_go_hover_only_on_var_name_getenv() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.go").unwrap();
 
-    
-    
-    
-    
-    
-    
-    
-    
     let content = "package main\nimport \"os\"\nfunc main() {\n  val := os.Getenv(\"DB_URL\")\n}";
     doc_manager
         .open(uri.clone(), "go".into(), content.to_string(), 0)
@@ -326,12 +288,8 @@ async fn test_go_hover_only_on_var_name_getenv() {
 #[tokio::test]
 async fn test_go_hover_only_on_var_name_lookupenv() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.go").unwrap();
 
-    
-    
-    
-    
     let content =
         "package main\nimport \"os\"\nfunc main() {\n  val, ok := os.LookupEnv(\"API_KEY\")\n}";
     doc_manager
@@ -358,13 +316,8 @@ async fn test_go_hover_only_on_var_name_lookupenv() {
 #[tokio::test]
 async fn test_js_no_hover_on_semicolon_after_var() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
 
-    
-    
-    
-    
-    
     let content = "const a = process.env.DB_URL;";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)
@@ -388,13 +341,8 @@ async fn test_js_no_hover_on_semicolon_after_var() {
 #[tokio::test]
 async fn test_js_no_hover_on_closing_quote_bracket_notation() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
 
-    
-    
-    
-    
-    
     let content = "const a = process.env['DB_URL'];";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)
@@ -429,14 +377,8 @@ async fn test_js_no_hover_on_closing_quote_bracket_notation() {
 #[tokio::test]
 async fn test_returned_range_is_name_range_not_full_range() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
 
-    
-    
-    
-    
-    
-    
     let content = "const a = process.env.DB_URL;";
     doc_manager
         .open(uri.clone(), "javascript".into(), content.to_string(), 0)

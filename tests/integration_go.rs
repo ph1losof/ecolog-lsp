@@ -38,7 +38,7 @@ async fn test_go_hover_getenv() {
     .await;
 
     assert!(hover.is_some(), "Hover failed for os.Getenv");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]

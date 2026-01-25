@@ -37,7 +37,7 @@ async fn test_py_hover_environ_getitem() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -212,7 +212,7 @@ async fn test_py_hover_walrus_operator_environ_get() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -387,7 +387,7 @@ async fn test_py_walrus_operator_multiple_in_if() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 
     
     let hover = handle_hover(
@@ -449,7 +449,7 @@ async fn test_py_hover_decouple_config() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for decouple config()");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -480,7 +480,7 @@ async fn test_py_hover_function_default_getenv() {
         hover.is_some(),
         "Expected hover for env var in function default"
     );
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -542,7 +542,7 @@ async fn test_py_hover_dict_literal_environ() {
         hover.is_some(),
         "Expected hover for environ in dict literal"
     );
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -601,7 +601,7 @@ async fn test_py_hover_config_class_environ() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for environ in config class");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]

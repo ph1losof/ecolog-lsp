@@ -28,7 +28,7 @@ fn test_hover_direct_env_reference_js() {
     let value = contents.get("value").expect("Missing value").as_str().expect("Value not string");
 
     assert!(value.contains("DB_URL"), "Hover should contain variable name");
-    assert!(value.contains("postgres:
+    assert!(value.contains("postgres://"));
 
     client.shutdown().expect("Shutdown failed");
 }

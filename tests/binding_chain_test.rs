@@ -74,7 +74,7 @@ async fn test_multi_level_binding_chain() {
     
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres:
+    writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
 
     let state = setup_test_state(&temp_dir).await;
 
@@ -140,7 +140,7 @@ async fn test_object_alias_destructure() {
 
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres:
+    writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
 
     let state = setup_test_state(&temp_dir).await;
 
@@ -276,7 +276,7 @@ async fn test_scope_isolation_detailed() {
 
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres:
+    writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
 
     let state = setup_test_state(&temp_dir).await;
 

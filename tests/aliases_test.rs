@@ -19,7 +19,7 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_js_object_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = r#"
         const env = process.env;
         const api = env.API_KEY; 
@@ -45,7 +45,7 @@ async fn test_js_object_alias() {
 #[tokio::test]
 async fn test_python_module_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.py").unwrap();
     let content = r#"
 import os as o
 val1 = o.environ["VAR1"]
@@ -71,7 +71,7 @@ val2 = o.getenv("VAR2")
 #[tokio::test]
 async fn test_python_object_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.py").unwrap();
     let content = r#"
 from os import environ as e
 val = e["VAR"]
@@ -90,7 +90,7 @@ val = e["VAR"]
 #[tokio::test]
 async fn test_rust_module_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.rs").unwrap();
     let content = r#"
 use std::env as e;
 fn main() {
@@ -110,7 +110,7 @@ fn main() {
 #[tokio::test]
 async fn test_go_module_alias() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.go").unwrap();
     let content = r#"
 package main
 import (
@@ -136,7 +136,7 @@ func main() {
 #[tokio::test]
 async fn test_scope_isolation() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = r#"
 function a() {
     const env = process.env;

@@ -103,7 +103,7 @@ fn test_double_initialize_fails() {
         "initialize",
         Some(json!({
             "processId": std::process::id(),
-            "rootUri": format!("file:
+            "rootUri": format!("file://{}", workspace.root.display()),
             "capabilities": {}
         })),
     );

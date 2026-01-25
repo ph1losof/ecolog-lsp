@@ -37,7 +37,7 @@ async fn test_js_hover_direct() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -561,7 +561,7 @@ async fn test_js_destructuring_multiple() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on dbUrl binding");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]

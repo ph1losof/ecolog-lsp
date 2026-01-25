@@ -34,7 +34,7 @@ async fn test_rust_hover_std_env_var() {
     .await;
 
     assert!(hover.is_some());
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -104,7 +104,7 @@ async fn test_rust_hover_result_destructuring() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on 'val' binding");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -139,7 +139,7 @@ async fn test_rust_hover_result_destructuring_var_short() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on 'val' binding");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn test_rust_hover_if_let() {
     .await;
 
     assert!(hover.is_some(), "Expected hover on 'val' binding in if let");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -239,7 +239,7 @@ async fn test_rust_hover_match_destructuring() {
         hover.is_some(),
         "Expected hover on 'val' binding in match arm"
     );
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres:
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
 }
 
 #[tokio::test]
@@ -394,7 +394,7 @@ async fn test_rust_hover_dotenv_var() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for dotenv::var");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -422,7 +422,7 @@ async fn test_rust_hover_dotenvy_var() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for dotenvy::var");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -450,7 +450,7 @@ async fn test_rust_hover_method_chain_unwrap() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for method chain unwrap");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -478,7 +478,7 @@ async fn test_rust_hover_try_expression() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for try expression");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -506,7 +506,7 @@ async fn test_rust_hover_const_env_macro() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for const env! macro");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }
 
 #[tokio::test]
@@ -534,5 +534,5 @@ async fn test_rust_hover_static_env_macro() {
     .await;
 
     assert!(hover.is_some(), "Expected hover for static env! macro");
-    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));
+    assert!(format!("{:?}", hover.unwrap()).contains("postgres://"));//"));
 }

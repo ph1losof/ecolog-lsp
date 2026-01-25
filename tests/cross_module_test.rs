@@ -516,7 +516,7 @@ async fn test_hover_on_destructured_import() {
     
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres:
+    writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
 
     
     let config_path = temp_dir.join("config.ts");
@@ -682,7 +682,7 @@ async fn test_hover_on_default_export() {
     
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DATABASE_URL=postgres:
+    writeln!(env_file, "DATABASE_URL=postgres://localhost").unwrap();
 
     
     let config_path = temp_dir.join("config.ts");
@@ -778,7 +778,7 @@ async fn test_completion_on_imported_env_object() {
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
     writeln!(env_file, "SECRET_KEY=super_secret_123").unwrap();
-    writeln!(env_file, "DATABASE_URL=postgres:
+    writeln!(env_file, "DATABASE_URL=postgres://localhost").unwrap();
 
     
     let config_path = temp_dir.join("config.ts");
@@ -875,7 +875,7 @@ async fn test_wildcard_reexport_env_var() {
     
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DATABASE_URL=postgres:
+    writeln!(env_file, "DATABASE_URL=postgres://localhost").unwrap();
 
     
     let config_path = temp_dir.join("config.ts");

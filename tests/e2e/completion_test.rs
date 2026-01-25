@@ -96,7 +96,7 @@ fn test_completion_item_documentation() {
         .expect("Documentation value should be string");
 
     assert!(
-        doc_value.contains("postgres:
+        doc_value.contains("postgres://"),
         "Documentation should contain the value"
     );
 
@@ -141,7 +141,7 @@ fn test_completion_no_results_outside_env() {
     client.initialize().expect("Initialize failed");
 
     let uri = workspace.file_uri("test.js");
-    let content = "const x = 1; 
+    let content = "const x = 1;";
     workspace.create_file("test.js", content);
 
     client.open_document(&uri, "javascript", content).expect("Failed to open document");

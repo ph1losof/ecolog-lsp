@@ -17,9 +17,8 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_completion_context_js() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
 
-    
     let content = r#"
         const env = process.env;
         env.
@@ -39,9 +38,8 @@ async fn test_completion_context_js() {
 #[tokio::test]
 async fn test_completion_context_python() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.py").unwrap();
 
-    
     let content = r#"
         env.
     "#;

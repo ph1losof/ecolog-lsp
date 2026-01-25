@@ -142,7 +142,7 @@ impl LspServer {
                 let entries = korni::parse_with_options(content, ParseOptions::full());
                 entries
                     .into_iter()
-                    .filter_map(|e| e.as_valid_pair())
+                    .filter_map(|e| e.into_valid_pair())
                     .map(|kv| CompactString::from(kv.key.as_ref()))
                     .collect()
             } else {
@@ -186,14 +186,14 @@ impl LspServer {
     /// Refresh diagnostics for all open documents in parallel
     async fn refresh_all_diagnostics(&self) {
         let uris: Vec<_> = self.state.document_manager.all_uris();
-        let state = &self.state;
 
         let futures: Vec<_> = uris
             .iter()
             .map(|uri| {
                 let uri = uri.clone();
+                let state = self.state.clone();
                 async move {
-                    let diagnostics = handlers::compute_diagnostics(&uri, state).await;
+                    let diagnostics = handlers::compute_diagnostics(&uri, &state).await;
                     (uri, diagnostics)
                 }
             })

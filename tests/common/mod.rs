@@ -37,7 +37,7 @@ impl TestFixture {
         
         let env_path = temp_dir.join(".env");
         let mut env_file = File::create(&env_path).unwrap();
-        writeln!(env_file, "DB_URL=postgres:
+        writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
         writeln!(env_file, "API_KEY=secret_key").unwrap();
         writeln!(env_file, "DEBUG=true").unwrap();
         writeln!(env_file, "PORT=8080").unwrap();

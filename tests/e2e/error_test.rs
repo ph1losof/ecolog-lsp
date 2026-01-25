@@ -34,8 +34,7 @@ fn test_document_not_open() {
     let client = LspTestClient::spawn(workspace.root.clone()).expect("Failed to spawn LSP");
     client.initialize().expect("Initialize failed");
 
-    
-    let hover = client.hover("file:
+    let hover = client.hover("file:///nonexistent.js", 0, 0).expect("Request should not fail");
 
     assert!(hover.is_null(), "Hover on unopened document should return null");
 
@@ -181,7 +180,7 @@ fn test_unicode_in_document() {
     client.initialize().expect("Initialize failed");
 
     let uri = workspace.file_uri("unicode.js");
-    let content = "
+    let content = "// 日本語コメント\nconst api = process.env.API_KEY;";
     workspace.create_file("unicode.js", content);
 
     client.open_document(&uri, "javascript", content).expect("Failed to open document");

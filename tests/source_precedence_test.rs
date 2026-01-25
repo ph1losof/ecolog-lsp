@@ -278,7 +278,7 @@ async fn test_disabled_file_no_hover() {
     let hover_before = get_hover(&fixture, &uri, 0, 14).await;
     assert!(hover_before.is_some(), "Hover should work before disabling file");
     assert!(
-        format!("{:?}", hover_before.unwrap()).contains("postgres:
+        format!("{:?}", hover_before.unwrap()).contains("postgres://"),
         "Hover should show file value"
     );
 
@@ -455,7 +455,7 @@ async fn test_file_works_when_shell_disabled() {
         "File variable should still work when shell is disabled"
     );
     assert!(
-        format!("{:?}", hover.unwrap()).contains("postgres:
+        format!("{:?}", hover.unwrap()).contains("postgres://"),
         "Hover should show file value"
     );
 }

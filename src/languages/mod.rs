@@ -113,25 +113,16 @@ pub trait LanguageSupport: Send + Sync {
     /// Validates if the characters before cursor form a valid completion trigger.
     /// Returns true if completion should proceed, false to skip.
     fn is_valid_completion_trigger(&self, source: &[u8], byte_offset: usize) -> bool {
-        if byte_offset == 0 {
-            return false;
-        }
-
         let triggers = self.completion_trigger_characters();
 
-        // Check single-char triggers
-        let one_before = source[byte_offset - 1];
         for trigger in triggers {
-            if trigger.len() == 1 && trigger.as_bytes()[0] == one_before {
-                return true;
+            let len = trigger.len();
+            if len == 0 {
+                continue;
             }
-        }
-
-        // Check two-char triggers (like "[\"" or "('")
-        if byte_offset >= 2 {
-            let two_before = &source[byte_offset - 2..byte_offset];
-            for trigger in triggers {
-                if trigger.len() == 2 && trigger.as_bytes() == two_before {
+            if byte_offset >= len {
+                let slice = &source[byte_offset - len..byte_offset];
+                if slice == trigger.as_bytes() {
                     return true;
                 }
             }

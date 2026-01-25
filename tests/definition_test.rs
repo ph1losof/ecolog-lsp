@@ -16,7 +16,7 @@ async fn setup_manager() -> DocumentManager {
 #[tokio::test]
 async fn test_definition_reference_exists() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.js").unwrap();
     let content = r#"
 const api = process.env.API_KEY;
 "#;
@@ -36,7 +36,7 @@ const api = process.env.API_KEY;
 #[tokio::test]
 async fn test_definition_python_environ() {
     let doc_manager = setup_manager().await;
-    let uri = Url::parse("file:
+    let uri = Url::parse("file:///test.py").unwrap();
     let content = r#"
 import os
 val = os.environ["DB_HOST"]

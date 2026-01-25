@@ -27,7 +27,7 @@ async fn test_bindings_integration() {
     
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres:
+    writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
     writeln!(env_file, "API_KEY=secret_key").unwrap();
     writeln!(env_file, "JSON_BLOB=some_data").unwrap();
 
@@ -292,7 +292,7 @@ async fn test_destructuring_diagnostics() {
     
     let env_path = temp_dir.join(".env");
     let mut env_file = File::create(&env_path).unwrap();
-    writeln!(env_file, "DB_URL=postgres:
+    writeln!(env_file, "DB_URL=postgres://localhost").unwrap();
 
     
     let mut registry = LanguageRegistry::new();

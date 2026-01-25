@@ -278,16 +278,16 @@ async fn test_prepare_rename_in_env_file() {
     let fixture = TestFixture::new().await;
 
     
-    let env_uri = fixture.create_file(".env", "API_KEY=secret123\nDB_URL=postgres:
+    let env_uri = fixture.create_file(".env", "API_KEY=secret123\nDB_URL=postgres://localhost");
 
-    
+
     fixture
         .state
         .document_manager
         .open(
             env_uri.clone(),
             "plaintext".to_string(),
-            "API_KEY=secret123\nDB_URL=postgres:
+            "API_KEY=secret123\nDB_URL=postgres://localhost".to_string(),
             1,
         )
         .await;
@@ -391,7 +391,7 @@ async fn test_rename_from_env_file_updates_code_files() {
     let env_uri = fixture.create_file(".env", "DB_HOST=localhost");
 
     
-    let js_content = "const host = process.env.DB_HOST;\nconst url = `http:
+    let js_content = "const host = process.env.DB_HOST;\nconst url = `http://${host}`;";
     let js_uri = fixture.create_file("server.js", js_content);
 
     
