@@ -195,20 +195,254 @@ pub(crate) async fn get_identifier_at_position(
     None
 }
 
-/// Extension methods for korni `Entry` filtering.
-///
-/// This trait provides a unified way to filter `.env` file entries,
-/// skipping comments and extracting only valid key-value pairs.
-pub trait KorniEntryExt<'a> {
-    /// Returns the key-value pair if this entry is a non-comment pair.
-    fn into_valid_pair(self) -> Option<Box<korni::KeyValuePair<'a>>>;
-}
+// Re-export KorniEntryExt from types for backwards compatibility
+pub use crate::types::KorniEntryExt;
 
-impl<'a> KorniEntryExt<'a> for korni::Entry<'a> {
-    fn into_valid_pair(self) -> Option<Box<korni::KeyValuePair<'a>>> {
-        match self {
-            korni::Entry::Pair(kv) if !kv.is_comment => Some(kv),
-            _ => None,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use abundantis::source::VariableSource;
+    use std::path::PathBuf;
+
+    // =========================================================================
+    // format_source tests
+    // =========================================================================
+
+    #[test]
+    fn test_format_source_file_relative() {
+        let root = PathBuf::from("/workspace");
+        let source = VariableSource::File {
+            path: PathBuf::from("/workspace/config/.env"),
+            offset: 0,
+        };
+        let result = format_source(&source, &root);
+        assert_eq!(result, "config/.env");
+    }
+
+    #[test]
+    fn test_format_source_file_absolute() {
+        let root = PathBuf::from("/workspace");
+        let source = VariableSource::File {
+            path: PathBuf::from("/other/path/.env"),
+            offset: 0,
+        };
+        let result = format_source(&source, &root);
+        assert_eq!(result, "/other/path/.env");
+    }
+
+    #[test]
+    fn test_format_source_shell() {
+        let root = PathBuf::from("/workspace");
+        let source = VariableSource::Shell;
+        let result = format_source(&source, &root);
+        assert_eq!(result, "System Environment");
+    }
+
+    #[test]
+    fn test_format_source_memory() {
+        let root = PathBuf::from("/workspace");
+        let source = VariableSource::Memory;
+        let result = format_source(&source, &root);
+        assert_eq!(result, "In-Memory");
+    }
+
+    #[test]
+    fn test_format_source_remote_with_path() {
+        let root = PathBuf::from("/workspace");
+        let source = VariableSource::Remote {
+            provider: "aws".into(),
+            path: Some("secrets/prod".to_string()),
+        };
+        let result = format_source(&source, &root);
+        assert_eq!(result, "Remote (aws: secrets/prod)");
+    }
+
+    #[test]
+    fn test_format_source_remote_without_path() {
+        let root = PathBuf::from("/workspace");
+        let source = VariableSource::Remote {
+            provider: "vault".into(),
+            path: None,
+        };
+        let result = format_source(&source, &root);
+        assert_eq!(result, "Remote (vault)");
+    }
+
+    // =========================================================================
+    // format_hover_markdown tests
+    // =========================================================================
+
+    #[test]
+    fn test_format_hover_markdown_simple() {
+        let resolved = ResolvedEnvVarValue {
+            value: "postgres://localhost".to_string(),
+            source: ".env".to_string(),
+            description: None,
+        };
+        let result = format_hover_markdown("DATABASE_URL", None, &resolved);
+        assert!(result.contains("**`DATABASE_URL`**"));
+        assert!(result.contains("`postgres://localhost`"));
+        assert!(result.contains("`.env`"));
+    }
+
+    #[test]
+    fn test_format_hover_markdown_with_binding() {
+        let resolved = ResolvedEnvVarValue {
+            value: "secret".to_string(),
+            source: ".env.local".to_string(),
+            description: None,
+        };
+        let result = format_hover_markdown("API_KEY", Some("apiKey"), &resolved);
+        assert!(result.contains("**`apiKey`** → **`API_KEY`**"));
+    }
+
+    #[test]
+    fn test_format_hover_markdown_same_binding_name() {
+        let resolved = ResolvedEnvVarValue {
+            value: "8080".to_string(),
+            source: ".env".to_string(),
+            description: None,
+        };
+        // When binding name is same as env var name, no arrow
+        let result = format_hover_markdown("PORT", Some("PORT"), &resolved);
+        assert!(result.contains("**`PORT`**"));
+        assert!(!result.contains("→"));
+    }
+
+    #[test]
+    fn test_format_hover_markdown_with_description() {
+        let resolved = ResolvedEnvVarValue {
+            value: "true".to_string(),
+            source: ".env".to_string(),
+            description: Some(compact_str::CompactString::from("Enable debug mode")),
+        };
+        let result = format_hover_markdown("DEBUG", None, &resolved);
+        assert!(result.contains("*Enable debug mode*"));
+    }
+
+    #[test]
+    fn test_format_hover_markdown_multiline_value() {
+        let resolved = ResolvedEnvVarValue {
+            value: "line1\nline2".to_string(),
+            source: ".env".to_string(),
+            description: None,
+        };
+        let result = format_hover_markdown("MULTILINE", None, &resolved);
+        // Newlines should be formatted specially
+        assert!(result.contains("`line1`\n`line2`"));
+    }
+
+    // =========================================================================
+    // get_line_col tests
+    // =========================================================================
+
+    #[test]
+    fn test_get_line_col_first_line() {
+        let content = "hello world";
+        assert_eq!(get_line_col(content, 0), (0, 0));
+        assert_eq!(get_line_col(content, 6), (0, 6));
+    }
+
+    #[test]
+    fn test_get_line_col_multiple_lines() {
+        let content = "line1\nline2\nline3";
+        assert_eq!(get_line_col(content, 6), (1, 0)); // start of line2
+        assert_eq!(get_line_col(content, 12), (2, 0)); // start of line3
+    }
+
+    #[test]
+    fn test_get_line_col_out_of_bounds() {
+        let content = "short";
+        assert_eq!(get_line_col(content, 100), (0, 0));
+    }
+
+    // =========================================================================
+    // offset_to_line_col tests
+    // =========================================================================
+
+    #[test]
+    fn test_offset_to_line_col_single_line() {
+        let content = "hello world";
+        assert_eq!(offset_to_line_col(content, 0), (0, 0));
+        assert_eq!(offset_to_line_col(content, 6), (0, 6));
+    }
+
+    #[test]
+    fn test_offset_to_line_col_after_newline() {
+        let content = "abc\ndefg";
+        assert_eq!(offset_to_line_col(content, 4), (1, 0)); // 'd' after newline
+        assert_eq!(offset_to_line_col(content, 6), (1, 2)); // 'f'
+    }
+
+    #[test]
+    fn test_offset_to_line_col_multiple_newlines() {
+        let content = "a\nb\nc";
+        assert_eq!(offset_to_line_col(content, 0), (0, 0)); // 'a'
+        assert_eq!(offset_to_line_col(content, 2), (1, 0)); // 'b'
+        assert_eq!(offset_to_line_col(content, 4), (2, 0)); // 'c'
+    }
+
+    // =========================================================================
+    // is_valid_env_var_name tests
+    // =========================================================================
+
+    #[test]
+    fn test_is_valid_env_var_name_valid() {
+        assert!(is_valid_env_var_name("DATABASE_URL"));
+        assert!(is_valid_env_var_name("API_KEY"));
+        assert!(is_valid_env_var_name("_PRIVATE"));
+        assert!(is_valid_env_var_name("VAR1"));
+        assert!(is_valid_env_var_name("A"));
+        assert!(is_valid_env_var_name("_"));
+        assert!(is_valid_env_var_name("__name__"));
+    }
+
+    #[test]
+    fn test_is_valid_env_var_name_invalid() {
+        assert!(!is_valid_env_var_name("")); // empty
+        assert!(!is_valid_env_var_name("1VAR")); // starts with number
+        assert!(!is_valid_env_var_name("VAR-NAME")); // contains hyphen
+        assert!(!is_valid_env_var_name("VAR.NAME")); // contains dot
+        assert!(!is_valid_env_var_name("VAR NAME")); // contains space
+        assert!(!is_valid_env_var_name("VAR@NAME")); // contains special char
+    }
+
+    #[test]
+    fn test_is_valid_env_var_name_unicode() {
+        // Unicode letters are not valid in env var names (ASCII only)
+        assert!(!is_valid_env_var_name("日本語"));
+        assert!(!is_valid_env_var_name("VARäble"));
+    }
+
+    // =========================================================================
+    // korni_span_to_range tests
+    // =========================================================================
+
+    #[test]
+    fn test_korni_span_to_range_single_line() {
+        let content = "KEY=value";
+        let span = korni::Span {
+            start: korni::Position { offset: 0 },
+            end: korni::Position { offset: 3 },
+        };
+        let range = korni_span_to_range(content, span);
+        assert_eq!(range.start.line, 0);
+        assert_eq!(range.start.character, 0);
+        assert_eq!(range.end.line, 0);
+        assert_eq!(range.end.character, 3);
+    }
+
+    #[test]
+    fn test_korni_span_to_range_multiline() {
+        let content = "KEY1=value1\nKEY2=value2";
+        let span = korni::Span {
+            start: korni::Position { offset: 12 }, // start of KEY2
+            end: korni::Position { offset: 16 },   // end of KEY2
+        };
+        let range = korni_span_to_range(content, span);
+        assert_eq!(range.start.line, 1);
+        assert_eq!(range.start.character, 0);
+        assert_eq!(range.end.line, 1);
+        assert_eq!(range.end.character, 4);
     }
 }

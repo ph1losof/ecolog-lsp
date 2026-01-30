@@ -1,5 +1,8 @@
 # Ecolog LSP
 
+[![CI](https://github.com/ecolog-lsp/ecolog-lsp/actions/workflows/ci.yml/badge.svg)](https://github.com/ecolog-lsp/ecolog-lsp/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ecolog-lsp/ecolog-lsp/graph/badge.svg)](https://codecov.io/gh/ecolog-lsp/ecolog-lsp)
+
 A language-agnostic Language Server Protocol (LSP) implementation for environment variables, providing intelligent code assistance for environment variable references across multiple programming languages.
 
 ## Features

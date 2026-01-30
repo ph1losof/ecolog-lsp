@@ -1,4 +1,4 @@
-use crate::analysis::binding_graph::{BindingGraph, EnvVarLocationKind};
+use crate::analysis::graph::{BindingGraph, EnvVarLocationKind};
 use crate::types::{
     BindingKind, EnvBinding, EnvBindingUsage, EnvReference, ResolvedEnv, ScopeId, Symbol, SymbolId,
     SymbolUsage,
@@ -454,11 +454,7 @@ impl<'a> BindingResolver<'a> {
                 let scope = match self.graph.get_scope(symbol.scope) {
                     Some(s) => s,
                     None => {
-                        debug_assert!(
-                            false,
-                            "Symbol '{}' references non-existent scope {:?} - data consistency error",
-                            symbol.name, symbol.scope
-                        );
+                        // Data consistency error - this should never happen in normal operation
                         error!(
                             symbol_name = %symbol.name,
                             scope_id = ?symbol.scope,

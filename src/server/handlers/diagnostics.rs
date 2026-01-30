@@ -15,16 +15,12 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
     tracing::debug!("[COMPUTE_DIAGNOSTICS_ENTER] uri={}", uri);
     let start = Instant::now();
 
-    {
-        let config = state.config.get_config();
-        let config = config.read().await;
-        if !config.features.diagnostics {
-            tracing::debug!(
-                "[COMPUTE_DIAGNOSTICS_EXIT] disabled elapsed_ms={}",
-                start.elapsed().as_millis()
-            );
-            return vec![];
-        }
+    if !state.config.is_diagnostics_enabled() {
+        tracing::debug!(
+            "[COMPUTE_DIAGNOSTICS_EXIT] disabled elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
+        return vec![];
     }
 
     let mut diagnostics = Vec::new();

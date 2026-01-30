@@ -19,16 +19,12 @@ pub async fn handle_definition(
     );
     let start = Instant::now();
 
-    {
-        let config = state.config.get_config();
-        let config = config.read().await;
-        if !config.features.definition {
-            tracing::debug!(
-                "[HANDLE_DEFINITION_EXIT] disabled elapsed_ms={}",
-                start.elapsed().as_millis()
-            );
-            return None;
-        }
+    if !state.config.is_definition_enabled() {
+        tracing::debug!(
+            "[HANDLE_DEFINITION_EXIT] disabled elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
+        return None;
     }
 
     let env_var_name = if let Some(reference) = state

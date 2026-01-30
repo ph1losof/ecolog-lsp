@@ -688,6 +688,24 @@ impl ModuleImport {
     }
 }
 
+/// Extension methods for korni `Entry` filtering.
+///
+/// This trait provides a unified way to filter `.env` file entries,
+/// skipping comments and extracting only valid key-value pairs.
+pub trait KorniEntryExt<'a> {
+    /// Returns the key-value pair if this entry is a non-comment pair.
+    fn into_valid_pair(self) -> Option<Box<korni::KeyValuePair<'a>>>;
+}
+
+impl<'a> KorniEntryExt<'a> for korni::Entry<'a> {
+    fn into_valid_pair(self) -> Option<Box<korni::KeyValuePair<'a>>> {
+        match self {
+            korni::Entry::Pair(kv) if !kv.is_comment => Some(kv),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

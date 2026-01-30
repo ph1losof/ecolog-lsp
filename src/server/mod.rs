@@ -1,7 +1,9 @@
+pub mod cancellation;
 pub mod config;
 pub mod env_resolution;
 pub mod error;
 pub mod handlers;
+pub mod services;
 pub mod state;
 pub mod util;
 
@@ -338,16 +340,16 @@ impl LanguageServer for LspServer {
         let client = self.client.clone();
 
         tokio::spawn(async move {
-            let config_snapshot = {
+            let env_files = {
                 let config = config.read().await;
-                config.clone()
+                config.workspace.env_files.clone()
             };
             info!("Starting background workspace indexing...");
             client
                 .log_message(MessageType::INFO, "Starting workspace indexing...")
                 .await;
 
-            if let Err(e) = indexer.index_workspace(&config_snapshot).await {
+            if let Err(e) = indexer.index_workspace(&env_files).await {
                 client
                     .log_message(
                         MessageType::WARNING,
@@ -554,7 +556,7 @@ impl LanguageServer for LspServer {
                 FileChangeType::CREATED | FileChangeType::CHANGED => {
                     self.state
                         .indexer
-                        .on_file_changed(&change.uri, &config)
+                        .on_file_changed(&change.uri, &config.workspace.env_files)
                         .await;
 
                     if is_env_file {

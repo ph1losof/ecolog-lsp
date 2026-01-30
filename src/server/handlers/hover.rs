@@ -31,16 +31,12 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
     );
     let start = Instant::now();
 
-    {
-        let config = state.config.get_config();
-        let config = config.read().await;
-        if !config.features.hover {
-            tracing::debug!(
-                "[HANDLE_HOVER_EXIT] disabled elapsed_ms={}",
-                start.elapsed().as_millis()
-            );
-            return None;
-        }
+    if !state.config.is_hover_enabled() {
+        tracing::debug!(
+            "[HANDLE_HOVER_EXIT] disabled elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
+        return None;
     }
 
     let (env_var_name, binding_name, hover_range, is_binding, binding_kind) =

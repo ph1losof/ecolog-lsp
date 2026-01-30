@@ -1,4 +1,4 @@
-use crate::analysis::binding_graph::EnvVarLocationKind;
+use crate::analysis::graph::EnvVarLocationKind;
 use crate::analysis::BindingResolver;
 use crate::server::config::InlayHintConfig;
 use crate::server::handlers::util::resolve_env_var_value;
@@ -26,22 +26,24 @@ pub async fn handle_inlay_hints(
         range.end.character
     );
 
-    // 1. Feature flag + config
+    // 1. Feature flag check (lock-free)
+    if !state.config.is_inlay_hints_enabled() {
+        tracing::debug!("[HANDLE_INLAY_HINTS_EXIT] feature disabled");
+        return None;
+    }
+
+    // 2. Get inlay hint config
     let config = {
         let config_arc = state.config.get_config();
         let config = config_arc.read().await;
-        if !config.features.inlay_hints {
-            tracing::debug!("[HANDLE_INLAY_HINTS_EXIT] feature disabled");
-            return None;
-        }
         config.inlay_hints.clone()
     };
 
-    // 2. Get binding graph
+    // 3. Get binding graph
     let graph = state.document_manager.get_binding_graph(uri)?;
     let resolver = BindingResolver::new(&graph);
 
-    // 3. Get all env vars
+    // 4. Get all env vars
     let env_vars = resolver.all_env_vars();
     if env_vars.is_empty() {
         tracing::debug!(
@@ -51,7 +53,7 @@ pub async fn handle_inlay_hints(
         return Some(vec![]);
     }
 
-    // 4. Resolve values (batch)
+    // 5. Resolve values (batch)
     let file_path = uri.to_file_path().ok()?;
     let mut resolved: FxHashMap<CompactString, (String, String)> = FxHashMap::default();
     for var in &env_vars {
@@ -61,7 +63,7 @@ pub async fn handle_inlay_hints(
         }
     }
 
-    // 5. Build hints
+    // 6. Build hints
     let mut hints = Vec::new();
     let mut per_line: FxHashMap<u32, usize> = FxHashMap::default();
 

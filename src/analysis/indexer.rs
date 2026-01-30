@@ -6,9 +6,9 @@
 use crate::analysis::workspace_index::{FileIndexEntry, WorkspaceIndex};
 use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver, QueryEngine};
 use crate::languages::LanguageRegistry;
-use crate::server::config::EcologConfig;
-use crate::server::handlers::util::KorniEntryExt;
-use crate::types::{ExportResolution, FileExportEntry, ImportContext, SymbolId, SymbolOrigin};
+use crate::types::{
+    ExportResolution, FileExportEntry, ImportContext, KorniEntryExt, SymbolId, SymbolOrigin,
+};
 use anyhow::Result;
 use compact_str::CompactString;
 use korni::ParseOptions;
@@ -64,13 +64,13 @@ impl WorkspaceIndexer {
     
     
     
-    pub async fn index_workspace(&self, config: &EcologConfig) -> Result<()> {
+    pub async fn index_workspace(&self, env_files: &[CompactString]) -> Result<()> {
         info!("Starting workspace indexing at {:?}", self.workspace_root);
 
         self.workspace_index.set_indexing(true);
 
-        
-        let files = self.discover_files(config).await;
+
+        let files = self.discover_files(env_files).await;
         let file_count = files.len();
         info!("Discovered {} files to index", file_count);
 
@@ -91,10 +91,10 @@ impl WorkspaceIndexer {
         for (i, file_path) in files.into_iter().enumerate() {
             let permit = semaphore.clone().acquire_owned().await?;
             let indexer = self.clone_for_task();
-            let config_clone = config.clone();
+            let env_files_clone = env_files.to_vec();
 
             handles.push(tokio::spawn(async move {
-                let result = indexer.index_file(&file_path, &config_clone).await;
+                let result = indexer.index_file(&file_path, &env_files_clone).await;
                 drop(permit);
                 result
             }));
@@ -143,10 +143,10 @@ impl WorkspaceIndexer {
     }
 
     
-    async fn discover_files(&self, config: &EcologConfig) -> Vec<PathBuf> {
+    async fn discover_files(&self, env_files: &[CompactString]) -> Vec<PathBuf> {
         let mut files = Vec::new();
 
-        
+
         let extensions: Vec<&str> = self
             .languages
             .all_languages()
@@ -155,10 +155,8 @@ impl WorkspaceIndexer {
             .copied()
             .collect();
 
-        
-        let env_patterns: Vec<glob::Pattern> = config
-            .workspace
-            .env_files
+
+        let env_patterns: Vec<glob::Pattern> = env_files
             .iter()
             .filter_map(|p| glob::Pattern::new(p).ok())
             .collect();
@@ -202,14 +200,14 @@ impl WorkspaceIndexer {
     
 
     
-    pub async fn index_file(&self, path: &Path, config: &EcologConfig) -> Result<()> {
+    pub async fn index_file(&self, path: &Path, env_files: &[CompactString]) -> Result<()> {
         let uri = Url::from_file_path(path)
             .map_err(|_| anyhow::anyhow!("Invalid file path: {:?}", path))?;
 
         let content = tokio::fs::read_to_string(path).await?;
         let mtime = tokio::fs::metadata(path).await?.modified()?;
 
-        let is_env_file = self.is_env_file(path, config);
+        let is_env_file = self.is_env_file(path, env_files);
 
         let (env_vars, exports) = if is_env_file {
             (self.extract_env_vars_from_env_file(&content), None)
@@ -250,13 +248,13 @@ impl WorkspaceIndexer {
     }
 
     
-    fn is_env_file(&self, path: &Path, config: &EcologConfig) -> bool {
+    fn is_env_file(&self, path: &Path, env_files: &[CompactString]) -> bool {
         let name = match path.file_name().and_then(|n| n.to_str()) {
             Some(n) => n,
             None => return false,
         };
 
-        config.workspace.env_files.iter().any(|pattern| {
+        env_files.iter().any(|pattern| {
             glob::Pattern::new(pattern)
                 .map(|p| p.matches(name))
                 .unwrap_or(false)
@@ -485,12 +483,12 @@ impl WorkspaceIndexer {
     
 
     
-    pub async fn on_file_changed(&self, uri: &Url, config: &EcologConfig) {
-        
+    pub async fn on_file_changed(&self, uri: &Url, env_files: &[CompactString]) {
+
         self.workspace_index.invalidate_resolution_cache(uri);
 
         if let Ok(path) = uri.to_file_path() {
-            if let Err(e) = self.index_file(&path, config).await {
+            if let Err(e) = self.index_file(&path, env_files).await {
                 debug!("Failed to re-index {:?}: {}", uri, e);
             }
         }
@@ -581,8 +579,11 @@ mod tests {
         write!(f, "{}", content).unwrap();
     }
 
-    fn default_config() -> EcologConfig {
-        EcologConfig::default()
+    fn default_env_files() -> Vec<CompactString> {
+        vec![
+            CompactString::new(".env"),
+            CompactString::new(".env.*"),
+        ]
     }
 
     #[tokio::test]
@@ -595,7 +596,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_config()).await.unwrap();
+        indexer.index_workspace(&default_env_files()).await.unwrap();
 
         let stats = indexer.index().stats();
         assert_eq!(stats.total_files, 1);
@@ -616,7 +617,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_config()).await.unwrap();
+        indexer.index_workspace(&default_env_files()).await.unwrap();
 
         let stats = indexer.index().stats();
         assert_eq!(stats.total_files, 1);
@@ -640,7 +641,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_config()).await.unwrap();
+        indexer.index_workspace(&default_env_files()).await.unwrap();
 
         let stats = indexer.index().stats();
         assert_eq!(stats.total_files, 4);
@@ -657,19 +658,19 @@ mod tests {
         create_file(temp_dir.path(), "test.js", "const x = process.env.VAR1;");
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        let config = default_config();
-        indexer.index_workspace(&config).await.unwrap();
+        let env_files = default_env_files();
+        indexer.index_workspace(&env_files).await.unwrap();
 
-        
+
         assert!(!indexer.index().files_for_env_var("VAR1").is_empty());
         assert!(indexer.index().files_for_env_var("VAR2").is_empty());
 
-        
+
         create_file(temp_dir.path(), "test.js", "const x = process.env.VAR2;");
         let uri = Url::from_file_path(temp_dir.path().join("test.js")).unwrap();
-        indexer.on_file_changed(&uri, &config).await;
+        indexer.on_file_changed(&uri, &env_files).await;
 
-        
+
         assert!(indexer.index().files_for_env_var("VAR1").is_empty());
         assert!(!indexer.index().files_for_env_var("VAR2").is_empty());
     }
@@ -680,7 +681,7 @@ mod tests {
         create_file(temp_dir.path(), "test.js", "const x = process.env.VAR1;");
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_config()).await.unwrap();
+        indexer.index_workspace(&default_env_files()).await.unwrap();
 
         assert!(!indexer.index().files_for_env_var("VAR1").is_empty());
 
@@ -712,7 +713,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_config()).await.unwrap();
+        indexer.index_workspace(&default_env_files()).await.unwrap();
 
         
         assert!(!indexer.index().files_for_env_var("INCLUDED").is_empty());
