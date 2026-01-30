@@ -352,8 +352,9 @@ async fn test_feature_hover_disabled() {
     let fixture = TestFixture::new().await;
     {
         let config_arc = fixture.state.config.get_config();
-        let mut config = config_arc.write().await;
+        let mut config = config_arc.write().await.clone();
         config.features.hover = false;
+        fixture.state.config.update(config).await;
     }
 
     let uri = fixture.create_file("test.js", "process.env.DB_URL");
@@ -388,8 +389,9 @@ async fn test_feature_completion_disabled() {
     let fixture = TestFixture::new().await;
     {
         let config_arc = fixture.state.config.get_config();
-        let mut config = config_arc.write().await;
+        let mut config = config_arc.write().await.clone();
         config.features.completion = false;
+        fixture.state.config.update(config).await;
     }
 
     let uri = fixture.create_file("test.js", "process.env.");

@@ -1,16 +1,17 @@
-pub mod binding_graph;
 pub mod cross_module_resolver;
 pub mod document;
+pub mod graph;
 pub mod indexer;
 pub mod module_resolver;
 pub mod pipeline;
 pub mod query;
+pub mod range_utils;
 pub mod resolver;
 pub mod workspace_index;
 
-pub use binding_graph::BindingGraph;
+pub use graph::BindingGraph;
 pub use cross_module_resolver::{CrossModuleResolution, CrossModuleResolver};
-pub use document::DocumentManager;
+pub use document::{DocumentEntry, DocumentManager};
 pub use indexer::WorkspaceIndexer;
 pub use module_resolver::ModuleResolver;
 pub use pipeline::{ts_to_lsp_range, AnalysisPipeline};

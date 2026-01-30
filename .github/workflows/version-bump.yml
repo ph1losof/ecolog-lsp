@@ -1,0 +1,105 @@
+name: Version Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      prerelease:
+        description: 'Pre-release identifier (leave empty for stable, e.g., alpha.1, beta.1, rc.1)'
+        required: false
+        type: string
+      create_tag:
+        description: 'Create and push git tag after bump'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  bump:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get current version
+        id: current
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $VERSION"
+
+      - name: Calculate new version
+        id: bump
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          BUMP_TYPE="${{ github.event.inputs.bump_type }}"
+          PRERELEASE="${{ github.event.inputs.prerelease }}"
+
+          # Parse current version (handle pre-release suffix)
+          BASE_VERSION=$(echo "$CURRENT" | sed 's/-.*//')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+
+          case "$BUMP_TYPE" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+
+          if [ -n "$PRERELEASE" ]; then
+            NEW_VERSION="$NEW_VERSION-$PRERELEASE"
+          fi
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Update Cargo.toml
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.bump.outputs.new_version }}"/' Cargo.toml
+          echo "Updated Cargo.toml:"
+          grep '^version' Cargo.toml
+
+      - name: Update Cargo.lock
+        run: cargo update --workspace
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }}"
+          git push
+
+      - name: Create and push tag
+        if: ${{ github.event.inputs.create_tag == 'true' }}
+        run: |
+          git tag "v${{ steps.bump.outputs.new_version }}"
+          git push origin "v${{ steps.bump.outputs.new_version }}"
+          echo "Created and pushed tag: v${{ steps.bump.outputs.new_version }}"
+
+  # Note: If create_tag is true, the release workflow will be automatically
+  # triggered by the tag push event (on: push: tags: 'v*.*.*')

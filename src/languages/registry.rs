@@ -57,3 +57,126 @@ impl LanguageRegistry {
         self.by_id.values().cloned().collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::languages::javascript::JavaScript;
+    use crate::languages::python::Python;
+    use crate::languages::typescript::TypeScript;
+
+    #[test]
+    fn test_new_registry_is_empty() {
+        let registry = LanguageRegistry::new();
+        assert!(registry.all_languages().is_empty());
+    }
+
+    #[test]
+    fn test_default_is_empty() {
+        let registry = LanguageRegistry::default();
+        assert!(registry.all_languages().is_empty());
+    }
+
+    #[test]
+    fn test_register_language() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(JavaScript));
+        assert_eq!(registry.all_languages().len(), 1);
+    }
+
+    #[test]
+    fn test_register_multiple_languages() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(JavaScript));
+        registry.register(Arc::new(Python));
+        registry.register(Arc::new(TypeScript));
+        assert_eq!(registry.all_languages().len(), 3);
+    }
+
+    #[test]
+    fn test_get_by_extension() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(JavaScript));
+
+        let lang = registry.get_by_extension("js");
+        assert!(lang.is_some());
+        assert_eq!(lang.unwrap().id(), "javascript");
+
+        let missing = registry.get_by_extension("xyz");
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_get_by_extension_multiple() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(TypeScript));
+
+        // TypeScript registers both .ts and .tsx
+        let ts = registry.get_by_extension("ts");
+        assert!(ts.is_some());
+    }
+
+    #[test]
+    fn test_get_by_language_id() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(Python));
+
+        let lang = registry.get_by_language_id("python");
+        assert!(lang.is_some());
+        assert_eq!(lang.unwrap().id(), "python");
+
+        let missing = registry.get_by_language_id("ruby");
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_get_for_uri_javascript() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(JavaScript));
+
+        let uri = Url::parse("file:///path/to/file.js").unwrap();
+        let lang = registry.get_for_uri(&uri);
+        assert!(lang.is_some());
+        assert_eq!(lang.unwrap().id(), "javascript");
+    }
+
+    #[test]
+    fn test_get_for_uri_typescript() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(TypeScript));
+
+        let uri = Url::parse("file:///path/to/file.ts").unwrap();
+        let lang = registry.get_for_uri(&uri);
+        assert!(lang.is_some());
+        assert_eq!(lang.unwrap().id(), "typescript");
+    }
+
+    #[test]
+    fn test_get_for_uri_unknown_extension() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(JavaScript));
+
+        let uri = Url::parse("file:///path/to/file.unknown").unwrap();
+        let lang = registry.get_for_uri(&uri);
+        assert!(lang.is_none());
+    }
+
+    #[test]
+    fn test_get_for_uri_no_extension() {
+        let mut registry = LanguageRegistry::new();
+        registry.register(Arc::new(JavaScript));
+
+        let uri = Url::parse("file:///path/to/Makefile").unwrap();
+        let lang = registry.get_for_uri(&uri);
+        assert!(lang.is_none());
+    }
+
+    #[test]
+    fn test_get_for_uri_invalid_uri() {
+        let registry = LanguageRegistry::new();
+        // Non-file URIs can't be converted to file paths
+        let uri = Url::parse("https://example.com/file.js").unwrap();
+        let lang = registry.get_for_uri(&uri);
+        assert!(lang.is_none());
+    }
+}

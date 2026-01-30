@@ -1,4 +1,4 @@
-use crate::analysis::binding_graph::BindingGraph;
+use crate::analysis::graph::BindingGraph;
 use crate::analysis::query::QueryEngine;
 use crate::languages::LanguageSupport;
 use crate::types::{
@@ -316,11 +316,9 @@ impl AnalysisPipeline {
 
             let source_id = graph.lookup_symbol_id(&source_name, scope);
             if let Some(target_id) = source_id {
-                if let Some(sym) = graph.get_symbol_mut(symbol_id) {
-                    sym.origin = SymbolOrigin::Symbol { target: target_id };
-                }
-            } else if let Some(sym) = graph.get_symbol_mut(symbol_id) {
-                sym.origin = SymbolOrigin::UnresolvedSymbol { source_name };
+                graph.update_symbol_origin(symbol_id, SymbolOrigin::Symbol { target: target_id });
+            } else {
+                graph.update_symbol_origin(symbol_id, SymbolOrigin::UnresolvedSymbol { source_name });
             }
         }
 
@@ -388,9 +386,7 @@ impl AnalysisPipeline {
                 _ => continue,
             };
 
-            if let Some(sym) = graph.get_symbol_mut(symbol_id) {
-                sym.origin = new_origin;
-            }
+            graph.update_symbol_origin(symbol_id, new_origin);
         }
     }
 
@@ -451,9 +447,7 @@ impl AnalysisPipeline {
         }
 
         for symbol_id in symbols_to_invalidate {
-            if let Some(symbol) = graph.get_symbol_mut(symbol_id) {
-                symbol.is_valid = false;
-            }
+            graph.invalidate_symbol(symbol_id);
         }
     }
 
@@ -855,5 +849,168 @@ const db = env["DATABASE_URL"];"#;
         assert!(AnalysisPipeline::is_scope_visible(
             &graph, func_scope, func_scope
         ));
+    }
+
+    // =========================================================================
+    // Edge case tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_analyze_multiple_destructuring_same_line() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const { API_KEY, DB_URL, DEBUG } = process.env;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        // Should have 3 symbols for destructured properties
+        let env_var_symbols: Vec<_> = graph
+            .symbols()
+            .iter()
+            .filter(|s| matches!(&s.origin, SymbolOrigin::EnvVar { .. }))
+            .collect();
+        assert_eq!(env_var_symbols.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_deep_chain() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const env = process.env;
+const cfg = env;
+const settings = cfg;
+const opts = settings;
+const { PORT } = opts;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        let port = graph.symbols().iter().find(|s| s.name == "PORT");
+        assert!(port.is_some());
+
+        let port = port.unwrap();
+        let resolved = graph.resolve_to_env(port.id);
+        assert!(matches!(resolved, Some(ResolvedEnv::Variable(name)) if name == "PORT"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_comments_ignored() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"// process.env.COMMENTED
+/* process.env.BLOCK_COMMENT */
+const real = process.env.REAL_VAR;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        // Should only find REAL_VAR
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "REAL_VAR");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_template_literal_env_access() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const url = `${process.env.BASE_URL}/api`;"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "BASE_URL");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_ternary_env_access() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const val = process.env.VAR1 ? process.env.VAR1 : process.env.VAR2;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        // Should find VAR1 twice (condition and true branch) and VAR2 once
+        let var1_refs: Vec<_> = graph
+            .direct_references()
+            .iter()
+            .filter(|r| r.name == "VAR1")
+            .collect();
+        let var2_refs: Vec<_> = graph
+            .direct_references()
+            .iter()
+            .filter(|r| r.name == "VAR2")
+            .collect();
+        assert_eq!(var1_refs.len(), 2);
+        assert_eq!(var2_refs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_logical_or_default() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const port = process.env.PORT || 3000;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "PORT");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_nullish_coalescing_default() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = "const port = process.env.PORT ?? 3000;";
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        assert_eq!(graph.direct_references().len(), 1);
+        assert_eq!(graph.direct_references()[0].name, "PORT");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_arrow_function_scope() {
+        let query_engine = QueryEngine::new();
+        let js = JavaScript;
+        let code = r#"const outer = process.env.OUTER;
+const fn = () => {
+    const inner = process.env.INNER;
+};"#;
+        let tree = parse_with_lang(&js, code);
+        let import_ctx = ImportContext::new();
+
+        let graph =
+            AnalysisPipeline::analyze(&query_engine, &js, &tree, code.as_bytes(), &import_ctx)
+                .await;
+
+        assert_eq!(graph.direct_references().len(), 2);
+        // Should have arrow function scope
+        assert!(graph.scopes().len() >= 2);
     }
 }

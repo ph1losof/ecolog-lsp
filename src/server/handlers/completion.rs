@@ -21,16 +21,17 @@ pub async fn handle_completion(
     );
     let start = Instant::now();
 
+    if !state.config.is_completion_enabled() {
+        tracing::debug!(
+            "[HANDLE_COMPLETION_EXIT] disabled elapsed_ms={}",
+            start.elapsed().as_millis()
+        );
+        return None;
+    }
+
     let is_strict = {
-        let config_manager = state.config.get_config();
-        let config = config_manager.read().await;
-        if !config.features.completion {
-            tracing::debug!(
-                "[HANDLE_COMPLETION_EXIT] disabled elapsed_ms={}",
-                start.elapsed().as_millis()
-            );
-            return None;
-        }
+        let config = state.config.get_config();
+        let config = config.read().await;
         config.strict.completion
     };
 
