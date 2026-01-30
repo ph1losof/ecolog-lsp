@@ -185,6 +185,24 @@ pub fn range_to_interval(range: Range) -> std::ops::Range<u64> {
     position_to_point(range.start)..position_to_point(range.end)
 }
 
+/// Expand a range by N lines in each direction.
+///
+/// This is useful for incremental analysis to capture nearby declarations
+/// that may be affected by an edit.
+#[inline]
+pub fn expand_range(range: Range, lines: u32) -> Range {
+    Range {
+        start: Position {
+            line: range.start.line.saturating_sub(lines),
+            character: 0,
+        },
+        end: Position {
+            line: range.end.line.saturating_add(lines),
+            character: u32::MAX,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +338,29 @@ mod tests {
 
         assert!(range_contains_range(outer, inner));
         assert!(!range_contains_range(inner, outer));
+    }
+
+    #[test]
+    fn test_expand_range() {
+        let range = make_range(10, 5, 15, 10);
+        let expanded = expand_range(range, 3);
+
+        // Start line should be 10 - 3 = 7, character 0
+        assert_eq!(expanded.start.line, 7);
+        assert_eq!(expanded.start.character, 0);
+
+        // End line should be 15 + 3 = 18, character MAX
+        assert_eq!(expanded.end.line, 18);
+        assert_eq!(expanded.end.character, u32::MAX);
+    }
+
+    #[test]
+    fn test_expand_range_saturating() {
+        // Test that expansion near line 0 doesn't underflow
+        let range = make_range(1, 5, 3, 10);
+        let expanded = expand_range(range, 5);
+
+        assert_eq!(expanded.start.line, 0); // saturating_sub prevents underflow
+        assert_eq!(expanded.start.character, 0);
     }
 }

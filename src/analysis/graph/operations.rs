@@ -3,13 +3,16 @@
 //! This module contains:
 //! - `clear()` - reset the graph
 //! - `remove_in_range()` - incremental analysis support
+//! - `merge_from()` - incremental analysis merge
 //! - Range utility wrappers
 //! - Statistics and diagnostics
 
 use super::BindingGraph;
-use crate::analysis::range_utils::{contains_position, range_contains_range, range_size, ranges_overlap};
-use crate::types::{Scope, ScopeId, ScopeKind};
-use rustc_hash::FxHashSet;
+use crate::analysis::range_utils::{
+    contains_position, expand_range, range_contains_range, range_size, ranges_overlap,
+};
+use crate::types::{Scope, ScopeId, ScopeKind, SymbolId, SymbolOrigin};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tower_lsp::lsp_types::{Position, Range};
 
 /// Statistics about the binding graph contents.
@@ -126,6 +129,30 @@ impl BindingGraph {
             .collect()
     }
 
+    /// Get all symbols whose declaration range overlaps with the given range.
+    pub fn symbols_in_range(&self, range: Range) -> Vec<&crate::types::Symbol> {
+        self.symbols
+            .iter()
+            .filter(|s| Self::ranges_overlap(s.declaration_range, range))
+            .collect()
+    }
+
+    /// Get all usages whose range overlaps with the given range.
+    pub fn usages_in_range(&self, range: Range) -> Vec<&crate::types::SymbolUsage> {
+        self.usages
+            .iter()
+            .filter(|u| Self::ranges_overlap(u.range, range))
+            .collect()
+    }
+
+    /// Get all direct references whose range overlaps with the given range.
+    pub fn references_in_range(&self, range: Range) -> Vec<&crate::types::EnvReference> {
+        self.direct_references
+            .iter()
+            .filter(|r| Self::ranges_overlap(r.full_range, range))
+            .collect()
+    }
+
     /// Estimate the size of the document based on root scope range.
     ///
     /// Returns (line_count, approximate_char_count).
@@ -193,5 +220,100 @@ impl BindingGraph {
             usage_count: self.usages.len(),
             direct_reference_count: self.direct_references.len(),
         }
+    }
+
+    /// Merge items from another graph that fall within the given range.
+    ///
+    /// This is the core of incremental analysis. Items from the `other` graph
+    /// that overlap with an expanded version of `edit_range` are copied to
+    /// this graph with remapped IDs to avoid conflicts.
+    ///
+    /// # Arguments
+    /// * `other` - The graph containing new analysis results
+    /// * `edit_range` - The original edit range (will be expanded by 5 lines)
+    ///
+    /// # Returns
+    /// Statistics about what was merged.
+    pub fn merge_from(&mut self, other: &BindingGraph, edit_range: Range) -> MergeStats {
+        let expanded = expand_range(edit_range, 5); // 5 lines buffer
+        let mut stats = MergeStats::default();
+
+        // Build ID mapping for symbols (old ID in other -> new ID in self)
+        let mut id_map: FxHashMap<SymbolId, SymbolId> = FxHashMap::default();
+
+        // Merge symbols in range with new IDs
+        for symbol in other.symbols_in_range(expanded) {
+            let old_id = symbol.id;
+            let new_id = self.allocate_symbol_id();
+            id_map.insert(old_id, new_id);
+
+            let mut new_symbol = symbol.clone();
+            new_symbol.id = new_id;
+
+            // Remap origin if it references another symbol
+            new_symbol.origin = match &symbol.origin {
+                SymbolOrigin::Symbol { target } => {
+                    if let Some(&new_target) = id_map.get(target) {
+                        SymbolOrigin::Symbol { target: new_target }
+                    } else {
+                        // Target symbol not in our merge set - keep original reference
+                        // This can happen if the target is outside the expanded range
+                        symbol.origin.clone()
+                    }
+                }
+                SymbolOrigin::DestructuredProperty { source, key } => {
+                    if let Some(&new_source) = id_map.get(source) {
+                        SymbolOrigin::DestructuredProperty {
+                            source: new_source,
+                            key: key.clone(),
+                        }
+                    } else {
+                        symbol.origin.clone()
+                    }
+                }
+                other_origin => other_origin.clone(),
+            };
+
+            self.add_symbol_with_id(new_symbol);
+            stats.symbols_merged += 1;
+        }
+
+        // Merge usages in range, remapping symbol references
+        for usage in other.usages_in_range(expanded) {
+            let mut new_usage = usage.clone();
+            if let Some(&new_id) = id_map.get(&usage.symbol_id) {
+                new_usage.symbol_id = new_id;
+            }
+            // If the symbol_id wasn't remapped, it references a symbol outside
+            // our merge range - keep the original reference
+            self.add_usage(new_usage);
+            stats.usages_merged += 1;
+        }
+
+        // Merge direct references in range
+        for reference in other.references_in_range(expanded) {
+            self.add_direct_reference(reference.clone());
+            stats.references_merged += 1;
+        }
+
+        stats
+    }
+}
+
+/// Statistics about a merge operation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MergeStats {
+    /// Number of symbols merged
+    pub symbols_merged: usize,
+    /// Number of usages merged
+    pub usages_merged: usize,
+    /// Number of direct references merged
+    pub references_merged: usize,
+}
+
+impl MergeStats {
+    /// Total number of items merged.
+    pub fn total(&self) -> usize {
+        self.symbols_merged + self.usages_merged + self.references_merged
     }
 }
