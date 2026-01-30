@@ -101,6 +101,58 @@ impl BindingGraph {
         id
     }
 
+    /// Allocate and return the next available symbol ID.
+    ///
+    /// This is useful for remapping symbol IDs during incremental analysis merges.
+    pub fn allocate_symbol_id(&mut self) -> SymbolId {
+        self.next_symbol_id += 1;
+        SymbolId::new(self.next_symbol_id)
+            .expect("Symbol ID counter overflow - too many symbols")
+    }
+
+    /// Add a symbol with a pre-assigned ID directly to the graph.
+    ///
+    /// This is used during incremental analysis merges where the symbol
+    /// has already been assigned an ID via `allocate_symbol_id()`.
+    ///
+    /// WARNING: The caller is responsible for ensuring the ID doesn't conflict
+    /// with existing symbols and that the next_symbol_id counter is updated
+    /// appropriately.
+    pub fn add_symbol_with_id(&mut self, symbol: Symbol) {
+        let id = symbol.id;
+        let id_val = id.raw();
+
+        // Update next_symbol_id if this symbol has a higher ID
+        if id_val >= self.next_symbol_id {
+            self.next_symbol_id = id_val;
+        }
+
+        let key = (symbol.name.clone(), symbol.scope);
+        self.name_index.entry(key).or_default().push(id);
+
+        // Also add to name-only index for fast name lookups across all scopes
+        self.name_only_index
+            .entry(symbol.name.clone())
+            .or_default()
+            .push(id);
+
+        if let Some(key_range) = symbol.destructured_key_range {
+            // Add to pending entries - will be built into interval tree on rebuild
+            self.pending_destructure_entries.push(PendingRangeEntry {
+                range: key_range,
+                value: id,
+            });
+        }
+
+        // Add to pending symbol entries - will be built into interval tree on rebuild
+        self.pending_symbol_entries.push(PendingRangeEntry {
+            range: symbol.name_range,
+            value: id,
+        });
+
+        self.symbols.push(symbol);
+    }
+
     /// Get a symbol by ID.
     #[inline]
     pub fn get_symbol(&self, id: SymbolId) -> Option<&Symbol> {
