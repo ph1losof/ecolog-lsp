@@ -100,7 +100,7 @@ async fn test_go_completion() {
         tower_lsp::lsp_types::CompletionParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(3, 17),
+                position: Position::new(3, 16),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),

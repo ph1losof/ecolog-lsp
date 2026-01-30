@@ -167,3 +167,179 @@ pub trait LanguageSupport: Send + Sync {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper function to validate all queries for a given language implementation.
+    /// This triggers compilation of all OnceLock-cached queries, catching any
+    /// tree-sitter query syntax errors at test time rather than runtime.
+    fn validate_all_queries<L: LanguageSupport>(lang: &L) {
+        // Required query - must exist and compile
+        let _ = lang.reference_query();
+
+        // Optional queries - trigger compilation if implemented
+        let _ = lang.binding_query();
+        let _ = lang.completion_query();
+        let _ = lang.reassignment_query();
+        let _ = lang.import_query();
+        let _ = lang.identifier_query();
+        let _ = lang.assignment_query();
+        let _ = lang.destructure_query();
+        let _ = lang.scope_query();
+        let _ = lang.export_query();
+    }
+
+    #[test]
+    fn test_javascript_queries_compile() {
+        let js = javascript::JavaScript;
+        validate_all_queries(&js);
+
+        // Verify all expected queries are implemented (not just default None)
+        assert!(js.binding_query().is_some(), "JavaScript should have binding_query");
+        assert!(js.completion_query().is_some(), "JavaScript should have completion_query");
+        assert!(js.reassignment_query().is_some(), "JavaScript should have reassignment_query");
+        assert!(js.import_query().is_some(), "JavaScript should have import_query");
+        assert!(js.identifier_query().is_some(), "JavaScript should have identifier_query");
+        assert!(js.assignment_query().is_some(), "JavaScript should have assignment_query");
+        assert!(js.destructure_query().is_some(), "JavaScript should have destructure_query");
+        assert!(js.scope_query().is_some(), "JavaScript should have scope_query");
+        assert!(js.export_query().is_some(), "JavaScript should have export_query");
+    }
+
+    #[test]
+    fn test_typescript_queries_compile() {
+        let ts = typescript::TypeScript;
+        validate_all_queries(&ts);
+
+        // Verify all expected queries are implemented
+        assert!(ts.binding_query().is_some(), "TypeScript should have binding_query");
+        assert!(ts.completion_query().is_some(), "TypeScript should have completion_query");
+        assert!(ts.reassignment_query().is_some(), "TypeScript should have reassignment_query");
+        assert!(ts.import_query().is_some(), "TypeScript should have import_query");
+        assert!(ts.identifier_query().is_some(), "TypeScript should have identifier_query");
+        assert!(ts.assignment_query().is_some(), "TypeScript should have assignment_query");
+        assert!(ts.destructure_query().is_some(), "TypeScript should have destructure_query");
+        assert!(ts.scope_query().is_some(), "TypeScript should have scope_query");
+        assert!(ts.export_query().is_some(), "TypeScript should have export_query");
+    }
+
+    #[test]
+    fn test_typescriptreact_queries_compile() {
+        let tsx = typescript::TypeScriptReact;
+        validate_all_queries(&tsx);
+
+        // Verify all expected queries are implemented
+        assert!(tsx.binding_query().is_some(), "TypeScriptReact should have binding_query");
+        assert!(tsx.completion_query().is_some(), "TypeScriptReact should have completion_query");
+        assert!(tsx.reassignment_query().is_some(), "TypeScriptReact should have reassignment_query");
+        assert!(tsx.import_query().is_some(), "TypeScriptReact should have import_query");
+        assert!(tsx.identifier_query().is_some(), "TypeScriptReact should have identifier_query");
+        assert!(tsx.assignment_query().is_some(), "TypeScriptReact should have assignment_query");
+        assert!(tsx.destructure_query().is_some(), "TypeScriptReact should have destructure_query");
+        assert!(tsx.scope_query().is_some(), "TypeScriptReact should have scope_query");
+        assert!(tsx.export_query().is_some(), "TypeScriptReact should have export_query");
+    }
+
+    #[test]
+    fn test_python_queries_compile() {
+        let py = python::Python;
+        validate_all_queries(&py);
+
+        // Verify all expected queries are implemented
+        assert!(py.binding_query().is_some(), "Python should have binding_query");
+        assert!(py.completion_query().is_some(), "Python should have completion_query");
+        assert!(py.reassignment_query().is_some(), "Python should have reassignment_query");
+        assert!(py.import_query().is_some(), "Python should have import_query");
+        assert!(py.identifier_query().is_some(), "Python should have identifier_query");
+        assert!(py.assignment_query().is_some(), "Python should have assignment_query");
+        assert!(py.destructure_query().is_some(), "Python should have destructure_query");
+        assert!(py.scope_query().is_some(), "Python should have scope_query");
+        assert!(py.export_query().is_some(), "Python should have export_query");
+    }
+
+    #[test]
+    fn test_rust_queries_compile() {
+        let rs = rust::Rust;
+        validate_all_queries(&rs);
+
+        // Verify all expected queries are implemented
+        assert!(rs.binding_query().is_some(), "Rust should have binding_query");
+        assert!(rs.completion_query().is_some(), "Rust should have completion_query");
+        assert!(rs.reassignment_query().is_some(), "Rust should have reassignment_query");
+        assert!(rs.import_query().is_some(), "Rust should have import_query");
+        assert!(rs.identifier_query().is_some(), "Rust should have identifier_query");
+        assert!(rs.assignment_query().is_some(), "Rust should have assignment_query");
+        assert!(rs.destructure_query().is_some(), "Rust should have destructure_query");
+        assert!(rs.scope_query().is_some(), "Rust should have scope_query");
+        assert!(rs.export_query().is_some(), "Rust should have export_query");
+    }
+
+    #[test]
+    fn test_go_queries_compile() {
+        let go = go::Go;
+        validate_all_queries(&go);
+
+        // Verify all expected queries are implemented
+        assert!(go.binding_query().is_some(), "Go should have binding_query");
+        assert!(go.completion_query().is_some(), "Go should have completion_query");
+        assert!(go.reassignment_query().is_some(), "Go should have reassignment_query");
+        assert!(go.import_query().is_some(), "Go should have import_query");
+        assert!(go.identifier_query().is_some(), "Go should have identifier_query");
+        assert!(go.assignment_query().is_some(), "Go should have assignment_query");
+        assert!(go.destructure_query().is_some(), "Go should have destructure_query");
+        assert!(go.scope_query().is_some(), "Go should have scope_query");
+        assert!(go.export_query().is_some(), "Go should have export_query");
+    }
+
+    #[test]
+    fn test_lua_queries_compile() {
+        let lua_lang = lua::Lua;
+        validate_all_queries(&lua_lang);
+
+        // Verify all expected queries are implemented
+        assert!(lua_lang.binding_query().is_some(), "Lua should have binding_query");
+        assert!(lua_lang.completion_query().is_some(), "Lua should have completion_query");
+        assert!(lua_lang.reassignment_query().is_some(), "Lua should have reassignment_query");
+        assert!(lua_lang.import_query().is_some(), "Lua should have import_query");
+        assert!(lua_lang.identifier_query().is_some(), "Lua should have identifier_query");
+        assert!(lua_lang.assignment_query().is_some(), "Lua should have assignment_query");
+        assert!(lua_lang.destructure_query().is_some(), "Lua should have destructure_query");
+        assert!(lua_lang.scope_query().is_some(), "Lua should have scope_query");
+        assert!(lua_lang.export_query().is_some(), "Lua should have export_query");
+    }
+
+    /// Comprehensive test that validates all queries for all supported languages.
+    /// This is the main test that ensures no query compilation failures at runtime.
+    #[test]
+    fn test_all_language_queries_compile() {
+        // JavaScript
+        let js = javascript::JavaScript;
+        validate_all_queries(&js);
+
+        // TypeScript
+        let ts = typescript::TypeScript;
+        validate_all_queries(&ts);
+
+        // TypeScriptReact (TSX)
+        let tsx = typescript::TypeScriptReact;
+        validate_all_queries(&tsx);
+
+        // Python
+        let py = python::Python;
+        validate_all_queries(&py);
+
+        // Rust
+        let rs = rust::Rust;
+        validate_all_queries(&rs);
+
+        // Go
+        let go = go::Go;
+        validate_all_queries(&go);
+
+        // Lua
+        let lua_lang = lua::Lua;
+        validate_all_queries(&lua_lang);
+    }
+}

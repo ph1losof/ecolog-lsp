@@ -2,6 +2,7 @@ use crate::languages::LanguageSupport;
 use crate::types::EnvSourceKind;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
+use tracing::error;
 
 pub struct Rust;
 
@@ -16,6 +17,29 @@ static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
+
+/// Compiles a tree-sitter query, logging an error and returning an empty fallback on failure.
+/// This prevents the LSP from crashing due to query compilation errors.
+fn compile_query(grammar: &Language, source: &str, query_name: &str) -> Query {
+    match Query::new(grammar, source) {
+        Ok(query) => query,
+        Err(e) => {
+            error!(
+                language = "rust",
+                query = query_name,
+                error = %e,
+                "Failed to compile query, using empty fallback"
+            );
+            // Return an empty query that matches nothing, allowing the LSP to continue
+            Query::new(grammar, "").unwrap_or_else(|_| {
+                panic!(
+                    "Failed to create empty fallback query for Rust {}",
+                    query_name
+                )
+            })
+        }
+    }
+}
 
 impl LanguageSupport for Rust {
     fn id(&self) -> &'static str {
@@ -40,101 +64,101 @@ impl LanguageSupport for Rust {
 
     fn reference_query(&self) -> &Query {
         REFERENCE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/references.scm"),
+                "references",
             )
-            .expect("Failed to compile Rust reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(BINDING_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/bindings.scm"),
+                "bindings",
             )
-            .expect("Failed to compile Rust binding query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(IMPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/imports.scm"),
+                "imports",
             )
-            .expect("Failed to compile Rust import query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(COMPLETION_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/completion.scm"),
+                "completion",
             )
-            .expect("Failed to compile Rust completion query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/reassignments.scm"),
+                "reassignments",
             )
-            .expect("Failed to compile Rust reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/identifiers.scm"),
+                "identifiers",
             )
-            .expect("Failed to compile Rust identifier query")
         }))
     }
 
     fn export_query(&self) -> Option<&Query> {
         Some(EXPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/exports.scm"),
+                "exports",
             )
-            .expect("Failed to compile Rust export query")
         }))
     }
 
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/assignments.scm"),
+                "assignments",
             )
-            .expect("Failed to compile Rust assignment query")
         }))
     }
 
     fn destructure_query(&self) -> Option<&Query> {
         Some(DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/destructures.scm"),
+                "destructures",
             )
-            .expect("Failed to compile Rust destructure query")
         }))
     }
 
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/rust/scopes.scm"),
+                "scopes",
             )
-            .expect("Failed to compile Rust scope query")
         }))
     }
 

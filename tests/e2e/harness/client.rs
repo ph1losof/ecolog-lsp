@@ -42,6 +42,7 @@ pub struct JsonRpcRequest {
     pub params: Option<Value>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
@@ -53,6 +54,7 @@ pub struct JsonRpcResponse {
     pub error: Option<JsonRpcError>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcError {
     pub code: i64,
@@ -276,7 +278,7 @@ impl LspTestClient {
         Ok(())
     }
 
-    
+    #[allow(dead_code)]
     pub fn get_notifications(&self) -> Vec<JsonRpcNotification> {
         self.notifications.read().unwrap().clone()
     }

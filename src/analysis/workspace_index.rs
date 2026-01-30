@@ -6,7 +6,7 @@
 
 use crate::types::FileExportEntry;
 use compact_str::CompactString;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use parking_lot::RwLock;
 use quick_cache::sync::Cache;
 use rustc_hash::FxHashSet;
@@ -152,6 +152,17 @@ pub struct WorkspaceIndex {
     /// Key: (importer_url, specifier), Value: resolved URL or None for failed lookups.
     /// Bounded to MAX_MODULE_RESOLUTION_CACHE_SIZE entries to prevent unbounded memory growth.
     module_resolution_cache: Cache<ModuleResolutionKey, Option<Url>>,
+
+    /// Files that this file imports from (dependencies)
+    /// Key: importer file, Value: list of files it imports from
+    file_dependencies: DashMap<Url, Vec<Url>>,
+
+    /// Files that import this file (reverse dependency index)
+    /// Key: imported file, Value: list of files that import it
+    file_dependents: DashMap<Url, Vec<Url>>,
+
+    /// Files that need re-analysis after a dependency change
+    dirty_files: DashSet<Url>,
 }
 
 impl WorkspaceIndex {
@@ -164,6 +175,9 @@ impl WorkspaceIndex {
             export_index: DashMap::new(),
             env_export_to_files: DashMap::new(),
             module_resolution_cache: Cache::new(MAX_MODULE_RESOLUTION_CACHE_SIZE),
+            file_dependencies: DashMap::new(),
+            file_dependents: DashMap::new(),
+            dirty_files: DashSet::new(),
         }
     }
 
@@ -235,7 +249,7 @@ impl WorkspaceIndex {
     pub fn get_exports_ref(
         &self,
         uri: &Url,
-    ) -> Option<dashmap::mapref::one::Ref<Url, FileExportEntry>> {
+    ) -> Option<dashmap::mapref::one::Ref<'_, Url, FileExportEntry>> {
         self.export_index.get(uri)
     }
 
@@ -332,11 +346,13 @@ impl WorkspaceIndex {
             }
         }
 
-        
+
         self.remove_exports(uri);
 
-        
+
         self.invalidate_resolution_cache(uri);
+
+        self.remove_from_dependency_graph(uri);
     }
 
     
@@ -346,6 +362,9 @@ impl WorkspaceIndex {
         self.export_index.clear();
         self.env_export_to_files.clear();
         self.module_resolution_cache.clear();
+        self.file_dependencies.clear();
+        self.file_dependents.clear();
+        self.dirty_files.clear();
     }
 
     
@@ -414,13 +433,30 @@ impl WorkspaceIndex {
     }
 
     /// Invalidate module resolution cache entries related to a changed file.
-    /// Since quick_cache doesn't support retain, we clear the entire cache when a file changes.
-    /// This is safe since entries will be re-cached on demand, and the bounded cache
-    /// prevents unbounded growth even with frequent invalidation.
-    pub fn invalidate_resolution_cache(&self, _changed_uri: &Url) {
-        // Clear the entire cache - entries will be re-cached on demand.
-        // This is simpler and still efficient since the cache is bounded.
-        self.module_resolution_cache.clear();
+    /// This selectively removes only entries that:
+    /// 1. Were resolved FROM the changed file (importer matches)
+    /// 2. Were resolved TO the changed file (resolved URL matches)
+    ///
+    /// This is more efficient than clearing the entire cache.
+    pub fn invalidate_resolution_cache(&self, changed_uri: &Url) {
+        // Use retain to keep only entries NOT related to the changed file.
+        // An entry is related if:
+        // - The importer (source file) is the changed file
+        // - The resolved target is the changed file
+        self.module_resolution_cache.retain(|key, resolved| {
+            // Remove if importer matches changed URI
+            if &key.importer == changed_uri {
+                return false;
+            }
+            // Remove if resolved target matches changed URI
+            if let Some(target) = resolved {
+                if target == changed_uri {
+                    return false;
+                }
+            }
+            // Keep all other entries
+            true
+        });
     }
 
     /// Clear all module resolution cache entries.
@@ -433,11 +469,119 @@ impl WorkspaceIndex {
         self.module_resolution_cache.len()
     }
 
-    
-    
-    
+    // =========================================================================
+    // Dependency Graph Methods
+    // =========================================================================
 
-    
+    /// Update the dependency graph for a file based on its imports.
+    /// This should be called during indexing when imports are extracted.
+    /// `dependencies` is the list of resolved file URIs that this file imports from.
+    pub fn update_dependency_graph(&self, file_uri: &Url, dependencies: Vec<Url>) {
+        // Remove old forward edges
+        if let Some((_, old_deps)) = self.file_dependencies.remove(file_uri) {
+            for dep in old_deps {
+                if let Some(mut dependents) = self.file_dependents.get_mut(&dep) {
+                    dependents.retain(|u| u != file_uri);
+                }
+            }
+        }
+
+        // Add new forward edges
+        for dep in &dependencies {
+            self.file_dependents
+                .entry(dep.clone())
+                .or_default()
+                .push(file_uri.clone());
+        }
+
+        // Store forward edges
+        if !dependencies.is_empty() {
+            self.file_dependencies.insert(file_uri.clone(), dependencies);
+        }
+    }
+
+    /// Invalidate caches for a file change and mark dependents as dirty.
+    /// Call this when a file is modified.
+    pub fn invalidate_for_file_change(&self, changed_uri: &Url) {
+        // Mark all dependents (files that import this file) as dirty
+        if let Some(dependents) = self.file_dependents.get(changed_uri) {
+            for dep in dependents.iter() {
+                self.dirty_files.insert(dep.clone());
+            }
+        }
+
+        // Invalidate module resolution cache entries related to this file
+        self.invalidate_resolution_cache(changed_uri);
+    }
+
+    /// Get all files that are marked as dirty and need re-analysis.
+    pub fn get_dirty_files(&self) -> Vec<Url> {
+        self.dirty_files.iter().map(|u| u.clone()).collect()
+    }
+
+    /// Clear the dirty flag for a file after it has been re-analyzed.
+    pub fn clear_dirty(&self, uri: &Url) {
+        self.dirty_files.remove(uri);
+    }
+
+    /// Check if any files are dirty.
+    pub fn has_dirty_files(&self) -> bool {
+        !self.dirty_files.is_empty()
+    }
+
+    /// Get the number of dirty files.
+    pub fn dirty_count(&self) -> usize {
+        self.dirty_files.len()
+    }
+
+    /// Remove a file from the dependency graph completely.
+    /// Call this when a file is deleted.
+    pub fn remove_from_dependency_graph(&self, uri: &Url) {
+        // Remove forward edges (files this file imports from)
+        if let Some((_, deps)) = self.file_dependencies.remove(uri) {
+            for dep in deps {
+                if let Some(mut dependents) = self.file_dependents.get_mut(&dep) {
+                    dependents.retain(|u| u != uri);
+                    if dependents.is_empty() {
+                        drop(dependents);
+                        self.file_dependents.remove(&dep);
+                    }
+                }
+            }
+        }
+
+        // Remove reverse edges (files that import this file)
+        if let Some((_, dependents)) = self.file_dependents.remove(uri) {
+            // Mark all files that imported this file as dirty
+            for dep in dependents {
+                self.dirty_files.insert(dep.clone());
+                // Remove this file from their dependencies list
+                if let Some(mut deps) = self.file_dependencies.get_mut(&dep) {
+                    deps.retain(|u| u != uri);
+                }
+            }
+        }
+
+        // Remove from dirty files
+        self.dirty_files.remove(uri);
+    }
+
+    /// Get the files that a given file imports from (its dependencies).
+    pub fn get_dependencies(&self, uri: &Url) -> Vec<Url> {
+        self.file_dependencies
+            .get(uri)
+            .map(|deps| deps.clone())
+            .unwrap_or_default()
+    }
+
+    /// Get the files that import a given file (its dependents).
+    pub fn get_dependents(&self, uri: &Url) -> Vec<Url> {
+        self.file_dependents
+            .get(uri)
+            .map(|deps| deps.clone())
+            .unwrap_or_default()
+    }
+
     pub fn set_indexing(&self, in_progress: bool) {
         let mut state = self.state.write();
         state.indexing_in_progress = in_progress;
@@ -815,24 +959,58 @@ mod tests {
         let app = url("/app.js");
         let config = url("/config.js");
         let utils = url("/utils.js");
+        let other = url("/other.js");
 
         // Cache some resolutions
+        // app -> config (resolves TO config)
         index.cache_module_resolution(&app, "./config", Some(config.clone()));
+        // app -> utils (resolves TO utils)
         index.cache_module_resolution(&app, "./utils", Some(utils.clone()));
+        // config -> utils (resolves FROM config, TO utils)
         index.cache_module_resolution(&config, "./utils", Some(utils.clone()));
+        // other -> app (unrelated to config)
+        index.cache_module_resolution(&other, "./app", Some(app.clone()));
 
         // Verify all cached
         assert!(index.cached_module_resolution(&app, "./config").is_some());
         assert!(index.cached_module_resolution(&app, "./utils").is_some());
         assert!(index.cached_module_resolution(&config, "./utils").is_some());
+        assert!(index.cached_module_resolution(&other, "./app").is_some());
 
-        // Invalidate clears entire cache (LRU cache doesn't support selective retain)
+        // Invalidate config: should remove entries FROM config and TO config
         index.invalidate_resolution_cache(&config);
 
-        // All entries should be gone after invalidation
+        // Entries TO config should be invalidated (app -> config)
         assert!(index.cached_module_resolution(&app, "./config").is_none());
+        // Entries FROM config should be invalidated (config -> utils)
         assert!(index.cached_module_resolution(&config, "./utils").is_none());
-        assert!(index.cached_module_resolution(&app, "./utils").is_none());
+        // Unrelated entries should remain (app -> utils, other -> app)
+        assert!(index.cached_module_resolution(&app, "./utils").is_some());
+        assert!(index.cached_module_resolution(&other, "./app").is_some());
+    }
+
+    #[test]
+    fn test_invalidate_resolution_cache_none_values() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+
+        // Cache a failed resolution (None value)
+        index.cache_module_resolution(&app, "./missing", None);
+        // Cache a successful resolution
+        index.cache_module_resolution(&config, "./missing", None);
+
+        // Verify both cached
+        assert!(index.cached_module_resolution(&app, "./missing").is_some());
+        assert!(index.cached_module_resolution(&config, "./missing").is_some());
+
+        // Invalidate app: should remove entries FROM app
+        index.invalidate_resolution_cache(&app);
+
+        // Entry FROM app should be invalidated
+        assert!(index.cached_module_resolution(&app, "./missing").is_none());
+        // Entry FROM config should remain
+        assert!(index.cached_module_resolution(&config, "./missing").is_some());
     }
 
     #[test]
@@ -865,5 +1043,553 @@ mod tests {
 
         let vars = index.all_exported_env_vars();
         assert_eq!(vars.len(), 3);
+    }
+
+    // =========================================================================
+    // Task 3: Module Dependency Graph Tests - update_dependency_graph
+    // =========================================================================
+
+    #[test]
+    fn test_update_dependency_graph_single_dependency() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+
+        index.update_dependency_graph(&app, vec![config.clone()]);
+
+        // Forward edge: app depends on config
+        let deps = index.get_dependencies(&app);
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains(&config));
+
+        // Reverse edge: config is depended on by app
+        let dependents = index.get_dependents(&config);
+        assert_eq!(dependents.len(), 1);
+        assert!(dependents.contains(&app));
+    }
+
+    #[test]
+    fn test_update_dependency_graph_multiple_dependencies() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+        let utils = url("/utils.js");
+        let helpers = url("/helpers.js");
+
+        index.update_dependency_graph(&app, vec![config.clone(), utils.clone(), helpers.clone()]);
+
+        let deps = index.get_dependencies(&app);
+        assert_eq!(deps.len(), 3);
+        assert!(deps.contains(&config));
+        assert!(deps.contains(&utils));
+        assert!(deps.contains(&helpers));
+
+        // Each dependency should have app as a dependent
+        assert!(index.get_dependents(&config).contains(&app));
+        assert!(index.get_dependents(&utils).contains(&app));
+        assert!(index.get_dependents(&helpers).contains(&app));
+    }
+
+    #[test]
+    fn test_update_dependency_graph_replaces_old_dependencies() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let old_dep = url("/old.js");
+        let new_dep = url("/new.js");
+
+        // First update with old dependency
+        index.update_dependency_graph(&app, vec![old_dep.clone()]);
+        assert!(index.get_dependencies(&app).contains(&old_dep));
+        assert!(index.get_dependents(&old_dep).contains(&app));
+
+        // Update with new dependency (replaces old)
+        index.update_dependency_graph(&app, vec![new_dep.clone()]);
+
+        // Old dependency should be removed
+        assert!(!index.get_dependencies(&app).contains(&old_dep));
+        assert!(!index.get_dependents(&old_dep).contains(&app));
+
+        // New dependency should be present
+        assert!(index.get_dependencies(&app).contains(&new_dep));
+        assert!(index.get_dependents(&new_dep).contains(&app));
+    }
+
+    #[test]
+    fn test_update_dependency_graph_empty_dependencies() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+
+        // First add some dependencies
+        index.update_dependency_graph(&app, vec![config.clone()]);
+        assert!(!index.get_dependencies(&app).is_empty());
+
+        // Update with empty dependencies
+        index.update_dependency_graph(&app, vec![]);
+
+        // All dependencies should be cleared
+        assert!(index.get_dependencies(&app).is_empty());
+        assert!(!index.get_dependents(&config).contains(&app));
+    }
+
+    #[test]
+    fn test_update_dependency_graph_bidirectional_consistency() {
+        let index = WorkspaceIndex::new();
+        let a = url("/a.js");
+        let b = url("/b.js");
+        let c = url("/c.js");
+
+        // a depends on b and c
+        index.update_dependency_graph(&a, vec![b.clone(), c.clone()]);
+        // b depends on c
+        index.update_dependency_graph(&b, vec![c.clone()]);
+
+        // Check forward edges
+        assert!(index.get_dependencies(&a).contains(&b));
+        assert!(index.get_dependencies(&a).contains(&c));
+        assert!(index.get_dependencies(&b).contains(&c));
+
+        // Check reverse edges
+        let c_dependents = index.get_dependents(&c);
+        assert!(c_dependents.contains(&a));
+        assert!(c_dependents.contains(&b));
+
+        let b_dependents = index.get_dependents(&b);
+        assert!(b_dependents.contains(&a));
+    }
+
+    #[test]
+    fn test_update_dependency_graph_circular_dependencies() {
+        let index = WorkspaceIndex::new();
+        let a = url("/a.js");
+        let b = url("/b.js");
+
+        // Create circular dependency: a -> b -> a
+        index.update_dependency_graph(&a, vec![b.clone()]);
+        index.update_dependency_graph(&b, vec![a.clone()]);
+
+        // Both should have each other as dependencies
+        assert!(index.get_dependencies(&a).contains(&b));
+        assert!(index.get_dependencies(&b).contains(&a));
+
+        // Both should have each other as dependents
+        assert!(index.get_dependents(&a).contains(&b));
+        assert!(index.get_dependents(&b).contains(&a));
+    }
+
+    // =========================================================================
+    // Task 3: Module Dependency Graph Tests - invalidate_for_file_change
+    // =========================================================================
+
+    #[test]
+    fn test_invalidate_for_file_change_marks_dependents_dirty() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app1 = url("/app1.js");
+        let app2 = url("/app2.js");
+
+        // app1 and app2 both depend on config
+        index.update_dependency_graph(&app1, vec![config.clone()]);
+        index.update_dependency_graph(&app2, vec![config.clone()]);
+
+        // Change config - should mark app1 and app2 as dirty
+        index.invalidate_for_file_change(&config);
+
+        let dirty = index.get_dirty_files();
+        assert!(dirty.contains(&app1));
+        assert!(dirty.contains(&app2));
+    }
+
+    #[test]
+    fn test_invalidate_for_file_change_no_dependents() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+
+        // config has no dependents
+        index.invalidate_for_file_change(&config);
+
+        // No dirty files
+        assert!(index.get_dirty_files().is_empty());
+    }
+
+    #[test]
+    fn test_invalidate_for_file_change_calls_invalidate_resolution_cache() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+
+        // Cache a resolution
+        index.cache_module_resolution(&app, "./config", Some(config.clone()));
+        assert!(index.cached_module_resolution(&app, "./config").is_some());
+
+        // Invalidate config
+        index.invalidate_for_file_change(&config);
+
+        // Cache entry that resolved TO config should be invalidated
+        assert!(index.cached_module_resolution(&app, "./config").is_none());
+    }
+
+    #[test]
+    fn test_invalidate_for_file_change_only_direct_dependents() {
+        let index = WorkspaceIndex::new();
+        let a = url("/a.js");
+        let b = url("/b.js");
+        let c = url("/c.js");
+
+        // a -> b -> c (a depends on b, b depends on c)
+        index.update_dependency_graph(&a, vec![b.clone()]);
+        index.update_dependency_graph(&b, vec![c.clone()]);
+
+        // Change c - should only mark b as dirty (direct dependent), not a
+        index.invalidate_for_file_change(&c);
+
+        let dirty = index.get_dirty_files();
+        assert!(dirty.contains(&b));
+        assert!(!dirty.contains(&a)); // a is transitive, not direct
+    }
+
+    // =========================================================================
+    // Task 3: Module Dependency Graph Tests - Dirty Files Management
+    // =========================================================================
+
+    #[test]
+    fn test_get_dirty_files_empty() {
+        let index = WorkspaceIndex::new();
+        assert!(index.get_dirty_files().is_empty());
+    }
+
+    #[test]
+    fn test_get_dirty_files_after_invalidation() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app1 = url("/app1.js");
+        let app2 = url("/app2.js");
+        let app3 = url("/app3.js");
+
+        // Set up dependencies
+        index.update_dependency_graph(&app1, vec![config.clone()]);
+        index.update_dependency_graph(&app2, vec![config.clone()]);
+        index.update_dependency_graph(&app3, vec![config.clone()]);
+
+        // Invalidate
+        index.invalidate_for_file_change(&config);
+
+        let dirty = index.get_dirty_files();
+        assert_eq!(dirty.len(), 3);
+        assert!(dirty.contains(&app1));
+        assert!(dirty.contains(&app2));
+        assert!(dirty.contains(&app3));
+    }
+
+    #[test]
+    fn test_clear_dirty_single_file() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app1 = url("/app1.js");
+        let app2 = url("/app2.js");
+
+        index.update_dependency_graph(&app1, vec![config.clone()]);
+        index.update_dependency_graph(&app2, vec![config.clone()]);
+        index.invalidate_for_file_change(&config);
+
+        assert!(index.get_dirty_files().contains(&app1));
+        assert!(index.get_dirty_files().contains(&app2));
+
+        // Clear only app1
+        index.clear_dirty(&app1);
+
+        assert!(!index.get_dirty_files().contains(&app1));
+        assert!(index.get_dirty_files().contains(&app2));
+    }
+
+    #[test]
+    fn test_has_dirty_files_true_and_false() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app = url("/app.js");
+
+        // Initially no dirty files
+        assert!(!index.has_dirty_files());
+
+        index.update_dependency_graph(&app, vec![config.clone()]);
+        index.invalidate_for_file_change(&config);
+
+        // Now has dirty files
+        assert!(index.has_dirty_files());
+
+        // Clear all dirty files
+        index.clear_dirty(&app);
+
+        // No more dirty files
+        assert!(!index.has_dirty_files());
+    }
+
+    #[test]
+    fn test_dirty_count() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app1 = url("/app1.js");
+        let app2 = url("/app2.js");
+        let app3 = url("/app3.js");
+
+        assert_eq!(index.dirty_count(), 0);
+
+        index.update_dependency_graph(&app1, vec![config.clone()]);
+        index.update_dependency_graph(&app2, vec![config.clone()]);
+        index.update_dependency_graph(&app3, vec![config.clone()]);
+        index.invalidate_for_file_change(&config);
+
+        assert_eq!(index.dirty_count(), 3);
+
+        index.clear_dirty(&app1);
+        assert_eq!(index.dirty_count(), 2);
+
+        index.clear_dirty(&app2);
+        index.clear_dirty(&app3);
+        assert_eq!(index.dirty_count(), 0);
+    }
+
+    // =========================================================================
+    // Task 3: Module Dependency Graph Tests - remove_from_dependency_graph
+    // =========================================================================
+
+    #[test]
+    fn test_remove_from_dependency_graph_removes_forward_edges() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+        let utils = url("/utils.js");
+
+        // app depends on config and utils
+        index.update_dependency_graph(&app, vec![config.clone(), utils.clone()]);
+
+        // Remove app from dependency graph
+        index.remove_from_dependency_graph(&app);
+
+        // app should have no dependencies
+        assert!(index.get_dependencies(&app).is_empty());
+
+        // config and utils should not have app as a dependent
+        assert!(!index.get_dependents(&config).contains(&app));
+        assert!(!index.get_dependents(&utils).contains(&app));
+    }
+
+    #[test]
+    fn test_remove_from_dependency_graph_removes_reverse_edges() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app1 = url("/app1.js");
+        let app2 = url("/app2.js");
+
+        // app1 and app2 depend on config
+        index.update_dependency_graph(&app1, vec![config.clone()]);
+        index.update_dependency_graph(&app2, vec![config.clone()]);
+
+        // Remove config
+        index.remove_from_dependency_graph(&config);
+
+        // config should have no dependents
+        assert!(index.get_dependents(&config).is_empty());
+    }
+
+    #[test]
+    fn test_remove_from_dependency_graph_marks_importers_dirty() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app = url("/app.js");
+
+        // app depends on config
+        index.update_dependency_graph(&app, vec![config.clone()]);
+
+        // Remove config (simulating file deletion)
+        index.remove_from_dependency_graph(&config);
+
+        // app should be marked as dirty because it imported config
+        assert!(index.get_dirty_files().contains(&app));
+    }
+
+    #[test]
+    fn test_remove_from_dependency_graph_cleans_empty_dependents() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app = url("/app.js");
+
+        // app depends on config
+        index.update_dependency_graph(&app, vec![config.clone()]);
+
+        // Verify config has dependents
+        assert!(!index.get_dependents(&config).is_empty());
+
+        // Remove app
+        index.remove_from_dependency_graph(&app);
+
+        // config's dependents list should be cleaned up (empty)
+        // Note: The entry might be removed entirely or left empty
+        assert!(index.get_dependents(&config).is_empty());
+    }
+
+    #[test]
+    fn test_remove_file_calls_remove_from_dependency_graph() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app = url("/app.js");
+
+        // Add file entry and dependency
+        index.update_file(&config, make_entry(&["DB_URL"], false));
+        index.update_dependency_graph(&app, vec![config.clone()]);
+
+        // Verify setup
+        assert!(index.is_file_indexed(&config));
+        assert!(index.get_dependents(&config).contains(&app));
+
+        // Remove file
+        index.remove_file(&config);
+
+        // File should be removed and dependency graph updated
+        assert!(!index.is_file_indexed(&config));
+        assert!(!index.get_dependents(&config).contains(&app));
+        // app should be marked dirty
+        assert!(index.get_dirty_files().contains(&app));
+    }
+
+    // =========================================================================
+    // Task 3: Module Dependency Graph Tests - Getters
+    // =========================================================================
+
+    #[test]
+    fn test_get_dependencies_empty() {
+        let index = WorkspaceIndex::new();
+        let unknown = url("/unknown.js");
+
+        // Unknown file should return empty list
+        let deps = index.get_dependencies(&unknown);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_get_dependencies_returns_correct_list() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let dep1 = url("/dep1.js");
+        let dep2 = url("/dep2.js");
+        let dep3 = url("/dep3.js");
+
+        index.update_dependency_graph(&app, vec![dep1.clone(), dep2.clone(), dep3.clone()]);
+
+        let deps = index.get_dependencies(&app);
+        assert_eq!(deps.len(), 3);
+        assert!(deps.contains(&dep1));
+        assert!(deps.contains(&dep2));
+        assert!(deps.contains(&dep3));
+    }
+
+    #[test]
+    fn test_get_dependents_empty() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+
+        // File with no importers should return empty list
+        let dependents = index.get_dependents(&config);
+        assert!(dependents.is_empty());
+    }
+
+    #[test]
+    fn test_get_dependents_returns_correct_list() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app1 = url("/app1.js");
+        let app2 = url("/app2.js");
+        let app3 = url("/app3.js");
+
+        index.update_dependency_graph(&app1, vec![config.clone()]);
+        index.update_dependency_graph(&app2, vec![config.clone()]);
+        index.update_dependency_graph(&app3, vec![config.clone()]);
+
+        let dependents = index.get_dependents(&config);
+        assert_eq!(dependents.len(), 3);
+        assert!(dependents.contains(&app1));
+        assert!(dependents.contains(&app2));
+        assert!(dependents.contains(&app3));
+    }
+
+    #[test]
+    fn test_clear_clears_dependency_graph() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let config = url("/config.js");
+
+        // Set up some state
+        index.update_file(&app, make_entry(&["VAR1"], false));
+        index.update_dependency_graph(&app, vec![config.clone()]);
+        index.invalidate_for_file_change(&config);
+
+        // Verify state
+        assert!(!index.get_dependencies(&app).is_empty());
+        assert!(index.has_dirty_files());
+
+        // Clear everything
+        index.clear();
+
+        // Dependency graph should be cleared
+        assert!(index.get_dependencies(&app).is_empty());
+        assert!(index.get_dependents(&config).is_empty());
+        assert!(!index.has_dirty_files());
+    }
+
+    // =========================================================================
+    // Additional Edge Case Tests
+    // =========================================================================
+
+    #[test]
+    fn test_dependency_graph_self_reference() {
+        let index = WorkspaceIndex::new();
+        let file = url("/file.js");
+
+        // File depending on itself (unusual but possible)
+        index.update_dependency_graph(&file, vec![file.clone()]);
+
+        assert!(index.get_dependencies(&file).contains(&file));
+        assert!(index.get_dependents(&file).contains(&file));
+    }
+
+    #[test]
+    fn test_dependency_graph_update_partial() {
+        let index = WorkspaceIndex::new();
+        let app = url("/app.js");
+        let dep1 = url("/dep1.js");
+        let dep2 = url("/dep2.js");
+        let dep3 = url("/dep3.js");
+
+        // Initial: app depends on dep1 and dep2
+        index.update_dependency_graph(&app, vec![dep1.clone(), dep2.clone()]);
+
+        // Update: app now depends on dep2 and dep3 (dep1 removed, dep3 added)
+        index.update_dependency_graph(&app, vec![dep2.clone(), dep3.clone()]);
+
+        let deps = index.get_dependencies(&app);
+        assert!(!deps.contains(&dep1));
+        assert!(deps.contains(&dep2));
+        assert!(deps.contains(&dep3));
+
+        // dep1 should no longer have app as a dependent
+        assert!(!index.get_dependents(&dep1).contains(&app));
+    }
+
+    #[test]
+    fn test_multiple_invalidations_same_file() {
+        let index = WorkspaceIndex::new();
+        let config = url("/config.js");
+        let app = url("/app.js");
+
+        index.update_dependency_graph(&app, vec![config.clone()]);
+
+        // Multiple invalidations should not duplicate dirty entries
+        index.invalidate_for_file_change(&config);
+        index.invalidate_for_file_change(&config);
+        index.invalidate_for_file_change(&config);
+
+        // Should still only have one dirty entry for app
+        let dirty = index.get_dirty_files();
+        assert_eq!(dirty.iter().filter(|u| *u == &app).count(), 1);
     }
 }

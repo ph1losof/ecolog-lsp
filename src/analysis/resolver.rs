@@ -234,7 +234,9 @@ impl<'a> BindingResolver<'a> {
     }
 
     pub fn direct_reference_at_position(&self, position: Position) -> Option<&'a EnvReference> {
-        self.graph.direct_references().iter().find(|&reference| BindingGraph::contains_position(reference.name_range, position))
+        self.graph.direct_references().iter().find(|&reference| {
+            BindingGraph::contains_position(reference.name_range, position)
+        })
     }
 
     /// Find all usages of a given env var name.
@@ -576,6 +578,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
         let hit = resolver.env_at_position(Position::new(0, 8)).unwrap();
@@ -604,6 +607,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
         let hit = resolver.env_at_position(Position::new(0, 7)).unwrap();
@@ -639,6 +643,7 @@ mod tests {
             property_access: None,
             property_access_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
         let hit = resolver.env_at_position(Position::new(2, 12)).unwrap();
@@ -676,6 +681,7 @@ mod tests {
             property_access: Some("DATABASE_URL".into()),
             property_access_range: Some(make_range(1, 4, 1, 16)),
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
         let hit = resolver.env_at_position(Position::new(1, 8)).unwrap();
@@ -781,6 +787,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -834,6 +841,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: Some(make_range(2, 8, 2, 14)),
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -859,6 +867,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
         let binding = resolver.binding_at_position(Position::new(0, 8)).unwrap();
@@ -894,6 +903,7 @@ mod tests {
             property_access: None,
             property_access_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
         let binding = resolver.binding_at_position(Position::new(2, 12)).unwrap();
@@ -976,6 +986,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: Some(make_range(0, 8, 0, 15)),
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -1425,6 +1436,7 @@ mod tests {
             property_access: Some("MY_VAR".into()),
             property_access_range: Some(make_range(1, 4, 1, 10)),
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -1483,6 +1495,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: Some(make_range(1, 6, 1, 11)),
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -1543,6 +1556,7 @@ mod tests {
             property_access: None,
             property_access_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -1742,6 +1756,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: Some(make_range(3, 8, 3, 14)),
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -1788,6 +1803,7 @@ mod tests {
             is_valid: true,
             destructured_key_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 
@@ -1836,6 +1852,7 @@ mod tests {
             property_access: None,
             property_access_range: None,
         });
+        graph.rebuild_range_index();
 
         let resolver = BindingResolver::new(&graph);
 

@@ -290,6 +290,15 @@ async fn handle_execute_command_inner(
                 }
             }
 
+            // Empty precedence means all sources enabled (default behavior)
+            if new_precedence.is_empty() {
+                new_precedence = vec![
+                    SourcePrecedence::Shell,
+                    SourcePrecedence::File,
+                    SourcePrecedence::Remote,
+                ];
+            }
+
             state.config.set_precedence(new_precedence.clone()).await;
 
             let new_resolution_config = abundantis::config::ResolutionConfig {

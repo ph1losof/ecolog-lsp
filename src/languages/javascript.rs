@@ -3,6 +3,7 @@ use crate::types::EnvSourceKind;
 use compact_str::CompactString;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
+use tracing::error;
 
 pub struct JavaScript;
 
@@ -16,6 +17,29 @@ static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
 static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
+
+/// Compiles a tree-sitter query, logging an error and returning an empty fallback on failure.
+/// This prevents the LSP from crashing due to query compilation errors.
+fn compile_query(grammar: &Language, source: &str, query_name: &str) -> Query {
+    match Query::new(grammar, source) {
+        Ok(query) => query,
+        Err(e) => {
+            error!(
+                language = "javascript",
+                query = query_name,
+                error = %e,
+                "Failed to compile query, using empty fallback"
+            );
+            // Return an empty query that matches nothing, allowing the LSP to continue
+            Query::new(grammar, "").unwrap_or_else(|_| {
+                panic!(
+                    "Failed to create empty fallback query for JavaScript {}",
+                    query_name
+                )
+            })
+        }
+    }
+}
 
 impl LanguageSupport for JavaScript {
     fn id(&self) -> &'static str {
@@ -70,101 +94,101 @@ impl LanguageSupport for JavaScript {
 
     fn reference_query(&self) -> &Query {
         REFERENCE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/references.scm"),
+                "references",
             )
-            .expect("Failed to compile JavaScript reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(BINDING_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/bindings.scm"),
+                "bindings",
             )
-            .expect("Failed to compile JavaScript binding query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(COMPLETION_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/completion.scm"),
+                "completion",
             )
-            .expect("Failed to compile JavaScript completion query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(IMPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/imports.scm"),
+                "imports",
             )
-            .expect("Failed to compile JavaScript import query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/reassignments.scm"),
+                "reassignments",
             )
-            .expect("Failed to compile JavaScript reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/identifiers.scm"),
+                "identifiers",
             )
-            .expect("Failed to compile JavaScript identifier query")
         }))
     }
 
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/assignments.scm"),
+                "assignments",
             )
-            .expect("Failed to compile JavaScript assignment query")
         }))
     }
 
     fn destructure_query(&self) -> Option<&Query> {
         Some(DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/destructures.scm"),
+                "destructures",
             )
-            .expect("Failed to compile JavaScript destructure query")
         }))
     }
 
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/scopes.scm"),
+                "scopes",
             )
-            .expect("Failed to compile JavaScript scope query")
         }))
     }
 
     fn export_query(&self) -> Option<&Query> {
         Some(EXPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/javascript/exports.scm"),
+                "exports",
             )
-            .expect("Failed to compile JavaScript export query")
         }))
     }
 

@@ -2,6 +2,7 @@ use crate::languages::LanguageSupport;
 use crate::types::EnvSourceKind;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
+use tracing::error;
 
 pub struct Go;
 
@@ -16,6 +17,29 @@ static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
+
+/// Compiles a tree-sitter query, logging an error and returning an empty fallback on failure.
+/// This prevents the LSP from crashing due to query compilation errors.
+fn compile_query(grammar: &Language, source: &str, query_name: &str) -> Query {
+    match Query::new(grammar, source) {
+        Ok(query) => query,
+        Err(e) => {
+            error!(
+                language = "go",
+                query = query_name,
+                error = %e,
+                "Failed to compile query, using empty fallback"
+            );
+            // Return an empty query that matches nothing, allowing the LSP to continue
+            Query::new(grammar, "").unwrap_or_else(|_| {
+                panic!(
+                    "Failed to create empty fallback query for Go {}",
+                    query_name
+                )
+            })
+        }
+    }
+}
 
 impl LanguageSupport for Go {
     fn id(&self) -> &'static str {
@@ -40,98 +64,101 @@ impl LanguageSupport for Go {
 
     fn reference_query(&self) -> &Query {
         REFERENCE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/references.scm"),
+                "references",
             )
-            .expect("Failed to compile Go reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(BINDING_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/bindings.scm"),
+                "bindings",
             )
-            .expect("Failed to compile Go binding query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(IMPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/imports.scm"),
+                "imports",
             )
-            .expect("Failed to compile Go import query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(COMPLETION_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/completion.scm"),
+                "completion",
             )
-            .expect("Failed to compile Go completion query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/reassignments.scm"),
+                "reassignments",
             )
-            .expect("Failed to compile Go reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/identifiers.scm"),
+                "identifiers",
             )
-            .expect("Failed to compile Go identifier query")
         }))
     }
 
     fn export_query(&self) -> Option<&Query> {
         Some(EXPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/exports.scm"),
+                "exports",
             )
-            .expect("Failed to compile Go export query")
         }))
     }
 
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/assignments.scm"),
+                "assignments",
             )
-            .expect("Failed to compile Go assignment query")
         }))
     }
 
     fn destructure_query(&self) -> Option<&Query> {
         Some(DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/go/destructures.scm"),
+                "destructures",
             )
-            .expect("Failed to compile Go destructure query")
         }))
     }
 
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
-            Query::new(&self.grammar(), include_str!("../../queries/go/scopes.scm"))
-                .expect("Failed to compile Go scope query")
+            compile_query(
+                &self.grammar(),
+                include_str!("../../queries/go/scopes.scm"),
+                "scopes",
+            )
         }))
     }
 

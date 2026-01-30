@@ -10,8 +10,10 @@ pub use error::LspError;
 use crate::analysis::{DocumentManager, QueryEngine};
 use crate::languages::LanguageRegistry;
 use crate::server::state::ServerState;
+use dashmap::DashMap;
 use futures::future::join_all;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
@@ -20,6 +22,8 @@ use tracing::info;
 pub struct LspServer {
     pub client: Client,
     pub state: ServerState,
+    /// Per-URI pending analysis tasks for debouncing did_change
+    pending_analysis: DashMap<Url, tokio::task::JoinHandle<()>>,
 }
 
 impl LspServer {
@@ -64,7 +68,11 @@ impl LspServer {
             workspace_root,
         );
 
-        Self { client, state }
+        Self {
+            client,
+            state,
+            pending_analysis: DashMap::new(),
+        }
     }
 
     pub async fn register_watched_files(&self) {
@@ -112,6 +120,11 @@ impl LspServer {
     }
 
     async fn update_workspace_index_for_document(&self, uri: &Url) {
+        Self::update_workspace_index_for_document_impl(&self.state, uri).await;
+    }
+
+    /// Static implementation for workspace index updates, callable from spawned tasks
+    async fn update_workspace_index_for_document_impl(state: &ServerState, uri: &Url) {
         use crate::analysis::{workspace_index::FileIndexEntry, BindingResolver};
         use crate::server::handlers::util::KorniEntryExt;
         use compact_str::CompactString;
@@ -127,7 +140,7 @@ impl LspServer {
 
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let is_env_file = {
-            let config = self.state.config.get_config();
+            let config = state.config.get_config();
             let config = config.read().await;
             config.workspace.env_files.iter().any(|pattern| {
                 glob::Pattern::new(pattern.as_str())
@@ -137,7 +150,7 @@ impl LspServer {
         };
 
         let env_vars: FxHashSet<CompactString> = if is_env_file {
-            let vars = if let Some(doc) = self.state.document_manager.get(uri) {
+            let vars = if let Some(doc) = state.document_manager.get(uri) {
                 let content = &doc.content;
                 let entries = korni::parse_with_options(content, ParseOptions::full());
                 entries
@@ -149,17 +162,17 @@ impl LspServer {
                 FxHashSet::default()
             };
 
-            util::safe_refresh(&self.state.core, abundantis::RefreshOptions::preserve_all()).await;
+            util::safe_refresh(&state.core, abundantis::RefreshOptions::preserve_all()).await;
 
             vars
-        } else if let Some(graph_ref) = self.state.document_manager.get_binding_graph(uri) {
+        } else if let Some(graph_ref) = state.document_manager.get_binding_graph(uri) {
             let resolver = BindingResolver::new(&graph_ref);
             resolver.all_env_vars().into_iter().collect()
         } else {
             FxHashSet::default()
         };
 
-        self.state.workspace_index.update_file(
+        state.workspace_index.update_file(
             uri,
             FileIndexEntry {
                 mtime,
@@ -416,27 +429,58 @@ impl LanguageServer for LspServer {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = &params.text_document.uri;
+        let uri = params.text_document.uri.clone();
+        let version = params.text_document.version;
         tracing::debug!("[HANDLER_ENTER] did_change uri={}", uri);
         let start = std::time::Instant::now();
 
+        // 1. Apply content change immediately (fast)
         self.state
             .document_manager
-            .change(
-                &params.text_document.uri,
-                params.content_changes,
-                params.text_document.version,
-            )
+            .change(&uri, params.content_changes, version)
             .await;
 
-        self.update_workspace_index_for_document(&params.text_document.uri)
-            .await;
+        // 2. Cancel previous pending analysis for this URI
+        if let Some((_, handle)) = self.pending_analysis.remove(&uri) {
+            handle.abort();
+        }
 
-        let diagnostics =
-            handlers::compute_diagnostics(&params.text_document.uri, &self.state).await;
-        self.client
-            .publish_diagnostics(params.text_document.uri, diagnostics, None)
-            .await;
+        // 3. Spawn debounced task for expensive operations
+        let state = self.state.clone();
+        let client = self.client.clone();
+        let uri_clone = uri.clone();
+
+        let handle = tokio::spawn(async move {
+            // Wait 300ms before performing expensive analysis
+            tokio::time::sleep(Duration::from_millis(300)).await;
+
+            // Check if document version still matches (hasn't changed during debounce)
+            let current_version = state
+                .document_manager
+                .get(&uri_clone)
+                .map(|doc| doc.version);
+
+            if current_version != Some(version) {
+                tracing::debug!(
+                    "[DEBOUNCE] skipping analysis for uri={} (version mismatch: expected {}, got {:?})",
+                    uri_clone,
+                    version,
+                    current_version
+                );
+                return;
+            }
+
+            // Update workspace index
+            Self::update_workspace_index_for_document_impl(&state, &uri_clone).await;
+
+            // Compute and publish diagnostics
+            let diagnostics = handlers::compute_diagnostics(&uri_clone, &state).await;
+            client
+                .publish_diagnostics(uri_clone, diagnostics, None)
+                .await;
+        });
+
+        self.pending_analysis.insert(uri, handle);
 
         tracing::debug!(
             "[HANDLER_EXIT] did_change elapsed_ms={}",
@@ -448,6 +492,11 @@ impl LanguageServer for LspServer {
         let uri = params.text_document.uri;
         tracing::debug!("[HANDLER_ENTER] did_close uri={}", uri);
         let start = std::time::Instant::now();
+
+        // Cancel any pending analysis for this document
+        if let Some((_, handle)) = self.pending_analysis.remove(&uri) {
+            handle.abort();
+        }
 
         self.state.document_manager.close(&uri);
 

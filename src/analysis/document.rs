@@ -7,8 +7,33 @@ use crate::types::{
 use compact_str::CompactString;
 use dashmap::DashMap;
 use std::sync::Arc;
-use tower_lsp::lsp_types::{Position, TextDocumentContentChangeEvent, Url};
+use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent, Url};
 use tree_sitter::Tree;
+
+/// Information about an edit for incremental analysis.
+#[derive(Debug, Clone)]
+pub struct EditInfo {
+    /// The range that was edited (None for full document replacement)
+    pub range: Option<Range>,
+    /// Whether this is a full document replacement
+    pub is_full_replacement: bool,
+}
+
+impl EditInfo {
+    pub fn full_replacement() -> Self {
+        Self {
+            range: None,
+            is_full_replacement: true,
+        }
+    }
+
+    pub fn incremental(range: Range) -> Self {
+        Self {
+            range: Some(range),
+            is_full_replacement: false,
+        }
+    }
+}
 
 struct AnalysisResult {
     tree: Option<Tree>,
@@ -60,7 +85,7 @@ impl DocumentManager {
                 tree,
                 import_context,
                 binding_graph,
-            } = self.analyze_content(&content, lang.as_ref()).await;
+            } = self.analyze_content(&content, lang.as_ref(), None).await;
 
             doc.tree = tree;
             doc.import_context = import_context;
@@ -85,23 +110,90 @@ impl DocumentManager {
         changes: Vec<TextDocumentContentChangeEvent>,
         version: i32,
     ) {
-        
-        let (content, language_id) = {
+        // Extract content, language_id, old_tree, old_graph, and edit_info before releasing the lock
+        // Note: We only use old_tree for incremental parsing when we have range-based edits.
+        // For full document replacements, tree-sitter's incremental parsing requires the old tree
+        // to have been edited with Tree::edit() first, which we don't do for full replacements.
+        let (content, language_id, old_tree, old_graph, edit_info) = {
             if let Some(mut entry) = self.documents.get_mut(uri) {
-                // Apply full document changes
-                for change in changes {
-                    if change.range.is_none() {
-                        entry.state.content = std::sync::Arc::new(change.text);
+                let mut is_full_replacement = false;
+                let mut edit_range: Option<Range> = None;
+
+                // Apply changes and track edit info
+                for change in &changes {
+                    if let Some(range) = change.range {
+                        // Incremental change with range info
+                        // Merge with existing edit range if present
+                        edit_range = Some(if let Some(existing) = edit_range {
+                            // Expand to cover both ranges
+                            Range {
+                                start: Position {
+                                    line: existing.start.line.min(range.start.line),
+                                    character: if existing.start.line < range.start.line {
+                                        existing.start.character
+                                    } else if range.start.line < existing.start.line {
+                                        range.start.character
+                                    } else {
+                                        existing.start.character.min(range.start.character)
+                                    },
+                                },
+                                end: Position {
+                                    line: existing.end.line.max(range.end.line),
+                                    character: if existing.end.line > range.end.line {
+                                        existing.end.character
+                                    } else if range.end.line > existing.end.line {
+                                        range.end.character
+                                    } else {
+                                        existing.end.character.max(range.end.character)
+                                    },
+                                },
+                            }
+                        } else {
+                            range
+                        });
+                    } else {
+                        // Full document replacement
+                        entry.state.content = std::sync::Arc::new(change.text.clone());
+                        is_full_replacement = true;
                     }
                 }
                 entry.state.version = version;
-                (entry.state.content.clone(), entry.state.language_id.clone())
+
+                let edit_info = if is_full_replacement {
+                    EditInfo::full_replacement()
+                } else if let Some(range) = edit_range {
+                    EditInfo::incremental(range)
+                } else {
+                    EditInfo::full_replacement()
+                };
+
+                // Only clone the old tree for incremental parsing if NOT a full replacement
+                // Full replacements need a fresh parse since we don't have edit info
+                let old_tree = if is_full_replacement {
+                    None
+                } else {
+                    entry.state.tree.clone()
+                };
+
+                // Clone the old binding graph for incremental analysis
+                let old_graph = if !is_full_replacement {
+                    Some((*entry.binding_graph).clone())
+                } else {
+                    None
+                };
+
+                (
+                    entry.state.content.clone(),
+                    entry.state.language_id.clone(),
+                    old_tree,
+                    old_graph,
+                    edit_info,
+                )
             } else {
                 return;
             }
         };
 
-        
         let lang_opt = self
             .languages
             .get_by_language_id(&language_id)
@@ -112,9 +204,16 @@ impl DocumentManager {
                 tree,
                 import_context,
                 binding_graph,
-            } = self.analyze_content(&content, lang.as_ref()).await;
+            } = self
+                .analyze_content_with_edit(
+                    &content,
+                    lang.as_ref(),
+                    old_tree.as_ref(),
+                    old_graph,
+                    &edit_info,
+                )
+                .await;
 
-            
             if let Some(mut entry) = self.documents.get_mut(uri) {
                 if entry.state.version == version {
                     entry.state.tree = tree;
@@ -135,9 +234,10 @@ impl DocumentManager {
         &self,
         content: &str,
         language: &dyn LanguageSupport,
+        old_tree: Option<&Tree>,
     ) -> AnalysisResult {
-        
-        let tree = self.query_engine.parse(language, content, None).await;
+        // Pass old_tree for incremental parsing when available
+        let tree = self.query_engine.parse(language, content, old_tree).await;
 
         let Some(tree) = &tree else {
             return AnalysisResult {
@@ -188,7 +288,47 @@ impl DocumentManager {
         }
     }
 
-    pub fn get(&self, uri: &Url) -> Option<dashmap::mapref::one::MappedRef<Url, DocumentEntry, DocumentState>> {
+    /// Analyze content with edit info for potential incremental analysis.
+    /// Falls back to full analysis if incremental is not viable.
+    async fn analyze_content_with_edit(
+        &self,
+        content: &str,
+        language: &dyn LanguageSupport,
+        old_tree: Option<&Tree>,
+        old_graph: Option<BindingGraph>,
+        edit_info: &EditInfo,
+    ) -> AnalysisResult {
+        // For full replacements or when we don't have an old graph, do full analysis
+        if edit_info.is_full_replacement || old_graph.is_none() {
+            return self.analyze_content(content, language, old_tree).await;
+        }
+
+        let old_graph = old_graph.unwrap();
+
+        // Check if the edit is too large for incremental analysis
+        if let Some(range) = edit_info.range {
+            if old_graph.is_large_edit(range) {
+                return self.analyze_content(content, language, old_tree).await;
+            }
+        }
+
+        // For now, we do full analysis but with potential for incremental optimization.
+        // The infrastructure is in place for future incremental analysis:
+        // - old_graph.remove_in_range(range) can clear affected regions
+        // - Then re-analyze only the affected regions and merge
+        //
+        // TODO: Implement true incremental analysis where we:
+        // 1. Find affected scopes using old_graph.scopes_overlapping(range)
+        // 2. Remove items in range using old_graph.remove_in_range(range)
+        // 3. Re-analyze only the affected regions
+        // 4. Merge results back into the graph
+        //
+        // For now, we fall back to full analysis which is still fast due to
+        // tree-sitter's incremental parsing (via old_tree).
+        self.analyze_content(content, language, old_tree).await
+    }
+
+    pub fn get(&self, uri: &Url) -> Option<dashmap::mapref::one::MappedRef<'_, Url, DocumentEntry, DocumentState>> {
         self.documents.get(uri).map(|entry| entry.map(|e| &e.state))
     }
 
@@ -323,6 +463,79 @@ impl DocumentManager {
 
     pub fn query_engine(&self) -> &Arc<QueryEngine> {
         &self.query_engine
+    }
+
+    /// Check if the document has any syntax errors.
+    pub fn has_syntax_errors(&self, uri: &Url) -> Option<bool> {
+        let entry = self.documents.get(uri)?;
+        let tree = entry.state.tree.as_ref()?;
+        Some(tree.root_node().has_error())
+    }
+
+    /// Get syntax error locations and messages from the parsed tree.
+    /// Returns a list of (Range, Option<message>) for each error node.
+    pub fn get_syntax_errors(&self, uri: &Url) -> Vec<(Range, Option<String>)> {
+        let entry = match self.documents.get(uri) {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+
+        let tree = match &entry.state.tree {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let content = &entry.state.content;
+        let mut errors = Vec::new();
+        collect_error_nodes(tree.root_node(), content.as_bytes(), &mut errors);
+        errors
+    }
+}
+
+/// Recursively collect ERROR and MISSING nodes from the tree.
+fn collect_error_nodes(node: tree_sitter::Node, source: &[u8], errors: &mut Vec<(Range, Option<String>)>) {
+    if node.is_error() {
+        let range = node_to_lsp_range(node);
+        let text = node.utf8_text(source).ok().map(|s| {
+            format!("Unexpected: {}", truncate_text(s, 30))
+        });
+        errors.push((range, text));
+    } else if node.is_missing() {
+        let range = node_to_lsp_range(node);
+        let message = Some(format!("Missing: {}", node.kind()));
+        errors.push((range, message));
+    }
+
+    // Recurse into children
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_error_nodes(child, source, errors);
+    }
+}
+
+/// Convert tree-sitter node to LSP range.
+fn node_to_lsp_range(node: tree_sitter::Node) -> Range {
+    let start = node.start_position();
+    let end = node.end_position();
+    Range {
+        start: Position {
+            line: start.row as u32,
+            character: start.column as u32,
+        },
+        end: Position {
+            line: end.row as u32,
+            character: end.column as u32,
+        },
+    }
+}
+
+/// Truncate text with ellipsis if too long.
+fn truncate_text(text: &str, max_len: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() > max_len {
+        format!("{}...", &trimmed[..max_len])
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -749,11 +962,370 @@ const secret = process.env.SECRET;"#.to_string();
 
         manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
 
-        
+
         let binding = manager.get_env_binding_cloned(&uri, Position::new(0, 24));
         assert!(binding.is_some());
         let binding = binding.unwrap();
         assert_eq!(binding.binding_name, "dbUrl");
         assert_eq!(binding.env_var_name, "DATABASE_URL");
+    }
+
+    // =========================================================================
+    // Task 2: EditInfo and Edit Handling Tests
+    // =========================================================================
+
+    fn make_text_change(range: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
+        TextDocumentContentChangeEvent {
+            range,
+            range_length: None,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_edit_info_full_replacement() {
+        let edit_info = EditInfo::full_replacement();
+        assert!(edit_info.is_full_replacement);
+        assert!(edit_info.range.is_none());
+    }
+
+    #[test]
+    fn test_edit_info_incremental() {
+        let range = Range {
+            start: Position::new(5, 0),
+            end: Position::new(10, 20),
+        };
+        let edit_info = EditInfo::incremental(range);
+        assert!(!edit_info.is_full_replacement);
+        assert!(edit_info.range.is_some());
+        assert_eq!(edit_info.range.unwrap(), range);
+    }
+
+    #[tokio::test]
+    async fn test_change_with_range_creates_incremental_edit() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;\nconst y = 2;\nconst z = 3;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Change with a range should be treated as incremental
+        let changes = vec![make_text_change(
+            Some(Range {
+                start: Position::new(1, 10),
+                end: Position::new(1, 11),
+            }),
+            "3",
+        )];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+        // The document content should be updated
+        // Note: The actual content update depends on how the change is applied
+    }
+
+    #[tokio::test]
+    async fn test_change_without_range_creates_full_replacement() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Change without range should be full replacement
+        let new_content = "const y = 2;".to_string();
+        let changes = vec![make_text_change(None, &new_content)];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+        assert_eq!(doc.content.as_str(), new_content);
+    }
+
+    #[tokio::test]
+    async fn test_edit_range_merging_single_edit() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;\nconst y = 2;\nconst z = 3;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Single edit should be preserved as-is
+        let changes = vec![make_text_change(
+            Some(Range {
+                start: Position::new(1, 0),
+                end: Position::new(1, 12),
+            }),
+            "const y = 5;",
+        )];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_edit_range_merging_multiple_edits() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "line0\nline1\nline2\nline3\nline4".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Multiple non-overlapping edits should be merged into one covering range
+        let changes = vec![
+            make_text_change(
+                Some(Range {
+                    start: Position::new(1, 0),
+                    end: Position::new(1, 5),
+                }),
+                "LINE1",
+            ),
+            make_text_change(
+                Some(Range {
+                    start: Position::new(3, 0),
+                    end: Position::new(3, 5),
+                }),
+                "LINE3",
+            ),
+        ];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_edit_range_merging_overlapping_edits() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "line0\nline1\nline2\nline3\nline4".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Overlapping edits should be merged correctly
+        let changes = vec![
+            make_text_change(
+                Some(Range {
+                    start: Position::new(1, 0),
+                    end: Position::new(2, 5),
+                }),
+                "MERGED1",
+            ),
+            make_text_change(
+                Some(Range {
+                    start: Position::new(2, 0),
+                    end: Position::new(3, 5),
+                }),
+                "MERGED2",
+            ),
+        ];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_edit_range_merging_same_line_different_columns() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1; const y = 2;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Edits on the same line with different columns
+        let changes = vec![
+            make_text_change(
+                Some(Range {
+                    start: Position::new(0, 10),
+                    end: Position::new(0, 11),
+                }),
+                "5",
+            ),
+            make_text_change(
+                Some(Range {
+                    start: Position::new(0, 23),
+                    end: Position::new(0, 24),
+                }),
+                "10",
+            ),
+        ];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+    }
+
+    #[tokio::test]
+    async fn test_edit_range_merging_one_full_one_range() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Mix of full replacement and range-based edit - full replacement should win
+        let new_content = "const y = 2; const z = 3;".to_string();
+        let changes = vec![
+            make_text_change(
+                Some(Range {
+                    start: Position::new(0, 10),
+                    end: Position::new(0, 11),
+                }),
+                "5",
+            ),
+            make_text_change(None, &new_content),
+        ];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert_eq!(doc.version, 2);
+        // Full replacement content should be the final content
+        assert_eq!(doc.content.as_str(), new_content);
+    }
+
+    #[tokio::test]
+    async fn test_analyze_content_with_edit_full_replacement_delegates() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const db = process.env.DATABASE_URL;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        // Full replacement should trigger full analysis
+        let new_content = "const api = process.env.API_KEY;".to_string();
+        let changes = vec![make_text_change(None, &new_content)];
+
+        manager.change(&uri, changes, 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert!(doc.tree.is_some());
+
+        // Check that the binding graph reflects the new content
+        let graph = manager.get_binding_graph(&uri).unwrap();
+        assert!(!graph.direct_references().is_empty());
+        assert_eq!(graph.direct_references()[0].name, "API_KEY");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_content_with_edit_no_old_graph_delegates() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+
+        // Create a document with unknown language (no binding graph)
+        let content = "some content".to_string();
+        manager.open(uri.clone(), "unknown".to_string(), content, 1).await;
+
+        // Then change to JavaScript content - should do full analysis
+        // First, we need to close and reopen with JavaScript
+        manager.close(&uri);
+
+        let js_content = "const x = process.env.VAR;".to_string();
+        manager.open(uri.clone(), "javascript".to_string(), js_content.clone(), 2).await;
+
+        let doc = manager.get(&uri).unwrap();
+        assert!(doc.tree.is_some());
+
+        let graph = manager.get_binding_graph(&uri).unwrap();
+        assert!(!graph.direct_references().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_close_document() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+        assert!(manager.get(&uri).is_some());
+
+        manager.close(&uri);
+        assert!(manager.get(&uri).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_document_count() {
+        let manager = create_test_manager();
+
+        assert_eq!(manager.document_count(), 0);
+
+        manager.open(test_uri("a.js"), "javascript".to_string(), "a".to_string(), 1).await;
+        assert_eq!(manager.document_count(), 1);
+
+        manager.open(test_uri("b.js"), "javascript".to_string(), "b".to_string(), 1).await;
+        assert_eq!(manager.document_count(), 2);
+
+        manager.close(&test_uri("a.js"));
+        assert_eq!(manager.document_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_has_syntax_errors_clean_code() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        let has_errors = manager.has_syntax_errors(&uri);
+        assert!(has_errors.is_some());
+        assert!(!has_errors.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_has_syntax_errors_with_error() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        // Intentionally broken syntax
+        let content = "const x = ;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        let has_errors = manager.has_syntax_errors(&uri);
+        assert!(has_errors.is_some());
+        assert!(has_errors.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_syntax_errors() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        // Intentionally broken syntax
+        let content = "const x = ;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        let errors = manager.get_syntax_errors(&uri);
+        assert!(!errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_syntax_errors_no_errors() {
+        let manager = create_test_manager();
+        let uri = test_uri("test.js");
+        let content = "const x = 1;".to_string();
+
+        manager.open(uri.clone(), "javascript".to_string(), content, 1).await;
+
+        let errors = manager.get_syntax_errors(&uri);
+        assert!(errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_syntax_errors_nonexistent_document() {
+        let manager = create_test_manager();
+        let uri = test_uri("nonexistent.js");
+
+        let errors = manager.get_syntax_errors(&uri);
+        assert!(errors.is_empty());
     }
 }

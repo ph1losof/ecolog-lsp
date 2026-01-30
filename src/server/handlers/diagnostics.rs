@@ -155,6 +155,20 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
     }
 
     if !is_env_file {
+        // Check for syntax errors in the parsed tree
+        let syntax_errors = state.document_manager.get_syntax_errors(uri);
+        for (range, message) in syntax_errors {
+            let error_message = message.unwrap_or_else(|| "Syntax error".to_string());
+            diagnostics.push(Diagnostic {
+                range,
+                severity: Some(DiagnosticSeverity::ERROR),
+                code: Some(NumberOrString::String("syntax-error".to_string())),
+                source: Some("ecolog".to_string()),
+                message: error_message,
+                ..Default::default()
+            });
+        }
+
         for reference in references {
             let resolved =
                 crate::server::util::safe_get_for_file(&state.core, &reference.name, &file_path)

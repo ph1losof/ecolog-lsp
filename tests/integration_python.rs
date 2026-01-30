@@ -124,7 +124,7 @@ async fn test_py_completion_environ() {
         CompletionParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(1, 11),
+                position: Position::new(1, 12),
             },
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),
@@ -468,7 +468,7 @@ async fn test_py_hover_function_default_getenv() {
         HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
-                position: Position::new(1, 25),
+                position: Position::new(1, 27),
             },
             work_done_progress_params: Default::default(),
         },

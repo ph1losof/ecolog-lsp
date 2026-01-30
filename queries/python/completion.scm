@@ -35,3 +35,10 @@
 (ERROR
   (attribute) @object
 ) @completion_target
+
+;; Handle incomplete subscript: os.environ[' or os.environ["
+;; Tree-sitter creates ERROR nodes when string is incomplete
+(ERROR
+  (subscript
+    value: (_) @object)
+) @completion_target

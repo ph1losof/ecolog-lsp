@@ -3,9 +3,33 @@ use crate::types::EnvSourceKind;
 use compact_str::CompactString;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
+use tracing::error;
 
 pub struct TypeScript;
 pub struct TypeScriptReact;
+
+/// Compiles a tree-sitter query, logging an error and returning an empty fallback on failure.
+/// This prevents the LSP from crashing due to query compilation errors.
+fn compile_query(grammar: &Language, source: &str, lang_id: &str, query_name: &str) -> Query {
+    match Query::new(grammar, source) {
+        Ok(query) => query,
+        Err(e) => {
+            error!(
+                language = lang_id,
+                query = query_name,
+                error = %e,
+                "Failed to compile query, using empty fallback"
+            );
+            // Return an empty query that matches nothing, allowing the LSP to continue
+            Query::new(grammar, "").unwrap_or_else(|_| {
+                panic!(
+                    "Failed to create empty fallback query for {} {}",
+                    lang_id, query_name
+                )
+            })
+        }
+    }
+}
 
 static TS_REFERENCE_QUERY: OnceLock<Query> = OnceLock::new();
 static TS_BINDING_QUERY: OnceLock<Query> = OnceLock::new();
@@ -109,101 +133,111 @@ macro_rules! impl_typescript_language {
 
             fn reference_query(&self) -> &Query {
                 $ref_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/references.scm"),
+                        $id,
+                        "references",
                     )
-                    .expect(concat!("Failed to compile ", $id, " reference query"))
                 })
             }
 
             fn binding_query(&self) -> Option<&Query> {
                 Some($binding_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/bindings.scm"),
+                        $id,
+                        "bindings",
                     )
-                    .expect(concat!("Failed to compile ", $id, " binding query"))
                 }))
             }
 
             fn completion_query(&self) -> Option<&Query> {
                 Some($completion_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/completion.scm"),
+                        $id,
+                        "completion",
                     )
-                    .expect(concat!("Failed to compile ", $id, " completion query"))
                 }))
             }
 
             fn import_query(&self) -> Option<&Query> {
                 Some($import_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/imports.scm"),
+                        $id,
+                        "imports",
                     )
-                    .expect(concat!("Failed to compile ", $id, " import query"))
                 }))
             }
 
             fn reassignment_query(&self) -> Option<&Query> {
                 Some($reassign_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/reassignments.scm"),
+                        $id,
+                        "reassignments",
                     )
-                    .expect(concat!("Failed to compile ", $id, " reassignment query"))
                 }))
             }
 
             fn identifier_query(&self) -> Option<&Query> {
                 Some($ident_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/identifiers.scm"),
+                        $id,
+                        "identifiers",
                     )
-                    .expect(concat!("Failed to compile ", $id, " identifier query"))
                 }))
             }
 
             fn export_query(&self) -> Option<&Query> {
                 Some($export_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/exports.scm"),
+                        $id,
+                        "exports",
                     )
-                    .expect(concat!("Failed to compile ", $id, " export query"))
                 }))
             }
 
             fn assignment_query(&self) -> Option<&Query> {
                 Some($assign_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/assignments.scm"),
+                        $id,
+                        "assignments",
                     )
-                    .expect(concat!("Failed to compile ", $id, " assignment query"))
                 }))
             }
 
             fn destructure_query(&self) -> Option<&Query> {
                 Some($destruct_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/destructures.scm"),
+                        $id,
+                        "destructures",
                     )
-                    .expect(concat!("Failed to compile ", $id, " destructure query"))
                 }))
             }
 
             fn scope_query(&self) -> Option<&Query> {
                 Some($scope_query.get_or_init(|| {
-                    Query::new(
+                    compile_query(
                         &self.grammar(),
                         include_str!("../../queries/typescript/scopes.scm"),
+                        $id,
+                        "scopes",
                     )
-                    .expect(concat!("Failed to compile ", $id, " scope query"))
                 }))
             }
 

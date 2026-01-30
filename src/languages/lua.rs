@@ -2,6 +2,7 @@ use crate::languages::LanguageSupport;
 use crate::types::EnvSourceKind;
 use std::sync::OnceLock;
 use tree_sitter::{Language, Node, Query};
+use tracing::error;
 
 pub struct Lua;
 
@@ -16,6 +17,29 @@ static EXPORT_QUERY: OnceLock<Query> = OnceLock::new();
 static ASSIGNMENT_QUERY: OnceLock<Query> = OnceLock::new();
 static DESTRUCTURE_QUERY: OnceLock<Query> = OnceLock::new();
 static SCOPE_QUERY: OnceLock<Query> = OnceLock::new();
+
+/// Compiles a tree-sitter query, logging an error and returning an empty fallback on failure.
+/// This prevents the LSP from crashing due to query compilation errors.
+fn compile_query(grammar: &Language, source: &str, query_name: &str) -> Query {
+    match Query::new(grammar, source) {
+        Ok(query) => query,
+        Err(e) => {
+            error!(
+                language = "lua",
+                query = query_name,
+                error = %e,
+                "Failed to compile query, using empty fallback"
+            );
+            // Return an empty query that matches nothing, allowing the LSP to continue
+            Query::new(grammar, "").unwrap_or_else(|_| {
+                panic!(
+                    "Failed to create empty fallback query for Lua {}",
+                    query_name
+                )
+            })
+        }
+    }
+}
 
 impl LanguageSupport for Lua {
     fn id(&self) -> &'static str {
@@ -44,101 +68,101 @@ impl LanguageSupport for Lua {
 
     fn reference_query(&self) -> &Query {
         REFERENCE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/references.scm"),
+                "references",
             )
-            .expect("Failed to compile Lua reference query")
         })
     }
 
     fn binding_query(&self) -> Option<&Query> {
         Some(BINDING_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/bindings.scm"),
+                "bindings",
             )
-            .expect("Failed to compile Lua binding query")
         }))
     }
 
     fn import_query(&self) -> Option<&Query> {
         Some(IMPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/imports.scm"),
+                "imports",
             )
-            .expect("Failed to compile Lua import query")
         }))
     }
 
     fn completion_query(&self) -> Option<&Query> {
         Some(COMPLETION_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/completion.scm"),
+                "completion",
             )
-            .expect("Failed to compile Lua completion query")
         }))
     }
 
     fn reassignment_query(&self) -> Option<&Query> {
         Some(REASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/reassignments.scm"),
+                "reassignments",
             )
-            .expect("Failed to compile Lua reassignment query")
         }))
     }
 
     fn identifier_query(&self) -> Option<&Query> {
         Some(IDENTIFIER_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/identifiers.scm"),
+                "identifiers",
             )
-            .expect("Failed to compile Lua identifier query")
         }))
     }
 
     fn export_query(&self) -> Option<&Query> {
         Some(EXPORT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/exports.scm"),
+                "exports",
             )
-            .expect("Failed to compile Lua export query")
         }))
     }
 
     fn assignment_query(&self) -> Option<&Query> {
         Some(ASSIGNMENT_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/assignments.scm"),
+                "assignments",
             )
-            .expect("Failed to compile Lua assignment query")
         }))
     }
 
     fn destructure_query(&self) -> Option<&Query> {
         Some(DESTRUCTURE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/destructures.scm"),
+                "destructures",
             )
-            .expect("Failed to compile Lua destructure query")
         }))
     }
 
     fn scope_query(&self) -> Option<&Query> {
         Some(SCOPE_QUERY.get_or_init(|| {
-            Query::new(
+            compile_query(
                 &self.grammar(),
                 include_str!("../../queries/lua/scopes.scm"),
+                "scopes",
             )
-            .expect("Failed to compile Lua scope query")
         }))
     }
 

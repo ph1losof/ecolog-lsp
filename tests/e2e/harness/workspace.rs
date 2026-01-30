@@ -41,7 +41,7 @@ PORT=8080
         Self { root }
     }
 
-    
+    #[allow(dead_code)]
     pub fn with_env(env_content: &str) -> Self {
         let workspace = Self::new();
         let mut env_file = File::create(workspace.root.join(".env")).unwrap();
@@ -71,7 +71,7 @@ PORT=8080
         self.create_file("ecolog.toml", content);
     }
 
-    
+    #[allow(dead_code)]
     pub fn create_multi_language_fixtures(&self) {
         
         self.create_file("app.js", "const url = process.env.DB_URL;");
@@ -108,7 +108,7 @@ func main() { os.Getenv("DEBUG") }"#,
         self.root.join(relative_path).exists()
     }
 
-    
+    #[allow(dead_code)]
     pub fn delete_file(&self, relative_path: &str) -> bool {
         let path = self.root.join(relative_path);
         fs::remove_file(path).is_ok()

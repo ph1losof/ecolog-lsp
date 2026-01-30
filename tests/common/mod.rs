@@ -99,7 +99,7 @@ impl TestFixture {
         Url::from_file_path(&path).unwrap()
     }
 
-    
+    #[allow(dead_code)]
     pub async fn index_workspace(&self) {
         let config = EcologConfig::default();
         self.state
