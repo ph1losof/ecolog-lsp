@@ -343,10 +343,10 @@ async fn test_enable_restores_functionality() {
 
 
 #[tokio::test]
-async fn test_empty_precedence_allows_all() {
+async fn test_empty_precedence_disables_all() {
     let fixture = TestFixture::new().await;
 
-    
+
     set_shell_var(&fixture, "EMPTY_PREC_VAR", "empty_prec_value").await;
 
     let uri = fixture.create_file("test.js", "process.env.EMPTY_PREC_VAR");
@@ -361,22 +361,22 @@ async fn test_empty_precedence_allows_all() {
         )
         .await;
 
-    
+
     let params = ExecuteCommandParams {
         command: "ecolog.source.setPrecedence".to_string(),
-        arguments: vec![], 
+        arguments: vec![],
         work_done_progress_params: Default::default(),
     };
     handle_execute_command(params, &fixture.state).await;
 
-    
+
     let hover = get_hover(&fixture, &uri, 0, 20).await;
     assert!(
-        hover.is_some(),
-        "Hover should work with empty precedence (all sources enabled)"
+        hover.is_none(),
+        "Hover should NOT work with empty precedence (no sources enabled)"
     );
 
-    
+
     remove_shell_var(&fixture, "EMPTY_PREC_VAR").await;
 }
 

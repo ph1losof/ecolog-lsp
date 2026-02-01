@@ -1,6 +1,6 @@
 [package]
 name = "ecolog-lsp"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT"
 description = "Language Agnostic LSP for Environment Variables"
@@ -40,7 +40,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Workspace
-abundantis = { version = "0.1.9", features = ["full"] }
+abundantis = { version = "0.2.0", features = ["full"] }
 korni = "0.1.4"
 
 # Error Handling

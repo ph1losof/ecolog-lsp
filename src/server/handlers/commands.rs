@@ -290,14 +290,8 @@ async fn handle_execute_command_inner(
                 }
             }
 
-            // Empty precedence means all sources enabled (default behavior)
-            if new_precedence.is_empty() {
-                new_precedence = vec![
-                    SourcePrecedence::Shell,
-                    SourcePrecedence::File,
-                    SourcePrecedence::Remote,
-                ];
-            }
+            // Empty precedence = no sources enabled (all disabled)
+            // This is a valid state - user explicitly disabled all sources
 
             state.config.set_precedence(new_precedence.clone()).await;
 
