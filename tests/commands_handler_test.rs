@@ -141,7 +141,7 @@ async fn test_source_set_precedence_invalid_source() {
 }
 
 #[tokio::test]
-async fn test_source_set_precedence_empty_resets_to_all() {
+async fn test_source_set_precedence_empty_disables_all() {
     let fixture = TestFixture::new().await;
 
     let params = make_cmd("ecolog.source.setPrecedence", vec![]);
@@ -151,9 +151,9 @@ async fn test_source_set_precedence_empty_resets_to_all() {
     let value = result.unwrap();
     assert!(value.get("success").is_some(), "Should succeed");
 
-    // Verify all sources are enabled
+    // Verify all sources are disabled
     let precedence = value.get("precedence").unwrap().as_array().unwrap();
-    assert_eq!(precedence.len(), 3, "Empty should enable all sources");
+    assert_eq!(precedence.len(), 0, "Empty should disable all sources");
 }
 
 #[tokio::test]

@@ -257,8 +257,8 @@ async fn test_workspace_index_stats() {
     fixture.index_workspace().await;
 
     let stats = fixture.state.workspace_index.stats();
-    // Should have some files indexed
-    assert!(stats.total_files >= 0);
+    // Verify stats can be retrieved without panic
+    let _ = stats.total_files;
 }
 
 #[tokio::test]
@@ -271,8 +271,8 @@ async fn test_workspace_index_files_for_env_var() {
 
     let files = fixture.state.workspace_index.files_for_env_var("DB_URL");
     // May or may not find files depending on indexing
-    // Just verify it doesn't panic
-    assert!(files.len() >= 0);
+    // Verify operation doesn't panic
+    let _ = files.len();
 }
 
 #[tokio::test]
@@ -283,6 +283,6 @@ async fn test_workspace_index_all_env_vars() {
 
     let env_vars = fixture.state.workspace_index.all_env_vars();
     // Should find at least DB_URL from the indexed file
-    // May or may not have vars depending on indexing behavior
-    assert!(env_vars.len() >= 0);
+    // Verify operation doesn't panic
+    let _ = env_vars.len();
 }

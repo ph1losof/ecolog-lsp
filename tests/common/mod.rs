@@ -89,6 +89,7 @@ impl TestFixture {
         Self { temp_dir, state }
     }
 
+    #[allow(dead_code)]
     pub fn create_file(&self, name: &str, content: &str) -> Url {
         let path = self.temp_dir.join(name);
         if let Some(parent) = path.parent() {
