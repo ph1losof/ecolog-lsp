@@ -11,9 +11,11 @@ pub use error::LspError;
 
 use crate::analysis::{DocumentManager, QueryEngine};
 use crate::languages::LanguageRegistry;
+use crate::server::cancellation::CancellationToken;
 use crate::server::state::ServerState;
 use dashmap::DashMap;
 use futures::future::join_all;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
@@ -26,6 +28,10 @@ pub struct LspServer {
     pub state: ServerState,
     /// Per-URI pending analysis tasks for debouncing did_change
     pending_analysis: DashMap<Url, tokio::task::JoinHandle<()>>,
+    /// Token for cancelling background tasks on shutdown
+    cancellation_token: CancellationToken,
+    /// Handle to the heartbeat task for cleanup
+    heartbeat_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl LspServer {
@@ -74,6 +80,8 @@ impl LspServer {
             client,
             state,
             pending_analysis: DashMap::new(),
+            cancellation_token: CancellationToken::new(),
+            heartbeat_handle: Mutex::new(None),
         }
     }
 
@@ -372,31 +380,58 @@ impl LanguageServer for LspServer {
 
         let document_manager = Arc::clone(&self.state.document_manager);
         let workspace_index = Arc::clone(&self.state.workspace_index);
-        tokio::spawn(async move {
+        let cancellation_token = self.cancellation_token.clone();
+        let heartbeat_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             let mut heartbeat_count = 0u64;
             loop {
-                interval.tick().await;
-                heartbeat_count += 1;
+                tokio::select! {
+                    biased;
+                    _ = cancellation_token.cancelled() => {
+                        tracing::debug!("Heartbeat loop cancelled");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        heartbeat_count += 1;
 
-                // Collect memory metrics
-                let doc_count = document_manager.document_count();
-                let index_stats = workspace_index.stats();
-                let module_cache_len = workspace_index.module_cache_len();
+                        // Collect memory metrics
+                        let doc_count = document_manager.document_count();
+                        let index_stats = workspace_index.stats();
+                        let module_cache_len = workspace_index.module_cache_len();
 
-                tracing::info!(
-                    "LSP heartbeat #{} - docs={} indexed_files={} env_vars={} module_cache={}",
-                    heartbeat_count,
-                    doc_count,
-                    index_stats.total_files,
-                    index_stats.total_env_vars,
-                    module_cache_len
-                );
+                        tracing::info!(
+                            "LSP heartbeat #{} - docs={} indexed_files={} env_vars={} module_cache={}",
+                            heartbeat_count,
+                            doc_count,
+                            index_stats.total_files,
+                            index_stats.total_env_vars,
+                            module_cache_len
+                        );
+                    }
+                }
             }
         });
+        *self.heartbeat_handle.lock() = Some(heartbeat_handle);
     }
 
     async fn shutdown(&self) -> Result<()> {
+        tracing::info!("LSP shutdown - cancelling background tasks");
+
+        // Signal all background tasks to stop
+        self.cancellation_token.cancel();
+
+        // Abort the heartbeat task
+        if let Some(handle) = self.heartbeat_handle.lock().take() {
+            handle.abort();
+        }
+
+        // Abort all pending analysis tasks
+        for entry in self.pending_analysis.iter() {
+            entry.value().abort();
+        }
+        self.pending_analysis.clear();
+
+        tracing::info!("LSP shutdown complete");
         Ok(())
     }
 
