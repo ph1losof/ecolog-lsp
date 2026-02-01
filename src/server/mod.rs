@@ -56,6 +56,8 @@ impl LspServer {
         registry.register(Arc::new(crate::languages::rust::Rust));
         registry.register(Arc::new(crate::languages::go::Go));
         registry.register(Arc::new(crate::languages::lua::Lua));
+        registry.register(Arc::new(crate::languages::php::Php));
+        registry.register(Arc::new(crate::languages::ruby::Ruby));
 
         let languages = Arc::new(registry);
 

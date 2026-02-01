@@ -5,8 +5,10 @@ use tree_sitter::{Language, Node, Query};
 pub mod go;
 pub mod javascript;
 pub mod lua;
+pub mod php;
 pub mod python;
 pub mod registry;
+pub mod ruby;
 pub mod rust;
 pub mod typescript;
 
@@ -310,6 +312,40 @@ mod tests {
         assert!(lua_lang.export_query().is_some(), "Lua should have export_query");
     }
 
+    #[test]
+    fn test_php_queries_compile() {
+        let php_lang = php::Php;
+        validate_all_queries(&php_lang);
+
+        // Verify all expected queries are implemented
+        assert!(php_lang.binding_query().is_some(), "PHP should have binding_query");
+        assert!(php_lang.completion_query().is_some(), "PHP should have completion_query");
+        assert!(php_lang.reassignment_query().is_some(), "PHP should have reassignment_query");
+        assert!(php_lang.import_query().is_some(), "PHP should have import_query");
+        assert!(php_lang.identifier_query().is_some(), "PHP should have identifier_query");
+        assert!(php_lang.assignment_query().is_some(), "PHP should have assignment_query");
+        assert!(php_lang.destructure_query().is_some(), "PHP should have destructure_query");
+        assert!(php_lang.scope_query().is_some(), "PHP should have scope_query");
+        assert!(php_lang.export_query().is_some(), "PHP should have export_query");
+    }
+
+    #[test]
+    fn test_ruby_queries_compile() {
+        let ruby_lang = ruby::Ruby;
+        validate_all_queries(&ruby_lang);
+
+        // Verify all expected queries are implemented
+        assert!(ruby_lang.binding_query().is_some(), "Ruby should have binding_query");
+        assert!(ruby_lang.completion_query().is_some(), "Ruby should have completion_query");
+        assert!(ruby_lang.reassignment_query().is_some(), "Ruby should have reassignment_query");
+        assert!(ruby_lang.import_query().is_some(), "Ruby should have import_query");
+        assert!(ruby_lang.identifier_query().is_some(), "Ruby should have identifier_query");
+        assert!(ruby_lang.assignment_query().is_some(), "Ruby should have assignment_query");
+        assert!(ruby_lang.destructure_query().is_some(), "Ruby should have destructure_query");
+        assert!(ruby_lang.scope_query().is_some(), "Ruby should have scope_query");
+        assert!(ruby_lang.export_query().is_some(), "Ruby should have export_query");
+    }
+
     /// Comprehensive test that validates all queries for all supported languages.
     /// This is the main test that ensures no query compilation failures at runtime.
     #[test]
@@ -341,5 +377,13 @@ mod tests {
         // Lua
         let lua_lang = lua::Lua;
         validate_all_queries(&lua_lang);
+
+        // PHP
+        let php_lang = php::Php;
+        validate_all_queries(&php_lang);
+
+        // Ruby
+        let ruby_lang = ruby::Ruby;
+        validate_all_queries(&ruby_lang);
     }
 }
