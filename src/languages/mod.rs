@@ -2,8 +2,15 @@ use crate::types::{EnvSourceKind, ScopeKind};
 use compact_str::CompactString;
 use tree_sitter::{Language, Node, Query};
 
+pub mod bash;
+pub mod c;
+pub mod cpp;
+pub mod csharp;
+pub mod elixir;
 pub mod go;
+pub mod java;
 pub mod javascript;
+pub mod kotlin;
 pub mod lua;
 pub mod php;
 pub mod python;
@@ -11,6 +18,7 @@ pub mod registry;
 pub mod ruby;
 pub mod rust;
 pub mod typescript;
+pub mod zig;
 
 pub use registry::LanguageRegistry;
 
@@ -385,5 +393,165 @@ mod tests {
         // Ruby
         let ruby_lang = ruby::Ruby;
         validate_all_queries(&ruby_lang);
+
+        // C
+        let c_lang = c::C;
+        validate_all_queries(&c_lang);
+
+        // C++
+        let cpp_lang = cpp::Cpp;
+        validate_all_queries(&cpp_lang);
+
+        // Java
+        let java_lang = java::Java;
+        validate_all_queries(&java_lang);
+
+        // Kotlin
+        let kotlin_lang = kotlin::Kotlin;
+        validate_all_queries(&kotlin_lang);
+
+        // C#
+        let csharp_lang = csharp::CSharp;
+        validate_all_queries(&csharp_lang);
+
+        // Elixir
+        let elixir_lang = elixir::Elixir;
+        validate_all_queries(&elixir_lang);
+
+        // Zig
+        let zig_lang = zig::Zig;
+        validate_all_queries(&zig_lang);
+
+        // Bash
+        let bash_lang = bash::Bash;
+        validate_all_queries(&bash_lang);
+    }
+
+    #[test]
+    fn test_c_queries_compile() {
+        let c_lang = c::C;
+        validate_all_queries(&c_lang);
+
+        assert!(c_lang.binding_query().is_some(), "C should have binding_query");
+        assert!(c_lang.completion_query().is_some(), "C should have completion_query");
+        assert!(c_lang.reassignment_query().is_some(), "C should have reassignment_query");
+        assert!(c_lang.import_query().is_some(), "C should have import_query");
+        assert!(c_lang.identifier_query().is_some(), "C should have identifier_query");
+        assert!(c_lang.assignment_query().is_some(), "C should have assignment_query");
+        assert!(c_lang.destructure_query().is_some(), "C should have destructure_query");
+        assert!(c_lang.scope_query().is_some(), "C should have scope_query");
+        assert!(c_lang.export_query().is_some(), "C should have export_query");
+    }
+
+    #[test]
+    fn test_cpp_queries_compile() {
+        let cpp_lang = cpp::Cpp;
+        validate_all_queries(&cpp_lang);
+
+        assert!(cpp_lang.binding_query().is_some(), "C++ should have binding_query");
+        assert!(cpp_lang.completion_query().is_some(), "C++ should have completion_query");
+        assert!(cpp_lang.reassignment_query().is_some(), "C++ should have reassignment_query");
+        assert!(cpp_lang.import_query().is_some(), "C++ should have import_query");
+        assert!(cpp_lang.identifier_query().is_some(), "C++ should have identifier_query");
+        assert!(cpp_lang.assignment_query().is_some(), "C++ should have assignment_query");
+        assert!(cpp_lang.destructure_query().is_some(), "C++ should have destructure_query");
+        assert!(cpp_lang.scope_query().is_some(), "C++ should have scope_query");
+        assert!(cpp_lang.export_query().is_some(), "C++ should have export_query");
+    }
+
+    #[test]
+    fn test_java_queries_compile() {
+        let java_lang = java::Java;
+        validate_all_queries(&java_lang);
+
+        assert!(java_lang.binding_query().is_some(), "Java should have binding_query");
+        assert!(java_lang.completion_query().is_some(), "Java should have completion_query");
+        assert!(java_lang.reassignment_query().is_some(), "Java should have reassignment_query");
+        assert!(java_lang.import_query().is_some(), "Java should have import_query");
+        assert!(java_lang.identifier_query().is_some(), "Java should have identifier_query");
+        assert!(java_lang.assignment_query().is_some(), "Java should have assignment_query");
+        assert!(java_lang.destructure_query().is_some(), "Java should have destructure_query");
+        assert!(java_lang.scope_query().is_some(), "Java should have scope_query");
+        assert!(java_lang.export_query().is_some(), "Java should have export_query");
+    }
+
+    #[test]
+    fn test_kotlin_queries_compile() {
+        let kotlin_lang = kotlin::Kotlin;
+        validate_all_queries(&kotlin_lang);
+
+        assert!(kotlin_lang.binding_query().is_some(), "Kotlin should have binding_query");
+        assert!(kotlin_lang.completion_query().is_some(), "Kotlin should have completion_query");
+        assert!(kotlin_lang.reassignment_query().is_some(), "Kotlin should have reassignment_query");
+        assert!(kotlin_lang.import_query().is_some(), "Kotlin should have import_query");
+        assert!(kotlin_lang.identifier_query().is_some(), "Kotlin should have identifier_query");
+        assert!(kotlin_lang.assignment_query().is_some(), "Kotlin should have assignment_query");
+        assert!(kotlin_lang.destructure_query().is_some(), "Kotlin should have destructure_query");
+        assert!(kotlin_lang.scope_query().is_some(), "Kotlin should have scope_query");
+        assert!(kotlin_lang.export_query().is_some(), "Kotlin should have export_query");
+    }
+
+    #[test]
+    fn test_csharp_queries_compile() {
+        let csharp_lang = csharp::CSharp;
+        validate_all_queries(&csharp_lang);
+
+        assert!(csharp_lang.binding_query().is_some(), "C# should have binding_query");
+        assert!(csharp_lang.completion_query().is_some(), "C# should have completion_query");
+        assert!(csharp_lang.reassignment_query().is_some(), "C# should have reassignment_query");
+        assert!(csharp_lang.import_query().is_some(), "C# should have import_query");
+        assert!(csharp_lang.identifier_query().is_some(), "C# should have identifier_query");
+        assert!(csharp_lang.assignment_query().is_some(), "C# should have assignment_query");
+        assert!(csharp_lang.destructure_query().is_some(), "C# should have destructure_query");
+        assert!(csharp_lang.scope_query().is_some(), "C# should have scope_query");
+        assert!(csharp_lang.export_query().is_some(), "C# should have export_query");
+    }
+
+    #[test]
+    fn test_elixir_queries_compile() {
+        let elixir_lang = elixir::Elixir;
+        validate_all_queries(&elixir_lang);
+
+        assert!(elixir_lang.binding_query().is_some(), "Elixir should have binding_query");
+        assert!(elixir_lang.completion_query().is_some(), "Elixir should have completion_query");
+        assert!(elixir_lang.reassignment_query().is_some(), "Elixir should have reassignment_query");
+        assert!(elixir_lang.import_query().is_some(), "Elixir should have import_query");
+        assert!(elixir_lang.identifier_query().is_some(), "Elixir should have identifier_query");
+        assert!(elixir_lang.assignment_query().is_some(), "Elixir should have assignment_query");
+        assert!(elixir_lang.destructure_query().is_some(), "Elixir should have destructure_query");
+        assert!(elixir_lang.scope_query().is_some(), "Elixir should have scope_query");
+        assert!(elixir_lang.export_query().is_some(), "Elixir should have export_query");
+    }
+
+    #[test]
+    fn test_zig_queries_compile() {
+        let zig_lang = zig::Zig;
+        validate_all_queries(&zig_lang);
+
+        assert!(zig_lang.binding_query().is_some(), "Zig should have binding_query");
+        assert!(zig_lang.completion_query().is_some(), "Zig should have completion_query");
+        assert!(zig_lang.reassignment_query().is_some(), "Zig should have reassignment_query");
+        assert!(zig_lang.import_query().is_some(), "Zig should have import_query");
+        assert!(zig_lang.identifier_query().is_some(), "Zig should have identifier_query");
+        assert!(zig_lang.assignment_query().is_some(), "Zig should have assignment_query");
+        assert!(zig_lang.destructure_query().is_some(), "Zig should have destructure_query");
+        assert!(zig_lang.scope_query().is_some(), "Zig should have scope_query");
+        assert!(zig_lang.export_query().is_some(), "Zig should have export_query");
+    }
+
+    #[test]
+    fn test_bash_queries_compile() {
+        let bash_lang = bash::Bash;
+        validate_all_queries(&bash_lang);
+
+        assert!(bash_lang.binding_query().is_some(), "Bash should have binding_query");
+        assert!(bash_lang.completion_query().is_some(), "Bash should have completion_query");
+        assert!(bash_lang.reassignment_query().is_some(), "Bash should have reassignment_query");
+        assert!(bash_lang.import_query().is_some(), "Bash should have import_query");
+        assert!(bash_lang.identifier_query().is_some(), "Bash should have identifier_query");
+        assert!(bash_lang.assignment_query().is_some(), "Bash should have assignment_query");
+        assert!(bash_lang.destructure_query().is_some(), "Bash should have destructure_query");
+        assert!(bash_lang.scope_query().is_some(), "Bash should have scope_query");
+        assert!(bash_lang.export_query().is_some(), "Bash should have export_query");
     }
 }

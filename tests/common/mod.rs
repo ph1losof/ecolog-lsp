@@ -53,6 +53,14 @@ impl TestFixture {
         registry.register(Arc::new(ecolog_lsp::languages::lua::Lua));
         registry.register(Arc::new(ecolog_lsp::languages::php::Php));
         registry.register(Arc::new(ecolog_lsp::languages::ruby::Ruby));
+        registry.register(Arc::new(ecolog_lsp::languages::java::Java));
+        registry.register(Arc::new(ecolog_lsp::languages::kotlin::Kotlin));
+        registry.register(Arc::new(ecolog_lsp::languages::c::C));
+        registry.register(Arc::new(ecolog_lsp::languages::cpp::Cpp));
+        registry.register(Arc::new(ecolog_lsp::languages::csharp::CSharp));
+        registry.register(Arc::new(ecolog_lsp::languages::elixir::Elixir));
+        registry.register(Arc::new(ecolog_lsp::languages::zig::Zig));
+        registry.register(Arc::new(ecolog_lsp::languages::bash::Bash));
         let languages = Arc::new(registry);
 
         let query_engine = Arc::new(QueryEngine::new());
