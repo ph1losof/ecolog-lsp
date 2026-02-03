@@ -88,7 +88,9 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
                 env_var_name, value_formatted, resolved.source
             );
             if let Some(desc) = &resolved.description {
-                md.push_str(&format!("\n\n*{}*", desc));
+                if !desc.is_empty() {
+                    md.push_str(&format!("\n\n*{}*", desc));
+                }
             }
             md
         };

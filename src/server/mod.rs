@@ -290,6 +290,15 @@ impl LanguageServer for LspServer {
                         "ecolog.workspace.setRoot".to_string(),
                         "ecolog.interpolation.set".to_string(),
                         "ecolog.interpolation.get".to_string(),
+                        "ecolog.source.list".to_string(),
+                        "ecolog.source.setPrecedence".to_string(),
+                        // Remote source commands
+                        "ecolog.source.remote.list".to_string(),
+                        "ecolog.source.remote.authFields".to_string(),
+                        "ecolog.source.remote.authenticate".to_string(),
+                        "ecolog.source.remote.navigate".to_string(),
+                        "ecolog.source.remote.select".to_string(),
+                        "ecolog.source.remote.refresh".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,

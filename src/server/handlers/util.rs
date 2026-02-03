@@ -83,7 +83,9 @@ pub(crate) fn format_hover_markdown(
     );
 
     if let Some(desc) = &resolved.description {
-        markdown.push_str(&format!("\n\n*{}*", desc));
+        if !desc.is_empty() {
+            markdown.push_str(&format!("\n\n*{}*", desc));
+        }
     }
 
     markdown

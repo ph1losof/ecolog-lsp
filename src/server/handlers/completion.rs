@@ -77,7 +77,9 @@ pub async fn handle_completion(
                         value_formatted, source_str
                     );
                     if let Some(desc) = &var.description {
-                        doc.push_str(&format!("\n\n*{}*", desc));
+                        if !desc.is_empty() {
+                            doc.push_str(&format!("\n\n*{}*", desc));
+                        }
                     }
 
                     CompletionItem {

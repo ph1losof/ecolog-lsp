@@ -1,5 +1,6 @@
 use crate::server::handlers::util::{format_source, resolve_env_var_value};
 use crate::server::state::ServerState;
+use abundantis::source::AsyncEnvSource;
 use serde_json::json;
 use std::time::Instant;
 use tower_lsp::lsp_types::ExecuteCommandParams;
@@ -242,22 +243,58 @@ async fn handle_execute_command_inner(
         }
         "ecolog.source.list" => {
             use abundantis::config::SourcePrecedence;
+            use abundantis::source::VariableSource;
             let precedence = state.config.get_precedence().await;
+            let root = crate::server::util::get_workspace_root(&state.core.workspace).await;
+
+            // Get all resolved variables to count by source type
+            let all_vars = crate::server::util::safe_all_for_file(&state.core, &root).await;
+
+            // Count variables by source type
+            let mut shell_count = 0usize;
+            let mut file_count = 0usize;
+            let mut remote_count = 0usize;
+
+            for var in &all_vars {
+                match &var.source {
+                    VariableSource::Shell => shell_count += 1,
+                    VariableSource::File { .. } => file_count += 1,
+                    VariableSource::Remote { .. } => remote_count += 1,
+                    VariableSource::Memory => {}
+                }
+            }
+
+            // Get authenticated remote provider names
+            let remote_sources = state.core.registry.remote_sources();
+            let mut providers: Vec<String> = Vec::new();
+            for adapter in &remote_sources {
+                let status = adapter.inner().auth_status().await;
+                if status.is_authenticated() {
+                    providers.push(adapter.inner().provider_info().id.to_string());
+                }
+            }
 
             let all_sources = [
-                ("Shell", SourcePrecedence::Shell, 100),
-                ("File", SourcePrecedence::File, 50),
-                ("Remote", SourcePrecedence::Remote, 25),
+                ("Shell", SourcePrecedence::Shell, 100, shell_count),
+                ("File", SourcePrecedence::File, 50, file_count),
+                ("Remote", SourcePrecedence::Remote, 25, remote_count),
             ];
 
             let sources: Vec<serde_json::Value> = all_sources
                 .iter()
-                .map(|(name, sp, priority)| {
-                    json!({
+                .enumerate()
+                .map(|(i, (name, sp, priority, count))| {
+                    let mut obj = json!({
                         "name": name,
                         "enabled": precedence.contains(sp),
-                        "priority": priority
-                    })
+                        "priority": priority,
+                        "count": count
+                    });
+                    // Add providers only for Remote source
+                    if i == 2 && !providers.is_empty() {
+                        obj["providers"] = json!(providers);
+                    }
+                    obj
                 })
                 .collect();
 
@@ -397,6 +434,395 @@ async fn handle_execute_command_inner(
                 "enabled": enabled
             }))
         }
+        // Remote source commands
+        "ecolog.source.remote.list" => handle_remote_list(state).await,
+        "ecolog.source.remote.authFields" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_remote_auth_fields(state, provider).await
+        }
+        "ecolog.source.remote.authenticate" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            let credentials = params
+                .arguments
+                .get(1)
+                .and_then(|arg| arg.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect::<std::collections::HashMap<_, _>>()
+                });
+            handle_remote_authenticate(state, provider, credentials).await
+        }
+        "ecolog.source.remote.navigate" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            let level = params
+                .arguments
+                .get(1)
+                .and_then(|arg| arg.as_str());
+            let parent_scope = params
+                .arguments
+                .get(2)
+                .and_then(|arg| serde_json::from_value::<abundantis::source::ScopeSelection>(arg.clone()).ok());
+            handle_remote_navigate(state, provider, level, parent_scope).await
+        }
+        "ecolog.source.remote.select" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            let scope = params
+                .arguments
+                .get(1)
+                .and_then(|arg| serde_json::from_value::<abundantis::source::ScopeSelection>(arg.clone()).ok());
+            handle_remote_select(state, provider, scope).await
+        }
+        "ecolog.source.remote.refresh" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_remote_refresh(state, provider).await
+        }
         _ => None,
+    }
+}
+
+// Remote source command handlers
+
+/// Gets or creates a remote source adapter for a provider.
+/// If no source exists but a factory is registered, creates one.
+async fn get_or_create_remote_source(
+    state: &ServerState,
+    provider: &str,
+) -> Result<std::sync::Arc<abundantis::source::remote::RemoteSourceAdapter>, String> {
+    // First check if source already exists
+    let adapters = state.core.registry.remote_sources();
+    if let Some(adapter) = adapters.iter().find(|a| a.inner().provider_info().id.as_str() == provider) {
+        return Ok(std::sync::Arc::clone(adapter));
+    }
+
+    // Check if factory exists
+    let factory_ids = state.core.registry.remote_factory_ids();
+    if !factory_ids.iter().any(|id| id == provider) {
+        return Err(format!("Unknown provider: {}", provider));
+    }
+
+    // Create source from factory with default config
+    let config = abundantis::source::remote::ProviderConfig::default();
+    match state.core.registry.create_remote_source(provider, &config).await {
+        Ok(source_id) => {
+            // Get the newly created adapter
+            let adapters = state.core.registry.remote_sources();
+            adapters
+                .iter()
+                .find(|a| a.id() == &source_id)
+                .cloned()
+                .ok_or_else(|| "Failed to retrieve created source".to_string())
+        }
+        Err(e) => Err(format!("Failed to create source: {}", e)),
+    }
+}
+
+async fn handle_remote_list(state: &ServerState) -> Option<serde_json::Value> {
+    let adapters = state.core.registry.remote_sources();
+
+    let mut sources = Vec::new();
+    for adapter in adapters {
+        let info = adapter.inner().provider_info();
+        let auth_status = adapter.inner().auth_status().await;
+        let scope = adapter.scope();
+        let cached_count = match adapter.load().await {
+            Ok(snapshot) => snapshot.variables.len(),
+            Err(_) => 0,
+        };
+
+        sources.push(json!({
+            "id": info.id.as_str(),
+            "displayName": info.display_name.as_str(),
+            "shortName": info.short_name.as_str(),
+            "authStatus": format!("{}", auth_status),
+            "isAuthenticated": auth_status.is_authenticated(),
+            "scope": scope.selections,
+            "secretCount": cached_count,
+            "scopeLevels": adapter.inner().scope_levels().iter().map(|l| json!({
+                "name": l.name.as_str(),
+                "displayName": l.display_name.as_str(),
+                "required": l.required,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+
+    // Also list available factories (providers that could be enabled)
+    let factory_ids = state.core.registry.remote_factory_ids();
+
+    Some(json!({
+        "sources": sources,
+        "count": sources.len(),
+        "availableProviders": factory_ids,
+    }))
+}
+
+async fn handle_remote_auth_fields(
+    state: &ServerState,
+    provider: Option<&str>,
+) -> Option<serde_json::Value> {
+    let provider = match provider {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    // Get or create the source
+    let adapter = match get_or_create_remote_source(state, provider).await {
+        Ok(a) => a,
+        Err(e) => return Some(json!({ "error": e })),
+    };
+
+    let fields = adapter.inner().auth_fields();
+    let field_json: Vec<serde_json::Value> = fields.iter().map(|f| {
+        json!({
+            "name": f.name.as_str(),
+            "label": f.label.as_str(),
+            "description": f.description.as_ref().map(|d| d.as_str()),
+            "required": f.required,
+            "secret": f.secret,
+            "envVar": f.env_var.as_ref().map(|e| e.as_str()),
+            "default": f.default.as_ref().map(|d| d.as_str()),
+        })
+    }).collect();
+
+    Some(json!({
+        "provider": provider,
+        "fields": field_json,
+    }))
+}
+
+async fn handle_remote_authenticate(
+    state: &ServerState,
+    provider: Option<&str>,
+    credentials: Option<std::collections::HashMap<String, String>>,
+) -> Option<serde_json::Value> {
+    let provider = match provider {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let credentials = match credentials {
+        Some(c) => c,
+        None => return Some(json!({ "error": "Credentials required" })),
+    };
+
+    // Get or create the source
+    let adapter = match get_or_create_remote_source(state, provider).await {
+        Ok(a) => a,
+        Err(e) => return Some(json!({ "error": e })),
+    };
+
+    // Build auth config
+    let mut auth_config = abundantis::source::AuthConfig::new();
+    for (key, value) in credentials {
+        auth_config = auth_config.with_credential(key, value);
+    }
+
+    // Authenticate
+    match adapter.authenticate(&auth_config).await {
+        Ok(()) => {
+            let status = adapter.inner().auth_status().await;
+            Some(json!({
+                "success": true,
+                "provider": provider,
+                "authStatus": format!("{}", status),
+            }))
+        }
+        Err(e) => {
+            Some(json!({
+                "error": format!("Authentication failed: {}", e),
+                "provider": provider,
+            }))
+        }
+    }
+}
+
+async fn handle_remote_navigate(
+    state: &ServerState,
+    provider: Option<&str>,
+    level: Option<&str>,
+    parent_scope: Option<abundantis::source::ScopeSelection>,
+) -> Option<serde_json::Value> {
+    let provider = match provider {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let level = match level {
+        Some(l) => l,
+        None => return Some(json!({ "error": "Scope level required" })),
+    };
+
+    let parent = parent_scope.unwrap_or_default();
+
+    // Get or create the source
+    let adapter = match get_or_create_remote_source(state, provider).await {
+        Ok(a) => a,
+        Err(e) => return Some(json!({ "error": e })),
+    };
+
+    match adapter.inner().list_options(level, &parent).await {
+        Ok(options) => {
+            let options_json: Vec<serde_json::Value> = options.iter().map(|o| {
+                json!({
+                    "id": o.id.as_str(),
+                    "displayName": o.display_name.as_str(),
+                    "description": o.description.as_ref().map(|d| d.as_str()),
+                    "icon": o.icon.as_ref().map(|i| i.as_str()),
+                })
+            }).collect();
+
+            Some(json!({
+                "provider": provider,
+                "level": level,
+                "options": options_json,
+                "count": options_json.len(),
+            }))
+        }
+        Err(e) => {
+            Some(json!({
+                "error": format!("Failed to list options: {}", e),
+                "provider": provider,
+                "level": level,
+            }))
+        }
+    }
+}
+
+async fn handle_remote_select(
+    state: &ServerState,
+    provider: Option<&str>,
+    scope: Option<abundantis::source::ScopeSelection>,
+) -> Option<serde_json::Value> {
+    let provider = match provider {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let scope = match scope {
+        Some(s) => s,
+        None => return Some(json!({ "error": "Scope selection required" })),
+    };
+
+    // Get or create the source
+    let adapter = match get_or_create_remote_source(state, provider).await {
+        Ok(a) => a,
+        Err(e) => return Some(json!({ "error": e })),
+    };
+
+    // Set the scope
+    adapter.set_scope(scope);
+
+    // Try to load secrets with the new scope
+    match adapter.load().await {
+        Ok(snapshot) => {
+            // Trigger refresh so other components see the new variables
+            crate::server::util::safe_refresh(
+                &state.core,
+                abundantis::RefreshOptions::preserve_all(),
+            )
+            .await;
+
+            Some(json!({
+                "success": true,
+                "provider": provider,
+                "secretCount": snapshot.variables.len(),
+            }))
+        }
+        Err(e) => {
+            Some(json!({
+                "error": format!("Failed to fetch secrets: {}", e),
+                "provider": provider,
+            }))
+        }
+    }
+}
+
+async fn handle_remote_refresh(
+    state: &ServerState,
+    provider: Option<&str>,
+) -> Option<serde_json::Value> {
+    if let Some(provider_id) = provider {
+        // Refresh specific provider - get or create first
+        let adapter = match get_or_create_remote_source(state, provider_id).await {
+            Ok(a) => a,
+            Err(e) => return Some(json!({ "error": e })),
+        };
+
+        adapter.invalidate_cache();
+
+        match adapter.refresh().await {
+            Ok(changed) => {
+                let snapshot = adapter.load().await.ok();
+                let count = snapshot.map(|s| s.variables.len()).unwrap_or(0);
+
+                Some(json!({
+                    "success": true,
+                    "provider": provider_id,
+                    "changed": changed,
+                    "secretCount": count,
+                }))
+            }
+            Err(e) => {
+                Some(json!({
+                    "error": format!("Failed to refresh: {}", e),
+                    "provider": provider_id,
+                }))
+            }
+        }
+    } else {
+        // Refresh all remote sources
+        let adapters = state.core.registry.remote_sources();
+        let mut results = Vec::new();
+
+        for adapter in &adapters {
+            adapter.invalidate_cache();
+            let provider_id = adapter.inner().provider_info().id.clone();
+
+            match adapter.refresh().await {
+                Ok(changed) => {
+                    let snapshot = adapter.load().await.ok();
+                    let count = snapshot.map(|s| s.variables.len()).unwrap_or(0);
+                    results.push(json!({
+                        "provider": provider_id.as_str(),
+                        "success": true,
+                        "changed": changed,
+                        "secretCount": count,
+                    }));
+                }
+                Err(e) => {
+                    results.push(json!({
+                        "provider": provider_id.as_str(),
+                        "error": format!("{}", e),
+                    }));
+                }
+            }
+        }
+
+        // Also trigger global refresh
+        crate::server::util::safe_refresh(
+            &state.core,
+            abundantis::RefreshOptions::preserve_all(),
+        )
+        .await;
+
+        Some(json!({
+            "results": results,
+            "count": results.len(),
+        }))
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "ecolog-lsp"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 license = "MIT"
 description = "Language Agnostic LSP for Environment Variables"
@@ -50,7 +50,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Workspace
-abundantis = { version = "0.2.0", features = ["full"] }
+abundantis = { version = "0.2.1", features = ["full"] }
 korni = "0.1.4"
 
 # Error Handling
@@ -64,6 +64,14 @@ glob = "0.3.3"
 # Workspace Indexing
 ignore = "0.4"
 num_cpus = "1.16"
+
+[features]
+default = ["doppler"]
+doppler = ["abundantis/doppler"]
+aws = ["abundantis/aws"]
+vault = ["abundantis/vault"]
+infisical = ["abundantis/infisical"]
+all-remote = ["doppler", "aws", "vault", "infisical"]
 
 [dev-dependencies]
 tempfile = "3"
