@@ -78,21 +78,7 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
             let b_name = binding_name.as_deref().unwrap_or(env_var_name.as_str());
             format_hover_markdown(&env_var_name, Some(b_name), &resolved)
         } else {
-            let value_formatted = if resolved.value.contains('\n') {
-                format!("`{}`", resolved.value.replace('\n', "`\n`"))
-            } else {
-                format!("`{}`", resolved.value)
-            };
-            let mut md = format!(
-                "**`{}`**\n\n**Value**: {}\n\n**Source**: `{}`",
-                env_var_name, value_formatted, resolved.source
-            );
-            if let Some(desc) = &resolved.description {
-                if !desc.is_empty() {
-                    md.push_str(&format!("\n\n*{}*", desc));
-                }
-            }
-            md
+            format_hover_markdown(&env_var_name, None, &resolved)
         };
 
         tracing::debug!(

@@ -71,7 +71,9 @@ pub(crate) fn format_hover_markdown(
         _ => format!("**`{}`**", env_var_name),
     };
 
-    let value_formatted = if resolved.value.contains('\n') {
+    let value_formatted = if resolved.value.is_empty() {
+        "*(empty)*".to_string()
+    } else if resolved.value.contains('\n') {
         format!("`{}`", resolved.value.replace('\n', "`\n`"))
     } else {
         format!("`{}`", resolved.value)
@@ -263,11 +265,11 @@ mod tests {
     fn test_format_source_remote_without_path() {
         let root = PathBuf::from("/workspace");
         let source = VariableSource::Remote {
-            provider: "vault".into(),
+            provider: "doppler".into(),
             path: None,
         };
         let result = format_source(&source, &root);
-        assert_eq!(result, "Remote (vault)");
+        assert_eq!(result, "Remote (doppler)");
     }
 
     // =========================================================================
@@ -332,6 +334,20 @@ mod tests {
         let result = format_hover_markdown("MULTILINE", None, &resolved);
         // Newlines should be formatted specially
         assert!(result.contains("`line1`\n`line2`"));
+    }
+
+    #[test]
+    fn test_format_hover_markdown_empty_value() {
+        let resolved = ResolvedEnvVarValue {
+            value: "".to_string(),
+            source: ".env".to_string(),
+            description: None,
+        };
+        let result = format_hover_markdown("EMPTY_VAR", None, &resolved);
+        assert!(result.contains("**`EMPTY_VAR`**"));
+        // Empty value should show italic indicator, not empty backticks
+        assert!(result.contains("*(empty)*"));
+        assert!(!result.contains("``"));
     }
 
     // =========================================================================

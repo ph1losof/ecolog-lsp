@@ -114,6 +114,10 @@ pub async fn handle_inlay_hints(
 }
 
 fn format_value(value: &str, config: &InlayHintConfig) -> String {
+    if value.is_empty() {
+        return "(empty)".to_string();
+    }
+
     let value = if value.contains('\n') {
         format!("{}...", value.lines().next().unwrap_or(""))
     } else {
@@ -177,6 +181,13 @@ mod tests {
         let config = InlayHintConfig::default();
         let result = format_value("line1\nline2\nline3", &config);
         assert_eq!(result, "line1...");
+    }
+
+    #[test]
+    fn test_format_value_empty() {
+        let config = InlayHintConfig::default();
+        let result = format_value("", &config);
+        assert_eq!(result, "(empty)");
     }
 
     #[test]

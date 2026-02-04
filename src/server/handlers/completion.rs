@@ -66,7 +66,9 @@ pub async fn handle_completion(
                     let value = var.resolved_value.to_string();
                     let source_str = format_source(&var.source, &workspace_root);
 
-                    let value_formatted = if value.contains('\n') {
+                    let value_formatted = if value.is_empty() {
+                        "*(empty)*".to_string()
+                    } else if value.contains('\n') {
                         format!("`{}`", value.replace('\n', "`\n`"))
                     } else {
                         format!("`{}`", value)
