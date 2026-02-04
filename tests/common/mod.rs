@@ -1,3 +1,4 @@
+use abundantis::source::remote::ProviderManager;
 use abundantis::Abundantis;
 use ecolog_lsp::analysis::{
     DocumentManager, ModuleResolver, QueryEngine, WorkspaceIndex, WorkspaceIndexer,
@@ -87,6 +88,9 @@ impl TestFixture {
             temp_dir.clone(),
         ));
 
+        let providers_config = abundantis::config::ProvidersConfig::default();
+        let provider_manager = Arc::new(ProviderManager::new(providers_config));
+
         let state = ServerState::new(
             document_manager,
             languages,
@@ -95,6 +99,7 @@ impl TestFixture {
             workspace_index,
             indexer,
             module_resolver,
+            provider_manager,
         );
 
         Self { temp_dir, state }

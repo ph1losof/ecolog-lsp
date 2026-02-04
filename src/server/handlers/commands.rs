@@ -265,12 +265,14 @@ async fn handle_execute_command_inner(
             }
 
             // Get authenticated remote provider names
-            let remote_sources = state.core.registry.remote_sources();
+            let external_providers = state.core.registry.external_providers();
             let mut providers: Vec<String> = Vec::new();
-            for adapter in &remote_sources {
-                let status = adapter.inner().auth_status().await;
+            for adapter in &external_providers {
+                let status = adapter.auth_status();
                 if status.is_authenticated() {
-                    providers.push(adapter.inner().provider_info().id.to_string());
+                    if let Some(info) = adapter.provider_info() {
+                        providers.push(info.id.to_string());
+                    }
                 }
             }
 
@@ -492,82 +494,144 @@ async fn handle_execute_command_inner(
                 .and_then(|arg| arg.as_str());
             handle_remote_refresh(state, provider).await
         }
+        // External provider commands (out-of-process providers)
+        "ecolog.provider.list" => handle_provider_list(state).await,
+        "ecolog.provider.spawn" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_provider_spawn(state, provider).await
+        }
+        "ecolog.provider.authFields" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_provider_auth_fields(state, provider).await
+        }
+        "ecolog.provider.authenticate" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            let credentials = params
+                .arguments
+                .get(1)
+                .and_then(|arg| arg.as_object())
+                .map(|obj| {
+                    obj.iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                        .collect::<std::collections::HashMap<_, _>>()
+                });
+            handle_provider_authenticate(state, provider, credentials).await
+        }
+        "ecolog.provider.scopeLevels" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_provider_scope_levels(state, provider).await
+        }
+        "ecolog.provider.navigate" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            let level = params
+                .arguments
+                .get(1)
+                .and_then(|arg| arg.as_str());
+            let parent_scope = params
+                .arguments
+                .get(2)
+                .and_then(|arg| serde_json::from_value::<abundantis::source::remote::ProtocolScopeSelection>(arg.clone()).ok());
+            handle_provider_navigate(state, provider, level, parent_scope).await
+        }
+        "ecolog.provider.select" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            let scope = params
+                .arguments
+                .get(1)
+                .and_then(|arg| serde_json::from_value::<abundantis::source::remote::ProtocolScopeSelection>(arg.clone()).ok());
+            handle_provider_select(state, provider, scope).await
+        }
+        "ecolog.provider.refresh" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_provider_refresh(state, provider).await
+        }
+        "ecolog.provider.shutdown" => {
+            let provider = params
+                .arguments
+                .first()
+                .and_then(|arg| arg.as_str());
+            handle_provider_shutdown(state, provider).await
+        }
         _ => None,
     }
 }
 
 // Remote source command handlers
 
-/// Gets or creates a remote source adapter for a provider.
-/// If no source exists but a factory is registered, creates one.
-async fn get_or_create_remote_source(
+/// Gets an external provider adapter by provider ID.
+fn get_external_provider(
     state: &ServerState,
     provider: &str,
-) -> Result<std::sync::Arc<abundantis::source::remote::RemoteSourceAdapter>, String> {
-    // First check if source already exists
-    let adapters = state.core.registry.remote_sources();
-    if let Some(adapter) = adapters.iter().find(|a| a.inner().provider_info().id.as_str() == provider) {
-        return Ok(std::sync::Arc::clone(adapter));
-    }
-
-    // Check if factory exists
-    let factory_ids = state.core.registry.remote_factory_ids();
-    if !factory_ids.iter().any(|id| id == provider) {
-        return Err(format!("Unknown provider: {}", provider));
-    }
-
-    // Create source from factory with default config
-    let config = abundantis::source::remote::ProviderConfig::default();
-    match state.core.registry.create_remote_source(provider, &config).await {
-        Ok(source_id) => {
-            // Get the newly created adapter
-            let adapters = state.core.registry.remote_sources();
-            adapters
-                .iter()
-                .find(|a| a.id() == &source_id)
-                .cloned()
-                .ok_or_else(|| "Failed to retrieve created source".to_string())
-        }
-        Err(e) => Err(format!("Failed to create source: {}", e)),
-    }
+) -> Result<std::sync::Arc<abundantis::source::remote::ExternalProviderAdapter>, String> {
+    state.core.registry.get_external_provider(provider)
+        .ok_or_else(|| format!("Unknown provider: {}", provider))
 }
 
 async fn handle_remote_list(state: &ServerState) -> Option<serde_json::Value> {
-    let adapters = state.core.registry.remote_sources();
+    let adapters = state.core.registry.external_providers();
 
     let mut sources = Vec::new();
     for adapter in adapters {
-        let info = adapter.inner().provider_info();
-        let auth_status = adapter.inner().auth_status().await;
+        let info = match adapter.provider_info() {
+            Some(info) => info,
+            None => continue,
+        };
+        let auth_status = adapter.auth_status();
         let scope = adapter.scope();
         let cached_count = match adapter.load().await {
             Ok(snapshot) => snapshot.variables.len(),
             Err(_) => 0,
         };
 
-        sources.push(json!({
-            "id": info.id.as_str(),
-            "displayName": info.display_name.as_str(),
-            "shortName": info.short_name.as_str(),
-            "authStatus": format!("{}", auth_status),
-            "isAuthenticated": auth_status.is_authenticated(),
-            "scope": scope.selections,
-            "secretCount": cached_count,
-            "scopeLevels": adapter.inner().scope_levels().iter().map(|l| json!({
+        let scope_levels = match adapter.scope_levels().await {
+            Ok(levels) => levels.iter().map(|l| json!({
                 "name": l.name.as_str(),
                 "displayName": l.display_name.as_str(),
                 "required": l.required,
             })).collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        };
+
+        sources.push(json!({
+            "id": info.id.as_str(),
+            "displayName": info.name.as_str(),
+            "shortName": info.short_name.as_ref().map(|s| s.as_str()).unwrap_or(info.id.as_str()),
+            "authStatus": format!("{:?}", auth_status),
+            "isAuthenticated": auth_status.is_authenticated(),
+            "scope": scope.selections,
+            "secretCount": cached_count,
+            "scopeLevels": scope_levels,
         }));
     }
 
-    // Also list available factories (providers that could be enabled)
-    let factory_ids = state.core.registry.remote_factory_ids();
+    // List registered external provider IDs
+    let provider_ids = state.core.registry.external_provider_ids();
 
     Some(json!({
         "sources": sources,
         "count": sources.len(),
-        "availableProviders": factory_ids,
+        "availableProviders": provider_ids,
     }))
 }
 
@@ -580,13 +644,16 @@ async fn handle_remote_auth_fields(
         None => return Some(json!({ "error": "Provider ID required" })),
     };
 
-    // Get or create the source
-    let adapter = match get_or_create_remote_source(state, provider).await {
+    // Get the provider adapter
+    let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
     };
 
-    let fields = adapter.inner().auth_fields();
+    let fields = match adapter.auth_fields().await {
+        Ok(f) => f,
+        Err(e) => return Some(json!({ "error": format!("Failed to get auth fields: {}", e) })),
+    };
     let field_json: Vec<serde_json::Value> = fields.iter().map(|f| {
         json!({
             "name": f.name.as_str(),
@@ -620,26 +687,19 @@ async fn handle_remote_authenticate(
         None => return Some(json!({ "error": "Credentials required" })),
     };
 
-    // Get or create the source
-    let adapter = match get_or_create_remote_source(state, provider).await {
+    // Get the provider adapter
+    let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
     };
 
-    // Build auth config
-    let mut auth_config = abundantis::source::AuthConfig::new();
-    for (key, value) in credentials {
-        auth_config = auth_config.with_credential(key, value);
-    }
-
     // Authenticate
-    match adapter.authenticate(&auth_config).await {
-        Ok(()) => {
-            let status = adapter.inner().auth_status().await;
+    match adapter.authenticate(credentials).await {
+        Ok(status) => {
             Some(json!({
                 "success": true,
                 "provider": provider,
-                "authStatus": format!("{}", status),
+                "authStatus": format!("{:?}", status),
             }))
         }
         Err(e) => {
@@ -669,13 +729,18 @@ async fn handle_remote_navigate(
 
     let parent = parent_scope.unwrap_or_default();
 
-    // Get or create the source
-    let adapter = match get_or_create_remote_source(state, provider).await {
+    // Get the provider adapter
+    let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
     };
 
-    match adapter.inner().list_options(level, &parent).await {
+    // Convert to protocol ScopeSelection type
+    let parent_protocol = abundantis::source::remote::ProtocolScopeSelection {
+        selections: parent.selections,
+    };
+
+    match adapter.list_scope_options(level, &parent_protocol).await {
         Ok(options) => {
             let options_json: Vec<serde_json::Value> = options.iter().map(|o| {
                 json!({
@@ -718,14 +783,17 @@ async fn handle_remote_select(
         None => return Some(json!({ "error": "Scope selection required" })),
     };
 
-    // Get or create the source
-    let adapter = match get_or_create_remote_source(state, provider).await {
+    // Get the provider adapter
+    let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
     };
 
-    // Set the scope
-    adapter.set_scope(scope);
+    // Convert to protocol ScopeSelection type and set
+    let scope_protocol = abundantis::source::remote::ProtocolScopeSelection {
+        selections: scope.selections,
+    };
+    adapter.set_scope(scope_protocol);
 
     // Try to load secrets with the new scope
     match adapter.load().await {
@@ -757,8 +825,8 @@ async fn handle_remote_refresh(
     provider: Option<&str>,
 ) -> Option<serde_json::Value> {
     if let Some(provider_id) = provider {
-        // Refresh specific provider - get or create first
-        let adapter = match get_or_create_remote_source(state, provider_id).await {
+        // Refresh specific provider
+        let adapter = match get_external_provider(state, provider_id) {
             Ok(a) => a,
             Err(e) => return Some(json!({ "error": e })),
         };
@@ -785,20 +853,20 @@ async fn handle_remote_refresh(
             }
         }
     } else {
-        // Refresh all remote sources
-        let adapters = state.core.registry.remote_sources();
+        // Refresh all external providers
+        let adapters = state.core.registry.external_providers();
         let mut results = Vec::new();
 
         for adapter in &adapters {
             adapter.invalidate_cache();
-            let provider_id = adapter.inner().provider_info().id.clone();
+            let provider_id = adapter.provider_id().to_string();
 
             match adapter.refresh().await {
                 Ok(changed) => {
                     let snapshot = adapter.load().await.ok();
                     let count = snapshot.map(|s| s.variables.len()).unwrap_or(0);
                     results.push(json!({
-                        "provider": provider_id.as_str(),
+                        "provider": provider_id,
                         "success": true,
                         "changed": changed,
                         "secretCount": count,
@@ -806,7 +874,7 @@ async fn handle_remote_refresh(
                 }
                 Err(e) => {
                     results.push(json!({
-                        "provider": provider_id.as_str(),
+                        "provider": provider_id,
                         "error": format!("{}", e),
                     }));
                 }
@@ -824,5 +892,395 @@ async fn handle_remote_refresh(
             "results": results,
             "count": results.len(),
         }))
+    }
+}
+
+// External provider command handlers (out-of-process providers)
+
+/// Lists all registered external providers with their status.
+async fn handle_provider_list(state: &ServerState) -> Option<serde_json::Value> {
+    // Use provider_manager instead of registry for external providers
+    let providers = state.provider_manager.list_with_info();
+
+    let mut provider_list = Vec::new();
+    for info in &providers {
+        provider_list.push(json!({
+            "id": info.id.as_str(),
+            "displayName": info.display_name.as_str(),
+            "shortName": info.short_name.as_str(),
+            "authStatus": format!("{:?}", info.auth_status),
+            "isAuthenticated": matches!(info.auth_status, abundantis::source::remote::AuthStatus::Authenticated { .. }),
+            "scope": info.scope.selections,
+            "secretCount": info.secret_count,
+            "loading": info.loading,
+            "lastError": info.last_error.as_ref().map(|e| e.as_str()),
+        }));
+    }
+
+    Some(json!({
+        "providers": provider_list,
+        "count": provider_list.len(),
+    }))
+}
+
+/// Spawns/starts an external provider.
+async fn handle_provider_spawn(
+    state: &ServerState,
+    provider_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    match provider.spawn().await {
+        Ok(()) => {
+            let info = provider.info();
+            Some(json!({
+                "success": true,
+                "provider": provider_id,
+                "state": format!("{:?}", provider.state()),
+                "isAuthenticated": matches!(info.auth_status, abundantis::source::remote::AuthStatus::Authenticated { .. }),
+            }))
+        }
+        Err(e) => Some(json!({
+            "error": format!("Failed to spawn provider: {}", e),
+            "provider": provider_id,
+        })),
+    }
+}
+
+/// Gets authentication fields for an external provider.
+async fn handle_provider_auth_fields(
+    state: &ServerState,
+    provider_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    match provider.auth_fields().await {
+        Ok(fields) => {
+            let field_json: Vec<serde_json::Value> = fields.iter().map(|f| {
+                json!({
+                    "name": f.name.as_str(),
+                    "label": f.label.as_str(),
+                    "description": f.description.as_ref().map(|d| d.as_str()),
+                    "required": f.required,
+                    "secret": f.secret,
+                    "envVar": f.env_var.as_ref().map(|e| e.as_str()),
+                    "default": f.default.as_ref().map(|d| d.as_str()),
+                })
+            }).collect();
+
+            Some(json!({
+                "provider": provider_id,
+                "fields": field_json,
+            }))
+        }
+        Err(e) => Some(json!({
+            "error": format!("Failed to get auth fields: {}", e),
+            "provider": provider_id,
+        })),
+    }
+}
+
+/// Authenticates with an external provider.
+async fn handle_provider_authenticate(
+    state: &ServerState,
+    provider_id: Option<&str>,
+    credentials: Option<std::collections::HashMap<String, String>>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let credentials = match credentials {
+        Some(c) => c,
+        None => return Some(json!({ "error": "Credentials required" })),
+    };
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    match provider.authenticate(credentials).await {
+        Ok(status) => {
+            let is_authenticated = status.is_authenticated();
+            Some(json!({
+                "success": is_authenticated,
+                "provider": provider_id,
+                "authStatus": format!("{:?}", status),
+                "isAuthenticated": is_authenticated,
+            }))
+        }
+        Err(e) => Some(json!({
+            "error": format!("Authentication failed: {}", e),
+            "provider": provider_id,
+        })),
+    }
+}
+
+/// Gets scope levels for an external provider.
+async fn handle_provider_scope_levels(
+    state: &ServerState,
+    provider_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    match provider.scope_levels().await {
+        Ok(levels) => {
+            let levels_json: Vec<serde_json::Value> = levels.iter().map(|l| {
+                json!({
+                    "name": l.name.as_str(),
+                    "displayName": l.display_name.as_str(),
+                    "required": l.required,
+                })
+            }).collect();
+
+            Some(json!({
+                "provider": provider_id,
+                "levels": levels_json,
+                "count": levels_json.len(),
+            }))
+        }
+        Err(e) => Some(json!({
+            "error": format!("Failed to get scope levels: {}", e),
+            "provider": provider_id,
+        })),
+    }
+}
+
+/// Lists scope options at a level for an external provider.
+async fn handle_provider_navigate(
+    state: &ServerState,
+    provider_id: Option<&str>,
+    level: Option<&str>,
+    parent_scope: Option<abundantis::source::remote::ProtocolScopeSelection>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let level = match level {
+        Some(l) => l,
+        None => return Some(json!({ "error": "Scope level required" })),
+    };
+
+    let parent = parent_scope.unwrap_or_default();
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    match provider.list_scope_options(level, &parent).await {
+        Ok(options) => {
+            let options_json: Vec<serde_json::Value> = options.iter().map(|o| {
+                json!({
+                    "id": o.id.as_str(),
+                    "displayName": o.display_name.as_str(),
+                    "description": o.description.as_ref().map(|d| d.as_str()),
+                    "icon": o.icon.as_ref().map(|i| i.as_str()),
+                })
+            }).collect();
+
+            Some(json!({
+                "provider": provider_id,
+                "level": level,
+                "options": options_json,
+                "count": options_json.len(),
+            }))
+        }
+        Err(e) => Some(json!({
+            "error": format!("Failed to list options: {}", e),
+            "provider": provider_id,
+            "level": level,
+        })),
+    }
+}
+
+/// Sets scope for an external provider.
+async fn handle_provider_select(
+    state: &ServerState,
+    provider_id: Option<&str>,
+    scope: Option<abundantis::source::remote::ProtocolScopeSelection>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let scope = match scope {
+        Some(s) => s,
+        None => return Some(json!({ "error": "Scope selection required" })),
+    };
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    // Set the scope
+    provider.set_scope(scope);
+
+    // Fetch secrets with new scope
+    match provider.fetch_secrets().await {
+        Ok(secrets) => {
+            // Register with source registry so load_all() sees the secrets
+            state
+                .core
+                .registry
+                .register_external_provider(std::sync::Arc::clone(&provider));
+
+            // Trigger refresh so other components see the new variables
+            crate::server::util::safe_refresh(
+                &state.core,
+                abundantis::RefreshOptions::preserve_all(),
+            )
+            .await;
+
+            Some(json!({
+                "success": true,
+                "provider": provider_id,
+                "secretCount": secrets.len(),
+            }))
+        }
+        Err(e) => Some(json!({
+            "error": format!("Failed to fetch secrets: {}", e),
+            "provider": provider_id,
+        })),
+    }
+}
+
+/// Refreshes secrets from an external provider.
+async fn handle_provider_refresh(
+    state: &ServerState,
+    provider_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    if let Some(provider_id) = provider_id {
+        let provider = match state.provider_manager.get(provider_id) {
+            Some(p) => p,
+            None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+        };
+
+        provider.invalidate_cache();
+
+        match provider.fetch_secrets().await {
+            Ok(secrets) => {
+                // Re-register to ensure latest adapter state is in registry
+                state
+                    .core
+                    .registry
+                    .register_external_provider(std::sync::Arc::clone(&provider));
+
+                crate::server::util::safe_refresh(
+                    &state.core,
+                    abundantis::RefreshOptions::preserve_all(),
+                )
+                .await;
+
+                Some(json!({
+                    "success": true,
+                    "provider": provider_id,
+                    "secretCount": secrets.len(),
+                }))
+            }
+            Err(e) => Some(json!({
+                "error": format!("Failed to refresh: {}", e),
+                "provider": provider_id,
+            })),
+        }
+    } else {
+        // Refresh all external providers
+        let providers = state.provider_manager.list();
+        let mut results = Vec::new();
+
+        for provider in &providers {
+            provider.invalidate_cache();
+            let id = provider.provider_id().to_string();
+
+            match provider.fetch_secrets().await {
+                Ok(secrets) => {
+                    // Register each provider with the registry
+                    state
+                        .core
+                        .registry
+                        .register_external_provider(std::sync::Arc::clone(provider));
+
+                    results.push(json!({
+                        "provider": id,
+                        "success": true,
+                        "secretCount": secrets.len(),
+                    }));
+                }
+                Err(e) => {
+                    results.push(json!({
+                        "provider": id,
+                        "error": format!("{}", e),
+                    }));
+                }
+            }
+        }
+
+        crate::server::util::safe_refresh(
+            &state.core,
+            abundantis::RefreshOptions::preserve_all(),
+        )
+        .await;
+
+        Some(json!({
+            "results": results,
+            "count": results.len(),
+        }))
+    }
+}
+
+/// Shuts down an external provider.
+async fn handle_provider_shutdown(
+    state: &ServerState,
+    provider_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let provider_id = match provider_id {
+        Some(p) => p,
+        None => return Some(json!({ "error": "Provider ID required" })),
+    };
+
+    let provider = match state.provider_manager.get(provider_id) {
+        Some(p) => p,
+        None => return Some(json!({ "error": format!("Unknown provider: {}", provider_id) })),
+    };
+
+    match provider.shutdown().await {
+        Ok(()) => Some(json!({
+            "success": true,
+            "provider": provider_id,
+        })),
+        Err(e) => Some(json!({
+            "error": format!("Failed to shutdown: {}", e),
+            "provider": provider_id,
+        })),
     }
 }

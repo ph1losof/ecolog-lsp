@@ -5,6 +5,48 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Configuration for a single external provider
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ProviderConfig {
+    /// Whether this provider is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Override binary path for this provider
+    #[serde(default)]
+    pub binary: Option<String>,
+}
+
+/// Configuration for external providers
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProvidersConfig {
+    /// Directory containing provider binaries
+    #[serde(default = "default_providers_path")]
+    pub path: String,
+    /// Individual provider configurations (keyed by provider name)
+    #[serde(flatten)]
+    pub providers: std::collections::HashMap<String, ProviderConfig>,
+}
+
+fn default_providers_path() -> String {
+    // Use XDG_DATA_HOME or fall back to ~/.local/share
+    std::env::var("XDG_DATA_HOME")
+        .map(|xdg| format!("{}/ecolog/providers", xdg))
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|home| format!("{}/.local/share/ecolog/providers", home))
+                .unwrap_or_else(|_| "~/.local/share/ecolog/providers".to_string())
+        })
+}
+
+impl Default for ProvidersConfig {
+    fn default() -> Self {
+        Self {
+            path: default_providers_path(),
+            providers: std::collections::HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[derive(Default)]
 pub struct EcologConfig {
@@ -24,6 +66,8 @@ pub struct EcologConfig {
     pub cache: abundantis::config::CacheConfig,
     #[serde(default)]
     pub sources: abundantis::config::SourcesConfig,
+    #[serde(default)]
+    pub providers: ProvidersConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -287,6 +331,11 @@ impl ConfigManager {
     pub async fn get_interpolation_enabled(&self) -> bool {
         let lock = self.config.read().await;
         lock.interpolation.enabled
+    }
+
+    pub async fn get_providers_config(&self) -> ProvidersConfig {
+        let lock = self.config.read().await;
+        lock.providers.clone()
     }
 }
 

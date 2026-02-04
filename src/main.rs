@@ -3,9 +3,6 @@ use std::sync::Arc;
 use tower_lsp::{LspService, Server};
 use tracing_subscriber::EnvFilter;
 
-#[cfg(feature = "doppler")]
-use abundantis::source::remote::providers::DopplerSourceFactory;
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -30,9 +27,8 @@ async fn main() {
     let config = config_result.expect("Failed to load configuration");
     let core = core_result.expect("Failed to initialize Ecolog core");
 
-    // Register remote source factories
-    #[cfg(feature = "doppler")]
-    core.registry.register_remote_factory(Arc::new(DopplerSourceFactory));
+    // External providers are now managed via JSON-RPC.
+    // Use `ecolog.provider.spawn` command to start a provider.
 
     let abundantis_config = config.to_abundantis_config();
     core.resolution

@@ -2,6 +2,7 @@
 
 
 
+use abundantis::source::remote::ProviderManager;
 use abundantis::Abundantis;
 use ecolog_lsp::analysis::{
     DocumentManager, ModuleResolver, QueryEngine, WorkspaceIndex, WorkspaceIndexer,
@@ -47,6 +48,9 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
         temp_dir.to_path_buf(),
     ));
 
+    let providers_config = abundantis::config::ProvidersConfig::default();
+    let provider_manager = Arc::new(ProviderManager::new(providers_config));
+
     ServerState::new(
         document_manager,
         languages,
@@ -55,6 +59,7 @@ async fn setup_test_state(temp_dir: &std::path::Path) -> ServerState {
         workspace_index,
         indexer,
         module_resolver,
+        provider_manager,
     )
 }
 

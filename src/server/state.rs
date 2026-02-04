@@ -9,6 +9,7 @@ use crate::analysis::{
 use crate::languages::LanguageRegistry;
 use crate::server::config::ConfigManager;
 use crate::server::services::{DocumentService, EnvService, WorkspaceService};
+use abundantis::source::remote::ProviderManager;
 use abundantis::Abundantis;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,6 +48,8 @@ pub struct ServerState {
     pub indexer: Arc<WorkspaceIndexer>,
     /// Direct access to module resolver (prefer using `workspace` service).
     pub module_resolver: Arc<ModuleResolver>,
+    /// External provider manager for out-of-process providers.
+    pub provider_manager: Arc<ProviderManager>,
 }
 
 impl ServerState {
@@ -59,6 +62,7 @@ impl ServerState {
         workspace_index: Arc<WorkspaceIndex>,
         indexer: Arc<WorkspaceIndexer>,
         module_resolver: Arc<ModuleResolver>,
+        provider_manager: Arc<ProviderManager>,
     ) -> Self {
         // Create services wrapping the underlying components
         let documents = DocumentService::new(Arc::clone(&document_manager));
@@ -82,6 +86,7 @@ impl ServerState {
             workspace_index,
             indexer,
             module_resolver,
+            provider_manager,
         }
     }
 
@@ -112,6 +117,10 @@ impl ServerState {
             workspace_root,
         ));
 
+        // Create provider manager with default config
+        let providers_config = abundantis::config::ProvidersConfig::default();
+        let provider_manager = Arc::new(ProviderManager::new(providers_config));
+
         Self::new(
             document_manager,
             languages,
@@ -120,6 +129,7 @@ impl ServerState {
             workspace_index,
             indexer,
             module_resolver,
+            provider_manager,
         )
     }
 }
