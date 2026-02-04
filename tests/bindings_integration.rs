@@ -1,3 +1,4 @@
+use abundantis::source::remote::ProviderManager;
 use abundantis::Abundantis;
 use ecolog_lsp::analysis::{
     DocumentManager, ModuleResolver, QueryEngine, WorkspaceIndex, WorkspaceIndexer,
@@ -57,6 +58,9 @@ async fn test_bindings_integration() {
         temp_dir.clone(),
     ));
 
+    let providers_config = abundantis::config::ProvidersConfig::default();
+    let provider_manager = Arc::new(ProviderManager::new(providers_config));
+
     let state = ServerState::new(
         document_manager,
         languages,
@@ -65,9 +69,10 @@ async fn test_bindings_integration() {
         workspace_index,
         indexer,
         module_resolver,
+        provider_manager,
     );
 
-    
+
     let js_path = temp_dir.join("bracket.js");
     let js_content = r#"
 const a = process.env['JSON_BLOB'];
@@ -318,6 +323,9 @@ async fn test_destructuring_diagnostics() {
         temp_dir.clone(),
     ));
 
+    let providers_config = abundantis::config::ProvidersConfig::default();
+    let provider_manager = Arc::new(ProviderManager::new(providers_config));
+
     let state = ServerState::new(
         document_manager,
         languages,
@@ -326,9 +334,10 @@ async fn test_destructuring_diagnostics() {
         workspace_index,
         indexer,
         module_resolver,
+        provider_manager,
     );
 
-    
+
     let js_direct = temp_dir.join("direct.js");
     let js_direct_content = "const a = process.env.UNDEFINED_VAR;";
     let mut f = File::create(&js_direct).unwrap();

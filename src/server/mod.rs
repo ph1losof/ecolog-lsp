@@ -237,6 +237,95 @@ impl LspServer {
             self.client.publish_diagnostics(uri, diagnostics, None).await;
         }
     }
+
+    /// Spawn external providers based on configuration
+    async fn spawn_configured_providers(&self, providers_config: &config::ProvidersConfig) {
+        use std::path::PathBuf;
+
+        let providers_path = PathBuf::from(&providers_config.path);
+
+        // Debug logging
+        self.client
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "Provider config - path: {}, providers: {:?}",
+                    providers_config.path,
+                    providers_config.providers.keys().collect::<Vec<_>>()
+                ),
+            )
+            .await;
+
+        if providers_config.providers.is_empty() {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    "No external providers configured".to_string(),
+                )
+                .await;
+            return;
+        }
+
+        for (name, provider_config) in &providers_config.providers {
+            // Skip "path" key which is the directory path, not a provider
+            if name == "path" {
+                continue;
+            }
+
+            tracing::info!("Processing provider '{}': enabled={}", name, provider_config.enabled);
+
+            if !provider_config.enabled {
+                tracing::info!("Provider '{}' is disabled, skipping", name);
+                continue;
+            }
+
+            // Determine binary path - if not explicitly set, construct from providers_path
+            let binary_path = if let Some(ref custom_path) = provider_config.binary {
+                PathBuf::from(custom_path)
+            } else {
+                // Construct the binary path from providers_path + provider name
+                providers_path.join(format!("ecolog-provider-{}", name))
+            };
+
+            tracing::info!("Provider '{}' binary path: {}", name, binary_path.display());
+
+            // Check if binary exists
+            if !binary_path.exists() {
+                tracing::warn!(
+                    "Provider '{}' binary not found at: {}",
+                    name,
+                    binary_path.display()
+                );
+                continue;
+            }
+
+            tracing::info!("Spawning provider '{}' from: {}", name, binary_path.display());
+
+            // Build the ExternalProviderConfig for abundantis
+            let ext_config = abundantis::config::ExternalProviderConfig {
+                enabled: true,
+                binary: Some(binary_path.clone()),
+                spawn: abundantis::config::SpawnStrategy::Eager,
+                settings: std::collections::HashMap::new(),
+            };
+
+            // Register and spawn the provider
+            tracing::info!("Calling register for provider '{}'", name);
+            match self
+                .state
+                .provider_manager
+                .register(name, ext_config)
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!("Successfully registered provider '{}'", name);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to register provider '{}': {}", name, e);
+                }
+            }
+        }
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -292,13 +381,23 @@ impl LanguageServer for LspServer {
                         "ecolog.interpolation.get".to_string(),
                         "ecolog.source.list".to_string(),
                         "ecolog.source.setPrecedence".to_string(),
-                        // Remote source commands
+                        // Remote source commands (legacy)
                         "ecolog.source.remote.list".to_string(),
                         "ecolog.source.remote.authFields".to_string(),
                         "ecolog.source.remote.authenticate".to_string(),
                         "ecolog.source.remote.navigate".to_string(),
                         "ecolog.source.remote.select".to_string(),
                         "ecolog.source.remote.refresh".to_string(),
+                        // External provider commands
+                        "ecolog.provider.list".to_string(),
+                        "ecolog.provider.spawn".to_string(),
+                        "ecolog.provider.authFields".to_string(),
+                        "ecolog.provider.authenticate".to_string(),
+                        "ecolog.provider.scopeLevels".to_string(),
+                        "ecolog.provider.navigate".to_string(),
+                        "ecolog.provider.select".to_string(),
+                        "ecolog.provider.refresh".to_string(),
+                        "ecolog.provider.shutdown".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
@@ -330,6 +429,16 @@ impl LanguageServer for LspServer {
                 .core
                 .resolution
                 .update_interpolation_config(cfg.interpolation.clone());
+
+            // Debug: log providers config
+            tracing::info!(
+                "Providers config - path: {}, providers: {:?}",
+                cfg.providers.path,
+                cfg.providers.providers.keys().collect::<Vec<_>>()
+            );
+
+            // Spawn enabled external providers
+            self.spawn_configured_providers(&cfg.providers).await;
         }
 
         self.client
