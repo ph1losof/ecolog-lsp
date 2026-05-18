@@ -1,7 +1,7 @@
 use crate::analysis::{
-    AnalysisPipeline, BindingGraph, BindingResolver, CrossModuleResolution, CrossModuleResolver,
+    AnalysisPipeline, BindingGraph, BindingResolver, CrossModuleResolution,
 };
-use crate::server::handlers::util::{get_identifier_at_position, korni_span_to_range, KorniEntryExt};
+use crate::server::handlers::util::{create_cross_resolver, get_identifier_at_position, korni_span_to_range, KorniEntryExt};
 use crate::server::state::ServerState;
 use crate::types::ImportContext;
 use korni::ParseOptions;
@@ -130,11 +130,7 @@ async fn get_env_var_from_cross_module(
         return None;
     }
 
-    let cross_resolver = CrossModuleResolver::new(
-        state.workspace_index.clone(),
-        state.module_resolver.clone(),
-        state.languages.clone(),
-    );
+    let cross_resolver = create_cross_resolver(state);
 
     let is_default = original_name == identifier_name;
 

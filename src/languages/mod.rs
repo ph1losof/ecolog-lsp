@@ -2,6 +2,163 @@ use crate::types::{EnvSourceKind, ScopeKind};
 use compact_str::CompactString;
 use tree_sitter::{Language, Node, Query};
 
+macro_rules! define_language_queries {
+    ($lang_name:literal, $queries_dir:literal) => {
+        static REFERENCE_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static BINDING_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static COMPLETION_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static IMPORT_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static REASSIGNMENT_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static IDENTIFIER_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static ASSIGNMENT_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static DESTRUCTURE_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static SCOPE_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+        static EXPORT_QUERY: ::std::sync::OnceLock<::tree_sitter::Query> =
+            ::std::sync::OnceLock::new();
+
+        fn compile_query(
+            grammar: &::tree_sitter::Language,
+            source: &str,
+            query_name: &str,
+        ) -> ::tree_sitter::Query {
+            match ::tree_sitter::Query::new(grammar, source) {
+                Ok(query) => query,
+                Err(e) => {
+                    ::tracing::error!(
+                        language = $lang_name,
+                        query = query_name,
+                        error = %e,
+                        "Failed to compile query, using empty fallback"
+                    );
+                    ::tree_sitter::Query::new(grammar, "").unwrap_or_else(|_| {
+                        panic!(
+                            "Failed to create empty fallback query for {} {}",
+                            $lang_name, query_name
+                        )
+                    })
+                }
+            }
+        }
+    };
+}
+
+macro_rules! impl_language_queries {
+    ($queries_dir:literal) => {
+        fn reference_query(&self) -> &::tree_sitter::Query {
+            REFERENCE_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/references.scm")),
+                    "references",
+                )
+            })
+        }
+
+        fn binding_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(BINDING_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/bindings.scm")),
+                    "bindings",
+                )
+            }))
+        }
+
+        fn completion_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(COMPLETION_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/completion.scm")),
+                    "completion",
+                )
+            }))
+        }
+
+        fn import_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(IMPORT_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/imports.scm")),
+                    "imports",
+                )
+            }))
+        }
+
+        fn reassignment_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(REASSIGNMENT_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!(
+                        "../../queries/",
+                        $queries_dir,
+                        "/reassignments.scm"
+                    )),
+                    "reassignments",
+                )
+            }))
+        }
+
+        fn identifier_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(IDENTIFIER_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/identifiers.scm")),
+                    "identifiers",
+                )
+            }))
+        }
+
+        fn assignment_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(ASSIGNMENT_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/assignments.scm")),
+                    "assignments",
+                )
+            }))
+        }
+
+        fn destructure_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(DESTRUCTURE_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/destructures.scm")),
+                    "destructures",
+                )
+            }))
+        }
+
+        fn scope_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(SCOPE_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/scopes.scm")),
+                    "scopes",
+                )
+            }))
+        }
+
+        fn export_query(&self) -> Option<&::tree_sitter::Query> {
+            Some(EXPORT_QUERY.get_or_init(|| {
+                compile_query(
+                    &self.grammar(),
+                    include_str!(concat!("../../queries/", $queries_dir, "/exports.scm")),
+                    "exports",
+                )
+            }))
+        }
+    };
+}
+
 pub mod bash;
 pub mod c;
 pub mod cpp;

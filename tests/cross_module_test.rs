@@ -101,7 +101,7 @@ a;"#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -176,7 +176,7 @@ async fn test_export_extraction() {
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -332,7 +332,7 @@ async fn test_destructured_export_extraction() {
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -402,7 +402,7 @@ async fn test_aliased_destructured_export_extraction() {
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -474,7 +474,7 @@ async fn test_env_object_export_extraction() {
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -540,7 +540,7 @@ DB_URL;"#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -628,7 +628,7 @@ env.SECRET_KEY;"#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let test_uri = Url::from_file_path(&test_path).unwrap();
@@ -707,7 +707,7 @@ dbUrl;"#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -802,7 +802,7 @@ env."#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let test_uri = Url::from_file_path(&test_path).unwrap();
@@ -905,7 +905,7 @@ dbUrl;"#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let config_uri = Url::from_file_path(&config_path).unwrap();
@@ -1016,7 +1016,7 @@ x;"#;
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let app_uri = Url::from_file_path(&app_path).unwrap();
@@ -1091,7 +1091,7 @@ async fn test_wildcard_reexport_cycle_detection() {
 
     
     let config = default_config();
-    state.indexer.index_workspace(&config.workspace.env_files).await.unwrap();
+    state.indexer.index_workspace(&config.workspace.env_files, &config.indexing).await.unwrap();
 
     
     let resolver = CrossModuleResolver::new(

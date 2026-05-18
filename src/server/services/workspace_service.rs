@@ -209,7 +209,9 @@ impl WorkspaceService {
 
     /// Starts indexing the workspace.
     pub async fn index_workspace(&self, config: &EcologConfig) -> anyhow::Result<()> {
-        self.indexer.index_workspace(&config.workspace.env_files).await
+        self.indexer
+            .index_workspace(&config.workspace.env_files, &config.indexing)
+            .await
     }
 
     /// Handles a file change event.

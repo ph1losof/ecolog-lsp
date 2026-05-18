@@ -121,7 +121,7 @@ impl TestFixture {
         let config = EcologConfig::default();
         self.state
             .indexer
-            .index_workspace(&config.workspace.env_files)
+            .index_workspace(&config.workspace.env_files, &config.indexing)
             .await
             .expect("Failed to index workspace");
     }

@@ -1,3 +1,4 @@
+use parking_lot::RwLock as ParkingRwLock;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -48,6 +49,86 @@ impl Default for ProvidersConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct IndexingConfig {
+    #[serde(default = "default_exclude_patterns")]
+    pub exclude: Vec<String>,
+    #[serde(default = "default_max_files")]
+    pub max_files: usize,
+    #[serde(default = "default_max_file_size")]
+    pub max_file_size: u64,
+    #[serde(default = "default_max_depth")]
+    pub max_depth: usize,
+}
+
+fn default_exclude_patterns() -> Vec<String> {
+    vec![
+        "node_modules".to_string(),
+        ".git".to_string(),
+        "target".to_string(),
+        "dist".to_string(),
+        "build".to_string(),
+        ".next".to_string(),
+        "__pycache__".to_string(),
+        "vendor".to_string(),
+        ".venv".to_string(),
+        "out".to_string(),
+        ".cache".to_string(),
+        ".tox".to_string(),
+        "coverage".to_string(),
+    ]
+}
+
+fn default_max_files() -> usize {
+    5000
+}
+
+fn default_max_file_size() -> u64 {
+    1_048_576
+}
+
+fn default_max_depth() -> usize {
+    30
+}
+
+impl Default for IndexingConfig {
+    fn default() -> Self {
+        Self {
+            exclude: default_exclude_patterns(),
+            max_files: default_max_files(),
+            max_file_size: default_max_file_size(),
+            max_depth: default_max_depth(),
+        }
+    }
+}
+
+pub struct CompiledEnvPatterns {
+    patterns: Vec<glob::Pattern>,
+}
+
+impl CompiledEnvPatterns {
+    pub fn compile(raw: &[impl AsRef<str>]) -> Self {
+        Self {
+            patterns: raw
+                .iter()
+                .filter_map(|p| glob::Pattern::new(p.as_ref()).ok())
+                .collect(),
+        }
+    }
+
+    pub fn matches(&self, file_name: &str) -> bool {
+        self.patterns.iter().any(|p| p.matches(file_name))
+    }
+}
+
+impl Default for CompiledEnvPatterns {
+    fn default() -> Self {
+        Self {
+            patterns: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[derive(Default)]
 pub struct EcologConfig {
     #[serde(default)]
@@ -68,6 +149,8 @@ pub struct EcologConfig {
     pub sources: abundantis::config::SourcesConfig,
     #[serde(default)]
     pub providers: ProvidersConfig,
+    #[serde(default)]
+    pub indexing: IndexingConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -201,6 +284,7 @@ pub struct ConfigManager {
     /// Cached feature flags for lock-free access.
     /// Updated whenever config is loaded or updated.
     pub cached_features: CachedFeatureFlags,
+    cached_env_patterns: ParkingRwLock<CompiledEnvPatterns>,
 }
 
 impl Default for ConfigManager {
@@ -211,11 +295,26 @@ impl Default for ConfigManager {
 
 impl ConfigManager {
     pub fn new() -> Self {
+        let default_config = EcologConfig::default();
+        let initial_patterns =
+            CompiledEnvPatterns::compile(&default_config.workspace.env_files);
         Self {
-            config: Arc::new(RwLock::new(EcologConfig::default())),
+            config: Arc::new(RwLock::new(default_config)),
             init_settings: Arc::new(RwLock::new(None)),
             cached_features: CachedFeatureFlags::new(),
+            cached_env_patterns: ParkingRwLock::new(initial_patterns),
         }
+    }
+
+    #[inline]
+    pub fn is_env_file(&self, file_name: &str) -> bool {
+        self.cached_env_patterns.read().matches(file_name)
+    }
+
+    pub async fn refresh_env_patterns(&self) {
+        let config = self.config.read().await;
+        *self.cached_env_patterns.write() =
+            CompiledEnvPatterns::compile(&config.workspace.env_files);
     }
 
     /// Check if hover feature is enabled (lock-free).
@@ -288,6 +387,10 @@ impl ConfigManager {
         // Update cached feature flags for lock-free access
         self.cached_features.update_from(&config.features);
 
+        // Update cached env file patterns
+        *self.cached_env_patterns.write() =
+            CompiledEnvPatterns::compile(&config.workspace.env_files);
+
         let mut lock = self.config.write().await;
         *lock = config.clone();
 
@@ -308,6 +411,10 @@ impl ConfigManager {
     pub async fn update(&self, new_config: EcologConfig) {
         // Update cached feature flags for lock-free access
         self.cached_features.update_from(&new_config.features);
+
+        // Update cached env file patterns
+        *self.cached_env_patterns.write() =
+            CompiledEnvPatterns::compile(&new_config.workspace.env_files);
 
         let mut lock = self.config.write().await;
         *lock = new_config;

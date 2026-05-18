@@ -1,8 +1,17 @@
+use crate::analysis::CrossModuleResolver;
 use crate::server::state::ServerState;
 use abundantis::source::VariableSource;
 use std::path::Path;
 use std::time::Instant;
 use tower_lsp::lsp_types::{Position, Range, Url};
+
+pub(crate) fn create_cross_resolver(state: &ServerState) -> CrossModuleResolver {
+    CrossModuleResolver::new(
+        state.workspace_index.clone(),
+        state.module_resolver.clone(),
+        state.languages.clone(),
+    )
+}
 
 pub(crate) fn format_source(source: &VariableSource, root: &Path) -> String {
     match source {

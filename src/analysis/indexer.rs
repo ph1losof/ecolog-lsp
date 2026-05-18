@@ -6,6 +6,7 @@
 use crate::analysis::workspace_index::{FileIndexEntry, WorkspaceIndex};
 use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver, QueryEngine};
 use crate::languages::LanguageRegistry;
+use crate::server::config::IndexingConfig;
 use crate::types::{
     ExportResolution, FileExportEntry, ImportContext, KorniEntryExt, SymbolId, SymbolOrigin,
 };
@@ -64,13 +65,16 @@ impl WorkspaceIndexer {
     
     
     
-    pub async fn index_workspace(&self, env_files: &[CompactString]) -> Result<()> {
+    pub async fn index_workspace(
+        &self,
+        env_files: &[CompactString],
+        indexing_config: &IndexingConfig,
+    ) -> Result<()> {
         info!("Starting workspace indexing at {:?}", self.workspace_root);
 
         self.workspace_index.set_indexing(true);
 
-
-        let files = self.discover_files(env_files).await;
+        let files = self.discover_files(env_files, indexing_config).await;
         let file_count = files.len();
         info!("Discovered {} files to index", file_count);
 
@@ -143,9 +147,12 @@ impl WorkspaceIndexer {
     }
 
     
-    async fn discover_files(&self, env_files: &[CompactString]) -> Vec<PathBuf> {
+    async fn discover_files(
+        &self,
+        env_files: &[CompactString],
+        indexing_config: &IndexingConfig,
+    ) -> Vec<PathBuf> {
         let mut files = Vec::new();
-
 
         let extensions: Vec<&str> = self
             .languages
@@ -155,28 +162,61 @@ impl WorkspaceIndexer {
             .copied()
             .collect();
 
-
         let env_patterns: Vec<glob::Pattern> = env_files
             .iter()
             .filter_map(|p| glob::Pattern::new(p).ok())
             .collect();
 
-        
-        let walker = ignore::WalkBuilder::new(&self.workspace_root)
-            .hidden(false) 
-            .git_ignore(true) 
-            .git_global(true) 
-            .git_exclude(true) 
-            .require_git(false) 
-            .build();
+        let mut builder = ignore::WalkBuilder::new(&self.workspace_root);
+        builder
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .require_git(false);
+
+        if indexing_config.max_depth > 0 {
+            builder.max_depth(Some(indexing_config.max_depth));
+        }
+
+        if !indexing_config.exclude.is_empty() {
+            let mut overrides =
+                ignore::overrides::OverrideBuilder::new(&self.workspace_root);
+            for pattern in &indexing_config.exclude {
+                let _ = overrides.add(&format!("!{}/**", pattern));
+            }
+            if let Ok(built) = overrides.build() {
+                builder.overrides(built);
+            }
+        }
+
+        let walker = builder.build();
+        let max_files = indexing_config.max_files;
+        let max_file_size = indexing_config.max_file_size;
 
         for entry in walker.flatten() {
+            if max_files > 0 && files.len() >= max_files {
+                warn!(
+                    "Reached max_files limit ({}). Increase [indexing].max_files or add exclusions in ecolog.toml",
+                    max_files
+                );
+                break;
+            }
+
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
 
-            
+            if max_file_size > 0 {
+                if let Ok(metadata) = entry.metadata() {
+                    if metadata.len() > max_file_size {
+                        debug!("Skipping large file {:?} ({} bytes)", path, metadata.len());
+                        continue;
+                    }
+                }
+            }
+
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if extensions.contains(&ext) {
                     files.push(path.to_path_buf());
@@ -184,7 +224,6 @@ impl WorkspaceIndexer {
                 }
             }
 
-            
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if env_patterns.iter().any(|p| p.matches(name)) {
                     files.push(path.to_path_buf());
@@ -255,7 +294,7 @@ impl WorkspaceIndexer {
         };
 
         env_files.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
+            glob::Pattern::new(pattern.as_str())
                 .map(|p| p.matches(name))
                 .unwrap_or(false)
         })
@@ -586,6 +625,13 @@ mod tests {
         ]
     }
 
+    fn default_indexing_config() -> IndexingConfig {
+        IndexingConfig {
+            exclude: vec![],
+            ..IndexingConfig::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_index_env_file() {
         let temp_dir = TempDir::new().unwrap();
@@ -596,7 +642,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_env_files()).await.unwrap();
+        indexer.index_workspace(&default_env_files(), &default_indexing_config()).await.unwrap();
 
         let stats = indexer.index().stats();
         assert_eq!(stats.total_files, 1);
@@ -617,7 +663,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_env_files()).await.unwrap();
+        indexer.index_workspace(&default_env_files(), &default_indexing_config()).await.unwrap();
 
         let stats = indexer.index().stats();
         assert_eq!(stats.total_files, 1);
@@ -641,7 +687,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_env_files()).await.unwrap();
+        indexer.index_workspace(&default_env_files(), &default_indexing_config()).await.unwrap();
 
         let stats = indexer.index().stats();
         assert_eq!(stats.total_files, 4);
@@ -659,7 +705,7 @@ mod tests {
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
         let env_files = default_env_files();
-        indexer.index_workspace(&env_files).await.unwrap();
+        indexer.index_workspace(&env_files, &default_indexing_config()).await.unwrap();
 
 
         assert!(!indexer.index().files_for_env_var("VAR1").is_empty());
@@ -681,7 +727,7 @@ mod tests {
         create_file(temp_dir.path(), "test.js", "const x = process.env.VAR1;");
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_env_files()).await.unwrap();
+        indexer.index_workspace(&default_env_files(), &default_indexing_config()).await.unwrap();
 
         assert!(!indexer.index().files_for_env_var("VAR1").is_empty());
 
@@ -713,7 +759,7 @@ mod tests {
         );
 
         let indexer = setup_test_indexer(temp_dir.path()).await;
-        indexer.index_workspace(&default_env_files()).await.unwrap();
+        indexer.index_workspace(&default_env_files(), &default_indexing_config()).await.unwrap();
 
         
         assert!(!indexer.index().files_for_env_var("INCLUDED").is_empty());

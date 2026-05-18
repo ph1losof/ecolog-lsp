@@ -1,6 +1,6 @@
-use crate::analysis::{CrossModuleResolution, CrossModuleResolver};
+use crate::analysis::CrossModuleResolution;
 use crate::server::handlers::util::{
-    format_hover_markdown, get_identifier_at_position, resolve_env_var_value,
+    create_cross_resolver, format_hover_markdown, get_identifier_at_position, resolve_env_var_value,
 };
 use crate::server::state::ServerState;
 use crate::types::ImportContext;
@@ -159,11 +159,7 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
         return None;
     }
 
-    let cross_resolver = CrossModuleResolver::new(
-        state.workspace_index.clone(),
-        state.module_resolver.clone(),
-        state.languages.clone(),
-    );
+    let cross_resolver = create_cross_resolver(state);
 
     let is_default = original_name == module_path;
 
@@ -226,11 +222,7 @@ async fn handle_hover_on_imported_env_object_property(
         return None;
     }
 
-    let cross_resolver = CrossModuleResolver::new(
-        state.workspace_index.clone(),
-        state.module_resolver.clone(),
-        state.languages.clone(),
-    );
+    let cross_resolver = create_cross_resolver(state);
 
     let is_default = original_name == module_path;
 

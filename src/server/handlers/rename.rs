@@ -118,13 +118,7 @@ async fn is_env_file_uri(state: &ServerState, uri: &Url) -> bool {
         None => return false,
     };
 
-    let config = state.config.get_config();
-    let config = config.read().await;
-    config.workspace.env_files.iter().any(|pattern| {
-        glob::Pattern::new(pattern)
-            .map(|p| p.matches(&file_name))
-            .unwrap_or(false)
-    })
+    state.config.is_env_file(&file_name)
 }
 
 async fn get_env_var_in_env_file(

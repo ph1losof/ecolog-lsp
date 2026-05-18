@@ -99,6 +99,8 @@ async fn test_scenario_env_syntax_diagnostics() {
         let config_arc = manager.get_config();
         let mut config = config_arc.write().await;
         config.workspace.env_files.push(".env.bad".into());
+        drop(config);
+        manager.refresh_env_patterns().await;
     }
 
     fixture
@@ -324,6 +326,8 @@ async fn test_scenario_forbidden_whitespace() {
         let config_arc = manager.get_config();
         let mut config = config_arc.write().await;
         config.workspace.env_files.push(".env.bad".into());
+        drop(config);
+        manager.refresh_env_patterns().await;
     }
 
     fixture

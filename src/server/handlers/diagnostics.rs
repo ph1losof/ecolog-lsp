@@ -1,6 +1,9 @@
 use crate::server::handlers::util::get_line_col;
 use crate::server::state::ServerState;
+use compact_str::CompactString;
+use futures::future::join_all;
 use korni::{Error as KorniError, ParseOptions};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::time::Instant;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
@@ -84,15 +87,7 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let is_env_file = {
-        let config = state.config.get_config();
-        let config = config.read().await;
-        config.workspace.env_files.iter().any(|pattern| {
-            glob::Pattern::new(pattern)
-                .map(|p| p.matches(&file_name))
-                .unwrap_or(false)
-        })
-    };
+    let is_env_file = state.config.is_env_file(&file_name);
 
     if is_env_file {
         let entries = korni::parse_with_options(&content, ParseOptions::full());
@@ -165,12 +160,34 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
             });
         }
 
-        for reference in references {
-            let resolved =
-                crate::server::util::safe_get_for_file(&state.core, &reference.name, &file_path)
-                    .await;
+        // Collect all unique env var names from all three sources
+        let mut all_names: FxHashSet<CompactString> = FxHashSet::default();
+        for reference in &references {
+            all_names.insert(reference.name.clone());
+        }
+        for (env_name, _) in &env_var_symbols {
+            all_names.insert(env_name.clone());
+        }
+        for (env_name, _) in &property_accesses {
+            all_names.insert(env_name.clone());
+        }
 
-            if resolved.is_none() {
+        // Resolve all env vars in parallel
+        let names_vec: Vec<CompactString> = all_names.into_iter().collect();
+        let resolution_futures = names_vec.iter().map(|name| {
+            crate::server::util::safe_get_for_file(&state.core, name, &file_path)
+        });
+        let results = join_all(resolution_futures).await;
+
+        let resolved_map: FxHashMap<CompactString, bool> = names_vec
+            .into_iter()
+            .zip(results)
+            .map(|(name, result)| (name, result.is_some()))
+            .collect();
+
+        // Build diagnostics using the pre-resolved map
+        for reference in references {
+            if !resolved_map.get(&reference.name).copied().unwrap_or(false) {
                 diagnostics.push(Diagnostic {
                     range: reference.name_range,
                     severity: Some(DiagnosticSeverity::WARNING),
@@ -183,10 +200,7 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
         }
 
         for (env_name, range) in env_var_symbols {
-            let resolved =
-                crate::server::util::safe_get_for_file(&state.core, &env_name, &file_path).await;
-
-            if resolved.is_none() {
+            if !resolved_map.get(&env_name).copied().unwrap_or(false) {
                 diagnostics.push(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::WARNING),
@@ -199,10 +213,7 @@ pub async fn compute_diagnostics(uri: &Url, state: &ServerState) -> Vec<Diagnost
         }
 
         for (env_name, range) in property_accesses {
-            let resolved =
-                crate::server::util::safe_get_for_file(&state.core, &env_name, &file_path).await;
-
-            if resolved.is_none() {
+            if !resolved_map.get(&env_name).copied().unwrap_or(false) {
                 diagnostics.push(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::WARNING),

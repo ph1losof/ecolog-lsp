@@ -1,5 +1,5 @@
-use crate::analysis::{CrossModuleResolution, CrossModuleResolver};
-use crate::server::handlers::util::format_source;
+use crate::analysis::CrossModuleResolution;
+use crate::server::handlers::util::{create_cross_resolver, format_source};
 use crate::server::state::ServerState;
 use std::time::Instant;
 use tower_lsp::lsp_types::{
@@ -140,11 +140,7 @@ async fn check_imported_env_object_completion(
         return false;
     }
 
-    let cross_resolver = CrossModuleResolver::new(
-        state.workspace_index.clone(),
-        state.module_resolver.clone(),
-        state.languages.clone(),
-    );
+    let cross_resolver = create_cross_resolver(state);
 
     let is_default = original_name == module_path;
 

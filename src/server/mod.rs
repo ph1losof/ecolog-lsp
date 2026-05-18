@@ -159,15 +159,7 @@ impl LspServer {
         let mtime = SystemTime::now();
 
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let is_env_file = {
-            let config = state.config.get_config();
-            let config = config.read().await;
-            config.workspace.env_files.iter().any(|pattern| {
-                glob::Pattern::new(pattern.as_str())
-                    .map(|p| p.matches(file_name))
-                    .unwrap_or(false)
-            })
-        };
+        let is_env_file = state.config.is_env_file(file_name);
 
         let env_vars: FxHashSet<CompactString> = if is_env_file {
             let vars = if let Some(doc) = state.document_manager.get(uri) {
@@ -476,16 +468,16 @@ impl LanguageServer for LspServer {
         let client = self.client.clone();
 
         tokio::spawn(async move {
-            let env_files = {
+            let (env_files, indexing_config) = {
                 let config = config.read().await;
-                config.workspace.env_files.clone()
+                (config.workspace.env_files.clone(), config.indexing.clone())
             };
             info!("Starting background workspace indexing...");
             client
                 .log_message(MessageType::INFO, "Starting workspace indexing...")
                 .await;
 
-            if let Err(e) = indexer.index_workspace(&env_files).await {
+            if let Err(e) = indexer.index_workspace(&env_files, &indexing_config).await {
                 client
                     .log_message(
                         MessageType::WARNING,
@@ -709,11 +701,7 @@ impl LanguageServer for LspServer {
             }
 
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let is_env_file = config.workspace.env_files.iter().any(|pattern| {
-                glob::Pattern::new(pattern.as_str())
-                    .map(|p| p.matches(file_name))
-                    .unwrap_or(false)
-            });
+            let is_env_file = self.state.config.is_env_file(file_name);
 
             match change.typ {
                 FileChangeType::CREATED | FileChangeType::CHANGED => {
