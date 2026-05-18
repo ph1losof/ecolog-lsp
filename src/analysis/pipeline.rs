@@ -39,7 +39,6 @@ impl AnalysisPipeline {
         let property_candidates =
             Self::extract_scopes_and_collect_property_accesses(language, tree, source, &mut graph);
 
-        // Build scope tree early so scope_at_position works correctly during binding extraction
         graph.rebuild_scope_range_index();
 
         Self::extract_direct_references(
@@ -851,9 +850,6 @@ const db = env["DATABASE_URL"];"#;
         ));
     }
 
-    // =========================================================================
-    // Edge case tests
-    // =========================================================================
 
     #[tokio::test]
     async fn test_analyze_multiple_destructuring_same_line() {

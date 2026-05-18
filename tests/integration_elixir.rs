@@ -123,4 +123,3 @@ async fn test_elixir_diagnostics_undefined() {
     assert!(diags.iter().any(|d| d.message.contains("not defined")));
 }
 
-// Note: Completion tests skipped for now - completion context queries need refinement

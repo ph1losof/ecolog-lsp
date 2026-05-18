@@ -281,7 +281,6 @@ impl LspServer {
 
             tracing::info!("Provider '{}' binary path: {}", name, binary_path.display());
 
-            // Check if binary exists
             if !binary_path.exists() {
                 tracing::warn!(
                     "Provider '{}' binary not found at: {}",
@@ -611,7 +610,6 @@ impl LanguageServer for LspServer {
             // Wait 300ms before performing expensive analysis
             tokio::time::sleep(Duration::from_millis(300)).await;
 
-            // Check if document version still matches (hasn't changed during debounce)
             let current_version = state
                 .document_manager
                 .get(&uri_clone)

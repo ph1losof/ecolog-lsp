@@ -270,7 +270,6 @@ impl WorkspaceIndex {
             .unwrap_or(false)
     }
 
-    /// Get cached module resolution result.
     /// Returns Some(Some(url)) if resolved, Some(None) if confirmed not resolvable, None if not cached.
     pub fn cached_module_resolution(
         &self,
@@ -464,14 +463,10 @@ impl WorkspaceIndex {
         self.module_resolution_cache.clear();
     }
 
-    /// Get module resolution cache statistics for monitoring.
     pub fn module_cache_len(&self) -> usize {
         self.module_resolution_cache.len()
     }
 
-    // =========================================================================
-    // Dependency Graph Methods
-    // =========================================================================
 
     /// Update the dependency graph for a file based on its imports.
     /// This should be called during indexing when imports are extracted.
@@ -514,9 +509,8 @@ impl WorkspaceIndex {
         self.invalidate_resolution_cache(changed_uri);
     }
 
-    /// Get all files that are marked as dirty and need re-analysis.
     pub fn get_dirty_files(&self) -> Vec<Url> {
-        self.dirty_files.iter().map(|u| u.clone()).collect()
+        self.dirty_files.iter().map(|r| r.key().clone()).collect()
     }
 
     /// Clear the dirty flag for a file after it has been re-analyzed.
@@ -524,12 +518,10 @@ impl WorkspaceIndex {
         self.dirty_files.remove(uri);
     }
 
-    /// Check if any files are dirty.
     pub fn has_dirty_files(&self) -> bool {
         !self.dirty_files.is_empty()
     }
 
-    /// Get the number of dirty files.
     pub fn dirty_count(&self) -> usize {
         self.dirty_files.len()
     }
@@ -566,7 +558,6 @@ impl WorkspaceIndex {
         self.dirty_files.remove(uri);
     }
 
-    /// Get the files that a given file imports from (its dependencies).
     pub fn get_dependencies(&self, uri: &Url) -> Vec<Url> {
         self.file_dependencies
             .get(uri)
@@ -574,7 +565,6 @@ impl WorkspaceIndex {
             .unwrap_or_default()
     }
 
-    /// Get the files that import a given file (its dependents).
     pub fn get_dependents(&self, uri: &Url) -> Vec<Url> {
         self.file_dependents
             .get(uri)
@@ -1045,9 +1035,6 @@ mod tests {
         assert_eq!(vars.len(), 3);
     }
 
-    // =========================================================================
-    // Task 3: Module Dependency Graph Tests - update_dependency_graph
-    // =========================================================================
 
     #[test]
     fn test_update_dependency_graph_single_dependency() {
@@ -1177,9 +1164,6 @@ mod tests {
         assert!(index.get_dependents(&b).contains(&a));
     }
 
-    // =========================================================================
-    // Task 3: Module Dependency Graph Tests - invalidate_for_file_change
-    // =========================================================================
 
     #[test]
     fn test_invalidate_for_file_change_marks_dependents_dirty() {
@@ -1248,9 +1232,6 @@ mod tests {
         assert!(!dirty.contains(&a)); // a is transitive, not direct
     }
 
-    // =========================================================================
-    // Task 3: Module Dependency Graph Tests - Dirty Files Management
-    // =========================================================================
 
     #[test]
     fn test_get_dirty_files_empty() {
@@ -1349,9 +1330,6 @@ mod tests {
         assert_eq!(index.dirty_count(), 0);
     }
 
-    // =========================================================================
-    // Task 3: Module Dependency Graph Tests - remove_from_dependency_graph
-    // =========================================================================
 
     #[test]
     fn test_remove_from_dependency_graph_removes_forward_edges() {
@@ -1452,9 +1430,6 @@ mod tests {
         assert!(index.get_dirty_files().contains(&app));
     }
 
-    // =========================================================================
-    // Task 3: Module Dependency Graph Tests - Getters
-    // =========================================================================
 
     #[test]
     fn test_get_dependencies_empty() {
@@ -1536,9 +1511,6 @@ mod tests {
         assert!(!index.has_dirty_files());
     }
 
-    // =========================================================================
-    // Additional Edge Case Tests
-    // =========================================================================
 
     #[test]
     fn test_dependency_graph_self_reference() {

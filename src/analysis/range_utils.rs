@@ -56,41 +56,34 @@ pub struct RangeDeduplicator {
 }
 
 impl RangeDeduplicator {
-    /// Create a new deduplicator.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a new deduplicator with pre-allocated capacity.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             seen: FxHashSet::with_capacity_and_hasher(capacity, Default::default()),
         }
     }
 
-    /// Try to insert a range. Returns true if the range was new, false if already seen.
     #[inline]
     pub fn insert(&mut self, range: Range) -> bool {
         self.seen.insert(RangeKey::from(range))
     }
 
-    /// Check if a range has already been seen.
     #[inline]
     pub fn contains(&self, range: Range) -> bool {
         self.seen.contains(&RangeKey::from(range))
     }
 
-    /// Clear all seen ranges.
     pub fn clear(&mut self) {
         self.seen.clear();
     }
 
-    /// Number of unique ranges seen.
     pub fn len(&self) -> usize {
         self.seen.len()
     }
 
-    /// Check if no ranges have been seen.
     pub fn is_empty(&self) -> bool {
         self.seen.is_empty()
     }

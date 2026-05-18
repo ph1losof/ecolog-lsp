@@ -58,9 +58,6 @@ impl WorkspaceService {
         &self.module_resolver
     }
 
-    // =========================================================================
-    // Index Query Methods
-    // =========================================================================
 
     /// Gets all files that reference a specific env var.
     pub fn files_for_env_var(&self, name: &str) -> Vec<Url> {
@@ -107,9 +104,6 @@ impl WorkspaceService {
         self.index.stats()
     }
 
-    // =========================================================================
-    // Index Mutation Methods
-    // =========================================================================
 
     /// Updates a file entry in the index.
     pub fn update_file(&self, uri: &Url, entry: FileIndexEntry) {
@@ -131,9 +125,6 @@ impl WorkspaceService {
         self.index.clear();
     }
 
-    // =========================================================================
-    // Module Resolution Cache Methods
-    // =========================================================================
 
     /// Gets a cached module resolution result.
     pub fn cached_module_resolution(
@@ -164,9 +155,6 @@ impl WorkspaceService {
         self.index.module_cache_len()
     }
 
-    // =========================================================================
-    // Dependency Graph Methods
-    // =========================================================================
 
     /// Gets files that a given file imports from.
     pub fn get_dependencies(&self, uri: &Url) -> Vec<Url> {
@@ -203,9 +191,6 @@ impl WorkspaceService {
         self.index.has_dirty_files()
     }
 
-    // =========================================================================
-    // Indexer Methods
-    // =========================================================================
 
     /// Starts indexing the workspace.
     pub async fn index_workspace(&self, config: &EcologConfig) -> anyhow::Result<()> {
@@ -234,9 +219,6 @@ impl WorkspaceService {
         self.indexer.workspace_root()
     }
 
-    // =========================================================================
-    // Indexing State Methods
-    // =========================================================================
 
     /// Checks if indexing is in progress.
     pub fn is_indexing(&self) -> bool {

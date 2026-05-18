@@ -59,7 +59,6 @@ async fn test_kotlin_diagnostics_undefined() {
     assert!(diags.iter().any(|d| d.message.contains("not defined")));
 }
 
-// Note: Completion tests skipped for now - completion context queries need refinement
 
 #[tokio::test]
 async fn test_kotlin_binding() {

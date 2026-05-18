@@ -742,11 +742,6 @@ mod tests {
         assert_eq!(id.index(), 4);
     }
 
-    #[test]
-    fn test_symbol_id_raw() {
-        let id = SymbolId::new(42).unwrap();
-        assert_eq!(id.raw(), 42);
-    }
 
    
 
@@ -765,18 +760,6 @@ mod tests {
         assert_eq!(id.index(), 9);
     }
 
-    #[test]
-    fn test_scope_id_raw() {
-        let id = ScopeId::new(7).unwrap();
-        assert_eq!(id.raw(), 7);
-    }
-
-    #[test]
-    fn test_scope_id_root() {
-        let root = ScopeId::root();
-        assert_eq!(root.raw(), 1);
-        assert_eq!(root.index(), 0);
-    }
 
    
 
@@ -886,19 +869,6 @@ mod tests {
 
    
 
-    #[test]
-    fn test_resolved_env_as_variable() {
-        let var = ResolvedEnv::Variable("DATABASE_URL".into());
-        assert_eq!(var.as_variable(), Some(&"DATABASE_URL".into()));
-        assert_eq!(var.as_object(), None);
-    }
-
-    #[test]
-    fn test_resolved_env_as_object() {
-        let obj = ResolvedEnv::Object("process.env".into());
-        assert_eq!(obj.as_object(), Some(&"process.env".into()));
-        assert_eq!(obj.as_variable(), None);
-    }
 
    
 

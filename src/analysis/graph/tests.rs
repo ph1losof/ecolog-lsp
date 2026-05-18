@@ -841,9 +841,6 @@ fn test_contains_position_multiline() {
     ));
 }
 
-// =========================================================================
-// Task 1: Interval Tree Tests - Helper Functions
-// =========================================================================
 
 #[test]
 fn test_position_to_point() {
@@ -959,9 +956,6 @@ fn test_ranges_overlap_same_line() {
     assert!(!BindingGraph::ranges_overlap(c, d));
 }
 
-// =========================================================================
-// Task 1: Interval Tree Tests - Position Lookup Edge Cases
-// =========================================================================
 
 #[test]
 fn test_symbol_at_position_empty_tree() {
@@ -1224,9 +1218,6 @@ fn test_symbol_at_destructure_key_multiple_keys() {
     assert!(graph.symbol_at_destructure_key(Position::new(0, 25)).is_none());
 }
 
-// =========================================================================
-// Task 1: Interval Tree Tests - Rebuild Range Index
-// =========================================================================
 
 #[test]
 fn test_rebuild_range_index_builds_all_trees() {
@@ -1344,9 +1335,6 @@ fn test_rebuild_range_index_empty_graph() {
     assert!(graph.destructure_range_tree.is_none());
 }
 
-// =========================================================================
-// Task 2: Incremental Analysis Tests - remove_in_range
-// =========================================================================
 
 #[test]
 fn test_remove_in_range_basic() {
@@ -1681,9 +1669,6 @@ fn test_remove_in_range_clears_pending_entries() {
     assert!(graph.pending_destructure_entries.is_empty());
 }
 
-// =========================================================================
-// Task 2: Incremental Analysis Tests - scopes_overlapping
-// =========================================================================
 
 #[test]
 fn test_scopes_overlapping_basic() {
@@ -1749,9 +1734,6 @@ fn test_scopes_overlapping_none() {
     assert!(!overlapping.iter().any(|&id| id != ScopeId::root()));
 }
 
-// =========================================================================
-// Task 2: Incremental Analysis Tests - document_size and is_large_edit
-// =========================================================================
 
 #[test]
 fn test_document_size_empty_document() {

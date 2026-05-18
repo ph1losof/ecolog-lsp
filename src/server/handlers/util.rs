@@ -217,9 +217,6 @@ mod tests {
     use abundantis::source::VariableSource;
     use std::path::PathBuf;
 
-    // =========================================================================
-    // format_source tests
-    // =========================================================================
 
     #[test]
     fn test_format_source_file_relative() {
@@ -281,9 +278,6 @@ mod tests {
         assert_eq!(result, "Remote (doppler)");
     }
 
-    // =========================================================================
-    // format_hover_markdown tests
-    // =========================================================================
 
     #[test]
     fn test_format_hover_markdown_simple() {
@@ -359,9 +353,6 @@ mod tests {
         assert!(!result.contains("``"));
     }
 
-    // =========================================================================
-    // get_line_col tests
-    // =========================================================================
 
     #[test]
     fn test_get_line_col_first_line() {
@@ -383,9 +374,6 @@ mod tests {
         assert_eq!(get_line_col(content, 100), (0, 0));
     }
 
-    // =========================================================================
-    // offset_to_line_col tests
-    // =========================================================================
 
     #[test]
     fn test_offset_to_line_col_single_line() {
@@ -409,9 +397,6 @@ mod tests {
         assert_eq!(offset_to_line_col(content, 4), (2, 0)); // 'c'
     }
 
-    // =========================================================================
-    // is_valid_env_var_name tests
-    // =========================================================================
 
     #[test]
     fn test_is_valid_env_var_name_valid() {
@@ -441,9 +426,6 @@ mod tests {
         assert!(!is_valid_env_var_name("VARäble"));
     }
 
-    // =========================================================================
-    // korni_span_to_range tests
-    // =========================================================================
 
     #[test]
     fn test_korni_span_to_range_single_line() {

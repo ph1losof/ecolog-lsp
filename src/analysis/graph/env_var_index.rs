@@ -90,7 +90,6 @@ impl BindingGraph {
             }
         }
 
-        // Collect symbol data to avoid borrow issues
         let symbol_data: Vec<_> = self
             .symbols
             .iter()
@@ -131,7 +130,6 @@ impl BindingGraph {
             }
         }
 
-        // Collect usage data to avoid borrow issues
         let usage_data: Vec<_> = self
             .usages
             .iter()

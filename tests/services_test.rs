@@ -4,9 +4,6 @@ mod common;
 
 use common::TestFixture;
 
-// ============================================================
-// EnvService Tests
-// ============================================================
 
 #[tokio::test]
 async fn test_env_service_get_workspace_root() {
@@ -130,9 +127,6 @@ async fn test_env_service_context_for_file() {
     assert!(context.is_some(), "Should get context for file in workspace");
 }
 
-// ============================================================
-// DocumentService Tests
-// ============================================================
 
 #[tokio::test]
 async fn test_document_service_open_and_get() {
@@ -247,9 +241,6 @@ async fn test_document_service_document_count() {
     assert_eq!(fixture.state.document_manager.document_count(), 1);
 }
 
-// ============================================================
-// WorkspaceService Tests
-// ============================================================
 
 #[tokio::test]
 async fn test_workspace_index_stats() {

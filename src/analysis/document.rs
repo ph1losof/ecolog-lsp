@@ -443,7 +443,6 @@ impl DocumentManager {
         self.documents.iter().map(|entry| entry.key().clone()).collect()
     }
 
-    /// Returns the number of open documents.
     pub fn document_count(&self) -> usize {
         self.documents.len()
     }
@@ -452,15 +451,12 @@ impl DocumentManager {
         &self.query_engine
     }
 
-    /// Check if the document has any syntax errors.
     pub fn has_syntax_errors(&self, uri: &Url) -> Option<bool> {
         let entry = self.documents.get(uri)?;
         let tree = entry.state.tree.as_ref()?;
         Some(tree.root_node().has_error())
     }
 
-    /// Get syntax error locations and messages from the parsed tree.
-    /// Returns a list of (Range, Option<message>) for each error node.
     pub fn get_syntax_errors(&self, uri: &Url) -> Vec<(Range, Option<String>)> {
         let entry = match self.documents.get(uri) {
             Some(e) => e,
@@ -957,9 +953,6 @@ const secret = process.env.SECRET;"#.to_string();
         assert_eq!(binding.env_var_name, "DATABASE_URL");
     }
 
-    // =========================================================================
-    // Task 2: EditInfo and Edit Handling Tests
-    // =========================================================================
 
     fn make_text_change(range: Option<Range>, text: &str) -> TextDocumentContentChangeEvent {
         TextDocumentContentChangeEvent {

@@ -247,7 +247,6 @@ async fn handle_execute_command_inner(
             let precedence = state.config.get_precedence().await;
             let root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
-            // Get all resolved variables to count by source type
             let all_vars = crate::server::util::safe_all_for_file(&state.core, &root).await;
 
             // Count variables by source type
@@ -264,7 +263,6 @@ async fn handle_execute_command_inner(
                 }
             }
 
-            // Get authenticated remote provider names
             let external_providers = state.core.registry.external_providers();
             let mut providers: Vec<String> = Vec::new();
             for adapter in &external_providers {
@@ -644,7 +642,6 @@ async fn handle_remote_auth_fields(
         None => return Some(json!({ "error": "Provider ID required" })),
     };
 
-    // Get the provider adapter
     let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
@@ -687,7 +684,6 @@ async fn handle_remote_authenticate(
         None => return Some(json!({ "error": "Credentials required" })),
     };
 
-    // Get the provider adapter
     let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
@@ -729,13 +725,11 @@ async fn handle_remote_navigate(
 
     let parent = parent_scope.unwrap_or_default();
 
-    // Get the provider adapter
     let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
     };
 
-    // Convert to protocol ScopeSelection type
     let parent_protocol = abundantis::source::remote::ProtocolScopeSelection {
         selections: parent.selections,
     };
@@ -783,13 +777,11 @@ async fn handle_remote_select(
         None => return Some(json!({ "error": "Scope selection required" })),
     };
 
-    // Get the provider adapter
     let adapter = match get_external_provider(state, provider) {
         Ok(a) => a,
         Err(e) => return Some(json!({ "error": e })),
     };
 
-    // Convert to protocol ScopeSelection type and set
     let scope_protocol = abundantis::source::remote::ProtocolScopeSelection {
         selections: scope.selections,
     };

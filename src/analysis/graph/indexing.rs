@@ -158,7 +158,6 @@ impl BindingGraph {
     /// Builds interval trees from pending entries for O(log n) position lookups.
     /// Also builds the env var index for fast env var lookups.
     pub fn rebuild_range_index(&mut self) {
-        // Build destructure range interval tree
         if !self.pending_destructure_entries.is_empty() {
             self.destructure_range_tree = Some(IntervalTree::from_iter(
                 self.pending_destructure_entries
@@ -167,7 +166,6 @@ impl BindingGraph {
             ));
         }
 
-        // Build symbol range interval tree
         if !self.pending_symbol_entries.is_empty() {
             self.symbol_range_tree = Some(IntervalTree::from_iter(
                 self.pending_symbol_entries
@@ -176,7 +174,6 @@ impl BindingGraph {
             ));
         }
 
-        // Build usage range interval tree
         if !self.pending_usage_entries.is_empty() {
             self.usage_range_tree = Some(IntervalTree::from_iter(
                 self.pending_usage_entries
@@ -185,7 +182,6 @@ impl BindingGraph {
             ));
         }
 
-        // Build scope range interval tree
         if !self.pending_scope_entries.is_empty() {
             self.scope_range_tree = Some(IntervalTree::from_iter(
                 self.pending_scope_entries
@@ -194,10 +190,8 @@ impl BindingGraph {
             ));
         }
 
-        // Clear scope cache since data may have changed
         self.scope_cache.write().clear();
 
-        // Build env var index (resolution cache is populated lazily as needed)
         self.build_env_var_index();
     }
 
@@ -212,7 +206,6 @@ impl BindingGraph {
                     .map(|e| (range_to_interval(e.range), e.value)),
             ));
         }
-        // Clear scope cache since data may have changed
         self.scope_cache.write().clear();
     }
 }

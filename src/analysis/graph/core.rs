@@ -15,10 +15,6 @@ use rustc_hash::FxHashMap;
 use tower_lsp::lsp_types::Range;
 
 impl BindingGraph {
-    /// Create a new empty binding graph.
-    ///
-    /// The graph is initialized with a root scope (ScopeId = 1) that represents
-    /// the module/file level scope.
     pub fn new() -> Self {
         let mut graph = Self {
             symbols: Vec::new(),
@@ -54,20 +50,12 @@ impl BindingGraph {
         graph
     }
 
-    /// Set the range of the root scope.
-    ///
-    /// This should be called after parsing to set the range to cover
-    /// the entire document.
     pub fn set_root_range(&mut self, range: Range) {
         if let Some(root) = self.scopes.first_mut() {
             root.range = range;
         }
     }
 
-    /// Add a symbol to the graph.
-    ///
-    /// The symbol is assigned a new ID and added to the name indices.
-    /// Returns the assigned symbol ID.
     pub fn add_symbol(&mut self, mut symbol: Symbol) -> SymbolId {
         self.next_symbol_id += 1;
         let id = SymbolId::new(self.next_symbol_id)
@@ -101,9 +89,6 @@ impl BindingGraph {
         id
     }
 
-    /// Allocate and return the next available symbol ID.
-    ///
-    /// This is useful for remapping symbol IDs during incremental analysis merges.
     pub fn allocate_symbol_id(&mut self) -> SymbolId {
         self.next_symbol_id += 1;
         SymbolId::new(self.next_symbol_id)
@@ -153,22 +138,17 @@ impl BindingGraph {
         self.symbols.push(symbol);
     }
 
-    /// Get a symbol by ID.
     #[inline]
     pub fn get_symbol(&self, id: SymbolId) -> Option<&Symbol> {
         self.symbols.get(id.index())
     }
 
-    /// Get a mutable reference to a symbol by ID (test only).
     #[cfg(test)]
     #[inline]
     pub fn get_symbol_mut(&mut self, id: SymbolId) -> Option<&mut Symbol> {
         self.symbols.get_mut(id.index())
     }
 
-    /// Update the origin of a symbol.
-    ///
-    /// This is an intent-based method for modifying symbol origin during analysis.
     #[inline]
     pub fn update_symbol_origin(&mut self, id: SymbolId, origin: SymbolOrigin) {
         if let Some(symbol) = self.symbols.get_mut(id.index()) {
@@ -176,10 +156,6 @@ impl BindingGraph {
         }
     }
 
-    /// Mark a symbol as invalid.
-    ///
-    /// Invalid symbols have been shadowed or reassigned and should not
-    /// be considered when resolving bindings.
     #[inline]
     pub fn invalidate_symbol(&mut self, id: SymbolId) {
         if let Some(symbol) = self.symbols.get_mut(id.index()) {
@@ -187,15 +163,11 @@ impl BindingGraph {
         }
     }
 
-    /// Get a slice of all symbols.
     #[inline]
     pub fn symbols(&self) -> &[Symbol] {
         &self.symbols
     }
 
-    /// Mark all symbols as invalid.
-    ///
-    /// This is useful when clearing state or preparing for a full re-analysis.
     #[inline]
     pub fn invalidate_all_symbols(&mut self) {
         for symbol in &mut self.symbols {
@@ -203,7 +175,6 @@ impl BindingGraph {
         }
     }
 
-    /// Get a mutable slice of all symbols (test only).
     #[cfg(test)]
     #[inline]
     pub fn symbols_mut(&mut self) -> &mut [Symbol] {
@@ -252,10 +223,6 @@ impl BindingGraph {
             .flatten()
     }
 
-    /// Add a scope to the graph.
-    ///
-    /// The scope is assigned a new ID and added to the pending scope entries.
-    /// Returns the assigned scope ID.
     pub fn add_scope(&mut self, mut scope: Scope) -> ScopeId {
         let id =
             ScopeId::new(self.next_scope_id).expect("Scope ID counter overflow - too many scopes");
@@ -276,13 +243,11 @@ impl BindingGraph {
         id
     }
 
-    /// Get a scope by ID.
     #[inline]
     pub fn get_scope(&self, id: ScopeId) -> Option<&Scope> {
         self.scopes.get(id.index())
     }
 
-    /// Get a slice of all scopes.
     #[inline]
     pub fn scopes(&self) -> &[Scope] {
         &self.scopes
