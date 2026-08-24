@@ -81,3 +81,90 @@
     property: (property_identifier) @_property)
   (#eq? @_object "process")
   (#eq? @_property "env")) @env_object_binding
+
+;; ═════════════════════════════════════════════════════════════════════════
+;; Vite / ESM: import.meta.env
+;;
+;; `import.meta` parses as a single `meta_property` node, so the object of
+;; `import.meta.env` is that node rather than a nested member expression.
+;; ═════════════════════════════════════════════════════════════════════════
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const/let/var x = import.meta.env.VAR
+;; ───────────────────────────────────────────────────────────────────────────
+(variable_declarator
+  name: (identifier) @binding_name
+  value: (member_expression
+    object: (member_expression
+      object: (meta_property) @_meta
+      property: (property_identifier) @_env)
+    property: (property_identifier) @bound_env_var)
+  (#eq? @_meta "import.meta")
+  (#eq? @_env "env")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const/let/var x = import.meta.env["VAR"]
+;; ───────────────────────────────────────────────────────────────────────────
+(variable_declarator
+  name: (identifier) @binding_name
+  value: (subscript_expression
+    object: (member_expression
+      object: (meta_property) @_meta
+      property: (property_identifier) @_env)
+    index: (string
+      (string_fragment) @bound_env_var))
+  (#eq? @_meta "import.meta")
+  (#eq? @_env "env")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const { VAR } = import.meta.env
+;; ───────────────────────────────────────────────────────────────────────────
+(variable_declarator
+  name: (object_pattern
+    (shorthand_property_identifier_pattern) @binding_name @bound_env_var)
+  value: (member_expression
+    object: (meta_property) @_meta
+    property: (property_identifier) @_env)
+  (#eq? @_meta "import.meta")
+  (#eq? @_env "env")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const { VAR: alias } = import.meta.env
+;; ───────────────────────────────────────────────────────────────────────────
+(variable_declarator
+  name: (object_pattern
+    (pair_pattern
+      key: (property_identifier) @bound_env_var
+      value: (identifier) @binding_name))
+  value: (member_expression
+    object: (meta_property) @_meta
+    property: (property_identifier) @_env)
+  (#eq? @_meta "import.meta")
+  (#eq? @_env "env")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const { VAR: alias = "default" } = import.meta.env
+;; ───────────────────────────────────────────────────────────────────────────
+(variable_declarator
+  name: (object_pattern
+    (pair_pattern
+      key: (property_identifier) @bound_env_var
+      value: (assignment_pattern
+        left: (identifier) @binding_name
+        right: (_))))
+  value: (member_expression
+    object: (meta_property) @_meta
+    property: (property_identifier) @_env)
+  (#eq? @_meta "import.meta")
+  (#eq? @_env "env")) @env_binding
+
+;; ───────────────────────────────────────────────────────────────────────────
+;; const env = import.meta.env (object alias)
+;; ───────────────────────────────────────────────────────────────────────────
+(variable_declarator
+  name: (identifier) @binding_name
+  value: (member_expression
+    object: (meta_property) @_meta
+    property: (property_identifier) @_env) @env_object_name
+  (#eq? @_meta "import.meta")
+  (#eq? @_env "env")) @env_object_binding

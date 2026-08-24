@@ -47,27 +47,7 @@ impl LspServer {
         core: abundantis::Abundantis,
         config: Arc<crate::server::config::ConfigManager>,
     ) -> Self {
-        let mut registry = LanguageRegistry::new();
-
-        registry.register(Arc::new(crate::languages::javascript::JavaScript));
-        registry.register(Arc::new(crate::languages::typescript::TypeScript));
-        registry.register(Arc::new(crate::languages::typescript::TypeScriptReact));
-        registry.register(Arc::new(crate::languages::python::Python));
-        registry.register(Arc::new(crate::languages::rust::Rust));
-        registry.register(Arc::new(crate::languages::go::Go));
-        registry.register(Arc::new(crate::languages::lua::Lua));
-        registry.register(Arc::new(crate::languages::php::Php));
-        registry.register(Arc::new(crate::languages::ruby::Ruby));
-        registry.register(Arc::new(crate::languages::bash::Bash));
-        registry.register(Arc::new(crate::languages::c::C));
-        registry.register(Arc::new(crate::languages::cpp::Cpp));
-        registry.register(Arc::new(crate::languages::java::Java));
-        registry.register(Arc::new(crate::languages::kotlin::Kotlin));
-        registry.register(Arc::new(crate::languages::csharp::CSharp));
-        registry.register(Arc::new(crate::languages::elixir::Elixir));
-        registry.register(Arc::new(crate::languages::zig::Zig));
-
-        let languages = Arc::new(registry);
+        let languages = Arc::new(LanguageRegistry::with_all_languages());
 
         let query_engine = Arc::new(QueryEngine::new());
         let document_manager = Arc::new(DocumentManager::new(
@@ -219,14 +199,17 @@ impl LspServer {
                 let state = self.state.clone();
                 async move {
                     let diagnostics = handlers::compute_diagnostics(&uri, &state).await;
-                    (uri, diagnostics)
+                    let version = state.document_manager.get(&uri).map(|doc| doc.version);
+                    (uri, diagnostics, version)
                 }
             })
             .collect();
 
         let results = join_all(futures).await;
-        for (uri, diagnostics) in results {
-            self.client.publish_diagnostics(uri, diagnostics, None).await;
+        for (uri, diagnostics, version) in results {
+            self.client
+                .publish_diagnostics(uri, diagnostics, version)
+                .await;
         }
     }
 
@@ -575,7 +558,11 @@ impl LanguageServer for LspServer {
         let diagnostics =
             handlers::compute_diagnostics(&params.text_document.uri, &self.state).await;
         self.client
-            .publish_diagnostics(params.text_document.uri, diagnostics, None)
+            .publish_diagnostics(
+                params.text_document.uri,
+                diagnostics,
+                Some(params.text_document.version),
+            )
             .await;
 
         tracing::debug!(
@@ -631,7 +618,7 @@ impl LanguageServer for LspServer {
             // Compute and publish diagnostics
             let diagnostics = handlers::compute_diagnostics(&uri_clone, &state).await;
             client
-                .publish_diagnostics(uri_clone, diagnostics, None)
+                .publish_diagnostics(uri_clone, diagnostics, Some(version))
                 .await;
         });
 

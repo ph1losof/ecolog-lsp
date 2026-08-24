@@ -1,7 +1,7 @@
 use compact_str::CompactString;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
-use tower_lsp::lsp_types::{Range, Url};
+use tower_lsp::lsp_types::{Position, Range, Url};
 use tree_sitter::Tree;
 
 
@@ -52,6 +52,31 @@ pub enum BindingKind {
     Value,
    
     Object,
+}
+
+
+/// A read of a named key off an object value -- `env.PORT`, `env["PORT"]`,
+/// `env['PORT']`, `env.get('PORT')`.
+///
+/// Produced by `LanguageSupport::extract_property_access`, which knows the node
+/// shapes of its grammar. The analysis pipeline turns these into env var
+/// references when the object resolves to an environment object.
+#[derive(Debug, Clone)]
+pub struct PropertyAccess {
+    /// Name of the object being read from.
+    pub object_name: CompactString,
+
+    /// Position of the object node, used to resolve it in the right scope.
+    pub object_position: Position,
+
+    /// The key being read.
+    pub property_name: CompactString,
+
+    /// Range of the key itself, excluding any quotes.
+    pub property_range: Range,
+
+    /// Range of the whole access expression.
+    pub usage_range: Range,
 }
 
 

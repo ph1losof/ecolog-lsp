@@ -27,15 +27,16 @@
 
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; import.meta.env.VAR_NAME (Vite/ESM)
+;;
+;; `import.meta` parses as a single `meta_property` node, not as a member
+;; expression over an `(import)` node.
 ;; ───────────────────────────────────────────────────────────────────────────
 (member_expression
   object: (member_expression
-    object: (member_expression
-      object: (import)
-      property: (property_identifier) @_meta)
+    object: (meta_property) @_meta
     property: (property_identifier) @_env)
   property: (property_identifier) @env_var_name
-  (#eq? @_meta "meta")
+  (#eq? @_meta "import.meta")
   (#eq? @_env "env")) @env_access
 
 ;; ───────────────────────────────────────────────────────────────────────────
@@ -43,11 +44,9 @@
 ;; ───────────────────────────────────────────────────────────────────────────
 (subscript_expression
   object: (member_expression
-    object: (member_expression
-      object: (import)
-      property: (property_identifier) @_meta)
+    object: (meta_property) @_meta
     property: (property_identifier) @_env)
   index: (string
     (string_fragment) @env_var_name)
-  (#eq? @_meta "meta")
+  (#eq? @_meta "import.meta")
   (#eq? @_env "env")) @env_access

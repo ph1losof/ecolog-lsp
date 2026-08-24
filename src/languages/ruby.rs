@@ -55,6 +55,48 @@ impl LanguageSupport for Ruby {
 
     impl_language_queries!("ruby");
 
+    /// `e['KEY']` and `e.fetch('KEY')` where `e` aliases `ENV`.
+    fn property_access_at(&self, node: Node, source: &[u8]) -> Option<crate::types::PropertyAccess> {
+        match node.kind() {
+            "element_reference" => {
+                let object = node.child_by_field_name("object")?;
+                if object.kind() != "identifier" && object.kind() != "constant" {
+                    return None;
+                }
+                let key = crate::languages::named_child_of_kind(node, "string")?;
+                let content = crate::languages::named_child_of_kind(key, "string_content")?;
+                Some(crate::languages::property_access(
+                    object,
+                    object.utf8_text(source).ok()?,
+                    content.utf8_text(source).ok()?,
+                    crate::analysis::ts_to_lsp_range(content.range()),
+                    node,
+                ))
+            }
+            "call" => {
+                let object = node.child_by_field_name("receiver")?;
+                let method = node.child_by_field_name("method")?;
+                if object.kind() != "identifier" && object.kind() != "constant" {
+                    return None;
+                }
+                if !matches!(method.utf8_text(source).ok()?, "fetch" | "[]") {
+                    return None;
+                }
+                let args = node.child_by_field_name("arguments")?;
+                let key = crate::languages::named_child_of_kind(args, "string")?;
+                let content = crate::languages::named_child_of_kind(key, "string_content")?;
+                Some(crate::languages::property_access(
+                    object,
+                    object.utf8_text(source).ok()?,
+                    content.utf8_text(source).ok()?,
+                    crate::analysis::ts_to_lsp_range(content.range()),
+                    node,
+                ))
+            }
+            _ => None,
+        }
+    }
+
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
         // Detect ENV constant
         if node.kind() == "constant" {

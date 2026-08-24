@@ -4,21 +4,30 @@
 
 
 use crate::analysis::workspace_index::{FileIndexEntry, WorkspaceIndex};
-use crate::analysis::{AnalysisPipeline, BindingGraph, BindingResolver, QueryEngine};
+use crate::analysis::{AnalysisMode, AnalysisPipeline, BindingGraph, BindingResolver, QueryEngine};
 use crate::languages::LanguageRegistry;
-use crate::server::config::IndexingConfig;
+use crate::server::config::{CompiledEnvPatterns, IndexingConfig};
 use crate::types::{
     ExportResolution, FileExportEntry, ImportContext, KorniEntryExt, SymbolId, SymbolOrigin,
 };
 use anyhow::Result;
 use compact_str::CompactString;
+use futures::stream::StreamExt;
 use korni::ParseOptions;
 use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use std::time::SystemTime;
 use tower_lsp::lsp_types::Url;
 use tracing::{debug, info, warn};
+
+/// A file found by the workspace walk, together with the mtime observed during
+/// the walk so indexing does not have to `stat` it a second time.
+struct DiscoveredFile {
+    path: PathBuf,
+    mtime: Option<SystemTime>,
+}
 
 
 
@@ -74,9 +83,14 @@ impl WorkspaceIndexer {
 
         self.workspace_index.set_indexing(true);
 
+        let discovery_start = std::time::Instant::now();
         let files = self.discover_files(env_files, indexing_config).await;
         let file_count = files.len();
-        info!("Discovered {} files to index", file_count);
+        info!(
+            "Discovered {} files to index in {:?}",
+            file_count,
+            discovery_start.elapsed()
+        );
 
         self.workspace_index.set_total_files(file_count);
 
@@ -85,56 +99,58 @@ impl WorkspaceIndexer {
             return Ok(());
         }
 
-        
-        
-        
-        let parallelism = (num_cpus::get() / 2).clamp(1, 4);
-        let semaphore = Arc::new(Semaphore::new(parallelism));
-        let mut handles = Vec::with_capacity(file_count);
+        // Compile the env-file globs once for the whole run instead of once per file.
+        let env_patterns = Arc::new(CompiledEnvPatterns::compile(env_files));
 
-        for (i, file_path) in files.into_iter().enumerate() {
-            let permit = semaphore.clone().acquire_owned().await?;
-            let indexer = self.clone_for_task();
-            let env_files_clone = env_files.to_vec();
+        // Tree-sitter parsing is CPU-bound, so cap in-flight work below the core
+        // count: the editor must stay responsive while indexing runs.
+        let parallelism = std::env::var("ECOLOG_INDEX_PARALLELISM")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or_else(|| indexing_config.resolved_parallelism());
 
-            handles.push(tokio::spawn(async move {
-                let result = indexer.index_file(&file_path, &env_files_clone).await;
-                drop(permit);
-                result
-            }));
+        let success_count = Arc::new(AtomicUsize::new(0));
+        let error_count = Arc::new(AtomicUsize::new(0));
 
-            
-            if (i + 1) % 10 == 0 {
-                tokio::task::yield_now().await;
-            }
-        }
+        // `buffer_unordered` keeps at most `parallelism` tasks alive at a time.
+        // Spawning every file up front instead built a JoinHandle per file and
+        // held them all until the run finished.
+        futures::stream::iter(files)
+            .map(|file| {
+                let indexer = self.clone_for_task();
+                let env_patterns = Arc::clone(&env_patterns);
+                let success_count = Arc::clone(&success_count);
+                let error_count = Arc::clone(&error_count);
 
-        
-        let mut success_count = 0;
-        let mut error_count = 0;
+                tokio::spawn(async move {
+                    let result = indexer
+                        .index_file_inner(&file.path, &env_patterns, file.mtime)
+                        .await;
 
-        for (i, handle) in handles.into_iter().enumerate() {
-            match handle.await {
-                Ok(Ok(())) => {
-                    success_count += 1;
-                    self.workspace_index.increment_indexed();
-                }
-                Ok(Err(e)) => {
-                    debug!("Failed to index file: {}", e);
-                    error_count += 1;
-                    self.workspace_index.increment_indexed();
-                }
-                Err(e) => {
+                    match result {
+                        Ok(()) => {
+                            success_count.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            debug!("Failed to index file: {}", e);
+                            error_count.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+
+                    indexer.workspace_index.increment_indexed();
+                })
+            })
+            .buffer_unordered(parallelism)
+            .for_each(|joined| async move {
+                if let Err(e) = joined {
                     warn!("Task panicked: {}", e);
-                    error_count += 1;
                 }
-            }
+            })
+            .await;
 
-            
-            if (i + 1) % 10 == 0 {
-                tokio::task::yield_now().await;
-            }
-        }
+        let success_count = success_count.load(Ordering::Relaxed);
+        let error_count = error_count.load(Ordering::Relaxed);
 
         self.workspace_index.set_indexing(false);
 
@@ -146,15 +162,16 @@ impl WorkspaceIndexer {
         Ok(())
     }
 
-    
+    /// Walks the workspace and returns the files worth indexing.
+    ///
+    /// Runs on a blocking thread pool because `ignore`'s parallel walker is
+    /// synchronous and directory traversal is IO-bound.
     async fn discover_files(
         &self,
         env_files: &[CompactString],
         indexing_config: &IndexingConfig,
-    ) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-
-        let extensions: Vec<&str> = self
+    ) -> Vec<DiscoveredFile> {
+        let extensions: FxHashSet<&'static str> = self
             .languages
             .all_languages()
             .iter()
@@ -162,12 +179,25 @@ impl WorkspaceIndexer {
             .copied()
             .collect();
 
-        let env_patterns: Vec<glob::Pattern> = env_files
-            .iter()
-            .filter_map(|p| glob::Pattern::new(p).ok())
-            .collect();
+        let env_patterns = CompiledEnvPatterns::compile(env_files);
 
-        let mut builder = ignore::WalkBuilder::new(&self.workspace_root);
+        let workspace_root = self.workspace_root.clone();
+        let indexing_config = indexing_config.clone();
+
+        tokio::task::spawn_blocking(move || {
+            Self::walk_workspace(&workspace_root, &indexing_config, &extensions, &env_patterns)
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    fn walk_workspace(
+        workspace_root: &Path,
+        indexing_config: &IndexingConfig,
+        extensions: &FxHashSet<&'static str>,
+        env_patterns: &CompiledEnvPatterns,
+    ) -> Vec<DiscoveredFile> {
+        let mut builder = ignore::WalkBuilder::new(workspace_root);
         builder
             .hidden(false)
             .git_ignore(true)
@@ -180,21 +210,24 @@ impl WorkspaceIndexer {
         }
 
         if !indexing_config.exclude.is_empty() {
-            let mut overrides =
-                ignore::overrides::OverrideBuilder::new(&self.workspace_root);
+            let mut overrides = ignore::overrides::OverrideBuilder::new(workspace_root);
             for pattern in &indexing_config.exclude {
-                let _ = overrides.add(&format!("!{}/**", pattern));
+                // Exclusions are plain directory names (`node_modules`, `target`),
+                // so match them at any depth rather than only at the workspace
+                // root -- otherwise nested copies in a monorepo get walked.
+                let _ = overrides.add(&format!("!**/{}/**", pattern));
+                let _ = overrides.add(&format!("!**/{}", pattern));
             }
             if let Ok(built) = overrides.build() {
                 builder.overrides(built);
             }
         }
 
-        let walker = builder.build();
         let max_files = indexing_config.max_files;
         let max_file_size = indexing_config.max_file_size;
+        let mut files = Vec::new();
 
-        for entry in walker.flatten() {
+        for entry in builder.build().flatten() {
             if max_files > 0 && files.len() >= max_files {
                 warn!(
                     "Reached max_files limit ({}). Increase [indexing].max_files or add exclusions in ecolog.toml",
@@ -203,13 +236,45 @@ impl WorkspaceIndexer {
                 break;
             }
 
+            // `file_type()` comes from the directory read, so it is free;
+            // `path.is_file()` cost an extra stat for every entry in the tree.
+            // Symlinks are resolved below, since the walker does not follow them
+            // and their entry type says nothing about the target.
+            let is_symlink = match entry.file_type() {
+                Some(ft) if ft.is_file() => false,
+                Some(ft) if ft.is_symlink() => true,
+                _ => continue,
+            };
+
             let path = entry.path();
-            if !path.is_file() {
+
+            // Cheap name checks first: only candidates are worth a stat.
+            let is_candidate = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| extensions.contains(ext))
+                || path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|name| env_patterns.matches(name));
+
+            if !is_candidate {
+                continue;
+            }
+
+            let metadata = if is_symlink {
+                // Follow the link to learn whether it points at a file at all.
+                std::fs::metadata(path).ok()
+            } else {
+                entry.metadata().ok()
+            };
+
+            if is_symlink && !metadata.as_ref().is_some_and(|m| m.is_file()) {
                 continue;
             }
 
             if max_file_size > 0 {
-                if let Ok(metadata) = entry.metadata() {
+                if let Some(metadata) = &metadata {
                     if metadata.len() > max_file_size {
                         debug!("Skipping large file {:?} ({} bytes)", path, metadata.len());
                         continue;
@@ -217,36 +282,44 @@ impl WorkspaceIndexer {
                 }
             }
 
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if extensions.contains(&ext) {
-                    files.push(path.to_path_buf());
-                    continue;
-                }
-            }
-
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if env_patterns.iter().any(|p| p.matches(name)) {
-                    files.push(path.to_path_buf());
-                }
-            }
+            files.push(DiscoveredFile {
+                path: path.to_path_buf(),
+                mtime: metadata.and_then(|m| m.modified().ok()),
+            });
         }
 
         files
     }
 
     
-    
-    
-
-    
     pub async fn index_file(&self, path: &Path, env_files: &[CompactString]) -> Result<()> {
+        let env_patterns = CompiledEnvPatterns::compile(env_files);
+        self.index_file_inner(path, &env_patterns, None).await
+    }
+
+    /// Indexes a single file.
+    ///
+    /// `known_mtime` lets callers reuse the modification time observed during
+    /// workspace discovery instead of paying a second `stat`.
+    async fn index_file_inner(
+        &self,
+        path: &Path,
+        env_patterns: &CompiledEnvPatterns,
+        known_mtime: Option<SystemTime>,
+    ) -> Result<()> {
         let uri = Url::from_file_path(path)
             .map_err(|_| anyhow::anyhow!("Invalid file path: {:?}", path))?;
 
         let content = tokio::fs::read_to_string(path).await?;
-        let mtime = tokio::fs::metadata(path).await?.modified()?;
+        let mtime = match known_mtime {
+            Some(mtime) => mtime,
+            None => tokio::fs::metadata(path).await?.modified()?,
+        };
 
-        let is_env_file = self.is_env_file(path, env_files);
+        let is_env_file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| env_patterns.matches(name));
 
         let (env_vars, exports) = if is_env_file {
             (self.extract_env_vars_from_env_file(&content), None)
@@ -279,26 +352,17 @@ impl WorkspaceIndexer {
         );
 
         
+        // Only files that actually export something need an entry; storing empty
+        // ones grows the export index by one record per file in the workspace.
         if let Some(exports) = exports {
-            self.workspace_index.update_exports(&uri, exports);
+            if !exports.is_empty() {
+                self.workspace_index.update_exports(&uri, exports);
+            }
         }
 
         Ok(())
     }
 
-    
-    fn is_env_file(&self, path: &Path, env_files: &[CompactString]) -> bool {
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => return false,
-        };
-
-        env_files.iter().any(|pattern| {
-            glob::Pattern::new(pattern.as_str())
-                .map(|p| p.matches(name))
-                .unwrap_or(false)
-        })
-    }
 
     
     fn extract_env_vars_from_env_file(&self, content: &str) -> FxHashSet<CompactString> {
@@ -332,13 +396,16 @@ impl WorkspaceIndexer {
 
         let source = content.as_bytes();
 
-        
-        let binding_graph = AnalysisPipeline::analyze(
+        // Indexing only needs env vars and export resolutions, so skip the
+        // usage/property-access machinery and the positional interval trees
+        // that interactive requests rely on.
+        let binding_graph = AnalysisPipeline::analyze_with_mode(
             &self.query_engine,
             lang.as_ref(),
             &tree,
             source,
             &ImportContext::default(),
+            AnalysisMode::Index,
         )
         .await;
 
@@ -362,6 +429,7 @@ impl WorkspaceIndexer {
         let resolver = BindingResolver::new(graph);
         resolver.all_env_vars().into_iter().collect()
     }
+
 
     
     
@@ -413,8 +481,11 @@ impl WorkspaceIndexer {
             if let Some(kind) = resolver.get_binding_kind(local_name) {
                 if kind == crate::types::BindingKind::Object {
                     
-                    for symbol in graph.symbols() {
-                        if symbol.name.as_str() == local_name && symbol.is_valid {
+                    for symbol in graph
+                        .lookup_symbols_by_name(local_name)
+                        .filter_map(|id| graph.get_symbol(id))
+                    {
+                        if symbol.is_valid {
                             if let SymbolOrigin::EnvObject { canonical_name } = &symbol.origin {
                                 return ExportResolution::EnvObject {
                                     canonical_name: canonical_name.clone(),
@@ -430,8 +501,11 @@ impl WorkspaceIndexer {
             }
 
             
-            for symbol in graph.symbols() {
-                if symbol.name.as_str() == local_name && symbol.is_valid {
+            for symbol in graph
+                .lookup_symbols_by_name(local_name)
+                .filter_map(|id| graph.get_symbol(id))
+            {
+                if symbol.is_valid {
                     match &symbol.origin {
                         SymbolOrigin::EnvVar { name } => {
                             return ExportResolution::EnvVar { name: name.clone() };
@@ -527,7 +601,8 @@ impl WorkspaceIndexer {
         self.workspace_index.invalidate_resolution_cache(uri);
 
         if let Ok(path) = uri.to_file_path() {
-            if let Err(e) = self.index_file(&path, env_files).await {
+            let env_patterns = CompiledEnvPatterns::compile(env_files);
+            if let Err(e) = self.index_file_inner(&path, &env_patterns, None).await {
                 debug!("Failed to re-index {:?}: {}", uri, e);
             }
         }

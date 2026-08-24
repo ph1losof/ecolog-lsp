@@ -10,21 +10,34 @@ A language-agnostic Language Server Protocol (LSP) implementation for environmen
 - **Auto-completion**: Suggests available environment variables as you type
 - **Go to Definition**: Navigate to where environment variables are defined in `.env` files
 - **Hover Information**: View environment variable values, sources, and metadata on hover
-- **Semantic Tokens**: Syntax highlighting for environment variable references
 - **Diagnostics**: Warnings for undefined or misconfigured environment variables
-- **Value Masking**: Secure handling of sensitive values in editor tooltips
-- **Multi-language Support**: Works across JavaScript, TypeScript, Python, Rust, Lua and Go
+- **Find References**: Locate every use of a variable across the workspace
+- **Rename**: Rename a variable across code and `.env` files together
+- **Inlay Hints**: Show resolved values inline (opt in with `[features].inlay_hints`)
+- **Workspace Symbols**: Search environment variables by name
+- **Value Masking**: Hide resolved values in the editor (opt in with `[masking].enabled`)
+- **Multi-language Support**: 17 languages via per-language tree-sitter queries
 
 ## Supported Languages
 
 - JavaScript
-- TypeScript
+- TypeScript (including TSX)
 - Python
 - Rust
-- Lua
 - Go
+- Lua
+- PHP
+- Ruby
+- Java
+- Kotlin
+- C#
+- C
+- C++
+- Elixir
+- Zig
+- Bash
 
-Each language has custom tree-sitter queries to accurately detect environment variable access patterns specific to that language's idioms.
+Each language has custom tree-sitter queries to accurately detect environment variable access patterns specific to that language's idioms, including reads through an alias (`const env = process.env; env.PORT`) and, for JavaScript and TypeScript, Vite's `import.meta.env`.
 
 ## Installation
 
@@ -56,13 +69,18 @@ completion = true
 hover = true
 definition = true
 diagnostics = true
-semantic_tokens = true
+# Off by default
+inlay_hints = false
 
 [masking]
-enabled = true
-# Mask values in hover tooltips for security
+# Off by default; turn on to hide resolved values in the editor
+enabled = false
 mask_in_hover = true
-mask_in_completion = false
+mask_in_completion = true
+mask_in_inlay_hints = true
+mask_char = "*"
+# Trailing characters left visible, for recognising a value without showing it
+show_last = 0
 
 [interpolation]
 enabled = true
@@ -72,6 +90,14 @@ max_depth = 10
 enabled = true
 hot_cache_size = 100
 ttl = 300
+
+[indexing]
+exclude = ["node_modules", ".git", "target", "dist", "build"]
+max_files = 5000
+max_file_size = 1048576
+max_depth = 30
+# 0 = pick automatically from the CPU count
+parallelism = 0
 ```
 
 ### Configuration Options
@@ -86,13 +112,19 @@ ttl = 300
 - `hover`: Enable/disable hover information
 - `definition`: Enable/disable go-to-definition
 - `diagnostics`: Enable/disable diagnostics
-- `semantic_tokens`: Enable/disable semantic token highlighting
+- `inlay_hints`: Show resolved values inline (default: off)
 
 #### `[masking]`
 
-- `enabled`: Master switch for value masking
-- `mask_in_hover`: Mask sensitive values in hover tooltips
-- `mask_in_completion`: Mask values in completion items
+- `enabled`: Master switch for value masking (default: off)
+- `mask_in_hover`: Mask values in hover tooltips
+- `mask_in_completion`: Mask values in completion item documentation
+- `mask_in_inlay_hints`: Mask values in inlay hints
+- `mask_char`: Character the value is replaced with
+- `show_last`: How many trailing characters stay visible (`0` hides everything)
+
+The mask is a fixed width, so it does not reveal how long the original value
+was. Commands that return values programmatically are not masked.
 
 #### `[interpolation]`
 
@@ -104,6 +136,24 @@ ttl = 300
 - `enabled`: Enable caching of resolved values
 - `hot_cache_size`: Number of frequently accessed variables to cache
 - `ttl`: Cache time-to-live in seconds
+
+#### `[indexing]`
+
+Controls the background scan of the workspace that powers workspace-wide
+references, rename and diagnostics.
+
+- `exclude`: Directory names skipped during the scan, at any depth
+- `max_files`: Stop after this many files (`0` for no limit)
+- `max_file_size`: Skip files larger than this many bytes (`0` for no limit)
+- `max_depth`: Maximum directory nesting to walk (`0` for no limit)
+- `parallelism`: How many files are analyzed concurrently. `0` derives a value
+  from the CPU count that leaves headroom for the editor. Lower it to make
+  indexing gentler on a busy machine, raise it to index a large repository
+  faster. The `ECOLOG_INDEX_PARALLELISM` environment variable overrides it.
+
+If indexing a large repository is using more CPU than you want, the two knobs
+that matter most are `exclude` (keep generated and vendored trees out of the
+scan) and `parallelism`.
 
 ## Editor Integration
 

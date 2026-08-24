@@ -262,9 +262,11 @@ async fn test_scenario_empty_value() {
     );
 
     let h_str = format!("{:?}", hover.unwrap());
+    // An empty value renders as an italic marker rather than empty backticks,
+    // which would be invisible. See `format_hover_markdown`.
     assert!(
-        h_str.contains("Value**: ``") || h_str.contains("Value**: \"\""),
-        "Expected empty value, got: {}",
+        h_str.contains("Value**: *(empty)*"),
+        "Expected empty value marker, got: {}",
         h_str
     );
 }

@@ -47,6 +47,55 @@ impl LanguageSupport for Python {
 
     impl_language_queries!("python");
 
+    /// `e['KEY']` and `e.get('KEY')` where `e` aliases `os.environ`.
+    fn property_access_at(&self, node: Node, source: &[u8]) -> Option<crate::types::PropertyAccess> {
+        match node.kind() {
+            "subscript" => {
+                let object = node.child_by_field_name("value")?;
+                let key = node.child_by_field_name("subscript")?;
+                if object.kind() != "identifier" || key.kind() != "string" {
+                    return None;
+                }
+                let content = crate::languages::named_child_of_kind(key, "string_content")?;
+                Some(crate::languages::property_access(
+                    object,
+                    object.utf8_text(source).ok()?,
+                    content.utf8_text(source).ok()?,
+                    crate::analysis::ts_to_lsp_range(content.range()),
+                    node,
+                ))
+            }
+            "call" => {
+                let function = node.child_by_field_name("function")?;
+                if function.kind() != "attribute" {
+                    return None;
+                }
+                let object = function.child_by_field_name("object")?;
+                let method = function.child_by_field_name("attribute")?;
+                if object.kind() != "identifier" {
+                    return None;
+                }
+                if !matches!(
+                    method.utf8_text(source).ok()?,
+                    "get" | "pop" | "setdefault"
+                ) {
+                    return None;
+                }
+                let args = node.child_by_field_name("arguments")?;
+                let key = crate::languages::named_child_of_kind(args, "string")?;
+                let content = crate::languages::named_child_of_kind(key, "string_content")?;
+                Some(crate::languages::property_access(
+                    object,
+                    object.utf8_text(source).ok()?,
+                    content.utf8_text(source).ok()?,
+                    crate::analysis::ts_to_lsp_range(content.range()),
+                    node,
+                ))
+            }
+            _ => None,
+        }
+    }
+
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
         if node.kind() == "attribute" {
             let object = node.child_by_field_name("object")?;

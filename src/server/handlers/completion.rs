@@ -1,5 +1,6 @@
 use crate::analysis::CrossModuleResolution;
 use crate::server::handlers::util::{create_cross_resolver, format_source};
+use crate::server::config::MaskSurface;
 use crate::server::state::ServerState;
 use std::time::Instant;
 use tower_lsp::lsp_types::{
@@ -46,6 +47,8 @@ pub async fn handle_completion(
 
     let workspace_root = crate::server::util::get_workspace_root(&state.core.workspace).await;
 
+    let masking = state.config.masking().await;
+
     let start = Instant::now();
     let all_vars = crate::server::util::safe_all_for_file(&state.core, &file_path).await;
     let elapsed = start.elapsed();
@@ -63,7 +66,9 @@ pub async fn handle_completion(
             all_vars
                 .into_iter()
                 .map(|var| {
-                    let value = var.resolved_value.to_string();
+                    let value = masking
+                        .apply(var.resolved_value.as_ref(), MaskSurface::Completion)
+                        .into_owned();
                     let source_str = format_source(&var.source, &workspace_root);
 
                     let value_formatted = if value.is_empty() {

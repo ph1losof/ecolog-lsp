@@ -11,10 +11,12 @@
 
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; var b = a (local declaration)
+;;
+;; `variable_declarator` holds the initializer directly; there is no
+;; `equals_value_clause` node in this grammar.
 ;; ───────────────────────────────────────────────────────────────────────────
 (local_declaration_statement
   (variable_declaration
     (variable_declarator
-      (identifier) @assignment_target
-      (equals_value_clause
-        (identifier) @assignment_source)))) @assignment
+      name: (identifier) @assignment_target
+      (identifier) @assignment_source))) @assignment

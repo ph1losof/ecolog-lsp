@@ -19,4 +19,4 @@
 ;; Namespace definitions
 ;; ───────────────────────────────────────────────────────────────────────────
 (namespace_definition
-  name: (identifier) @export_name) @export_stmt
+  name: (namespace_identifier) @export_name) @export_stmt

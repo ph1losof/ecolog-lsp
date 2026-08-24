@@ -53,6 +53,32 @@ impl LanguageSupport for Php {
 
     impl_language_queries!("php");
 
+    /// `$e['KEY']` where `$e` aliases `$_ENV` or `$_SERVER`.
+    ///
+    /// This grammar gives `subscript_expression` no field names, so the object
+    /// and key are read positionally from the named children.
+    fn property_access_at(&self, node: Node, source: &[u8]) -> Option<crate::types::PropertyAccess> {
+        if node.kind() != "subscript_expression" {
+            return None;
+        }
+        let object = node.named_child(0)?;
+        if object.kind() != "variable_name" {
+            return None;
+        }
+        let key = node.named_child(1)?;
+        if key.kind() != "string" {
+            return None;
+        }
+        let content = crate::languages::named_child_of_kind(key, "string_content")?;
+        Some(crate::languages::property_access(
+            object,
+            object.utf8_text(source).ok()?,
+            content.utf8_text(source).ok()?,
+            crate::analysis::ts_to_lsp_range(content.range()),
+            node,
+        ))
+    }
+
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
         // Detect $_ENV and $_SERVER superglobals
         if node.kind() == "variable_name" {

@@ -52,7 +52,7 @@ pub async fn handle_definition(
             VariableSource::File { path, offset } => {
                 let target_uri = Url::from_file_path(path).ok()?;
 
-                let content = std::fs::read_to_string(path).ok()?;
+                let content = tokio::fs::read_to_string(path).await.ok()?;
                 let (line, char) = crate::server::util::offset_to_linecol(&content, *offset);
 
                 let range = Range::new(
@@ -134,7 +134,7 @@ async fn handle_definition_cross_module(
             {
                 if let VariableSource::File { path, offset } = &variable.source {
                     let target_uri = Url::from_file_path(path).ok()?;
-                    let content = std::fs::read_to_string(path).ok()?;
+                    let content = tokio::fs::read_to_string(path).await.ok()?;
                     let (line, char) = crate::server::util::offset_to_linecol(&content, *offset);
 
                     let range = Range::new(

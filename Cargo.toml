@@ -1,9 +1,16 @@
 [package]
 name = "ecolog-lsp"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "Language Agnostic LSP for Environment Variables"
+repository = "https://github.com/ph1losof/ecolog-lsp"
+homepage = "https://github.com/ph1losof/ecolog-lsp"
+documentation = "https://docs.rs/ecolog-lsp"
+readme = "README.md"
+keywords = ["lsp", "dotenv", "environment", "language-server", "tree-sitter"]
+categories = ["development-tools"]
+exclude = ["/.github"]
 
 [dependencies]
 # LSP & Async
@@ -64,6 +71,12 @@ glob = "0.3.3"
 # Workspace Indexing
 ignore = "0.4"
 num_cpus = "1.16"
+
+[profile.release]
+# Indexing is dominated by tree-sitter parsing and query evaluation, which
+# benefit measurably from cross-crate inlining.
+lto = "thin"
+codegen-units = 1
 
 [features]
 default = []

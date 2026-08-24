@@ -55,7 +55,7 @@
 ;; ───────────────────────────────────────────────────────────────────────────
 (assignment_expression
   left: (variable_name) @binding_name
-  right: (variable_name) @_var
+  right: (variable_name) @_var @env_object_name
   (#eq? @_var "$_ENV")) @env_object_binding
 
 ;; ───────────────────────────────────────────────────────────────────────────
@@ -63,5 +63,5 @@
 ;; ───────────────────────────────────────────────────────────────────────────
 (assignment_expression
   left: (variable_name) @binding_name
-  right: (variable_name) @_var
+  right: (variable_name) @_var @env_object_name
   (#eq? @_var "$_SERVER")) @env_object_binding

@@ -5,6 +5,8 @@
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; import java.lang.System
 ;; import com.example.EnvConfig
+;; import com.example.Thing as T
 ;; ───────────────────────────────────────────────────────────────────────────
-(import_header
-  (identifier) @import_path) @import_stmt
+(import
+  (qualified_identifier) @import_path
+  (identifier)? @alias_name) @import_stmt

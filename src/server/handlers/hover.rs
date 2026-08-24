@@ -73,12 +73,14 @@ pub async fn handle_hover(params: HoverParams, state: &ServerState) -> Option<Ho
 
     let file_path = uri.to_file_path().ok()?;
 
+    let masking = state.config.masking().await;
+
     if let Some(resolved) = resolve_env_var_value(&env_var_name, &file_path, state).await {
         let markdown = if is_binding {
             let b_name = binding_name.as_deref().unwrap_or(env_var_name.as_str());
-            format_hover_markdown(&env_var_name, Some(b_name), &resolved)
+            format_hover_markdown(&env_var_name, Some(b_name), &resolved, &masking)
         } else {
-            format_hover_markdown(&env_var_name, None, &resolved)
+            format_hover_markdown(&env_var_name, None, &resolved, &masking)
         };
 
         tracing::debug!(
@@ -168,9 +170,10 @@ async fn handle_hover_cross_module(params: HoverParams, state: &ServerState) -> 
             name: env_var_name, ..
         } => {
             let file_path = uri.to_file_path().ok()?;
+            let masking = state.config.masking().await;
             let resolved = resolve_env_var_value(&env_var_name, &file_path, state).await?;
             let markdown =
-                format_hover_markdown(&env_var_name, Some(identifier_name.as_str()), &resolved);
+                format_hover_markdown(&env_var_name, Some(identifier_name.as_str()), &resolved, &masking);
 
             Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
@@ -231,10 +234,11 @@ async fn handle_hover_on_imported_env_object_property(
             let env_var_name = ctx.property_name.as_str();
             let file_path = ctx.uri.to_file_path().ok()?;
 
+            let masking = state.config.masking().await;
             let markdown = if let Some(resolved) =
                 resolve_env_var_value(env_var_name, &file_path, state).await
             {
-                format_hover_markdown(env_var_name, None, &resolved)
+                format_hover_markdown(env_var_name, None, &resolved, &masking)
             } else {
                 format!(
                     "**`{}`**\n\n*Environment variable not found in sources*",

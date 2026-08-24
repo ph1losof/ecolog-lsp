@@ -245,6 +245,14 @@ macro_rules! impl_typescript_language {
                 typescript_is_env_source_node(node, source)
             }
 
+            fn property_access_at(
+                &self,
+                node: Node,
+                source: &[u8],
+            ) -> Option<crate::types::PropertyAccess> {
+                crate::languages::js_property_access_at(node, source, |t| self.strip_quotes(t))
+            }
+
             fn extract_destructure_key(&self, node: Node, source: &[u8]) -> Option<CompactString> {
                 typescript_extract_destructure_key(node, source)
             }
@@ -280,20 +288,15 @@ fn typescript_is_env_source_node(node: Node, source: &[u8]) -> Option<EnvSourceK
             });
         }
 
-        if object.kind() == "member_expression" {
-            let inner_object = object.child_by_field_name("object")?;
-            let inner_property = object.child_by_field_name("property")?;
-            let inner_object_text = inner_object.utf8_text(source).ok()?;
-            let inner_property_text = inner_property.utf8_text(source).ok()?;
-
-            if inner_object_text == "import"
-                && inner_property_text == "meta"
-                && property_text == "env"
-            {
-                return Some(EnvSourceKind::Object {
-                    canonical_name: "import.meta.env".into(),
-                });
-            }
+        // `import.meta` parses as a single `meta_property` node, so the object of
+        // `import.meta.env` is that node rather than a nested member expression.
+        if object.kind() == "meta_property"
+            && object_text == "import.meta"
+            && property_text == "env"
+        {
+            return Some(EnvSourceKind::Object {
+                canonical_name: "import.meta.env".into(),
+            });
         }
     }
 

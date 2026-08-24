@@ -1,18 +1,19 @@
 ;; ═════════════════════════════════════════════════════════════════════════
 ;; Zig Export Queries
 ;; ═════════════════════════════════════════════════════════════════════════
-;; Zig uses pub keyword for exports
+;; Zig uses the `pub` keyword for exports. `pub` is an anonymous token in this
+;; grammar, so it is matched as a string rather than as a named node.
 
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; pub fn foo() {}
 ;; ───────────────────────────────────────────────────────────────────────────
 (function_declaration
-  (pub)
-  (identifier) @export_name) @export_stmt
+  "pub"
+  name: (identifier) @export_name) @export_stmt
 
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; pub const x = ...;
 ;; ───────────────────────────────────────────────────────────────────────────
 (variable_declaration
-  (pub)
+  "pub"
   (identifier) @export_name) @export_stmt

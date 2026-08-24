@@ -1,6 +1,5 @@
 use parking_lot::RwLock as ParkingRwLock;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -58,6 +57,13 @@ pub struct IndexingConfig {
     pub max_file_size: u64,
     #[serde(default = "default_max_depth")]
     pub max_depth: usize,
+    /// Number of files analyzed concurrently during workspace indexing.
+    ///
+    /// `0` picks a value from the core count that leaves headroom for the
+    /// editor. Raise it to index large repositories faster at the cost of more
+    /// CPU; lower it to keep indexing in the background.
+    #[serde(default = "default_indexing_parallelism")]
+    pub parallelism: usize,
 }
 
 fn default_exclude_patterns() -> Vec<String> {
@@ -90,6 +96,10 @@ fn default_max_depth() -> usize {
     30
 }
 
+fn default_indexing_parallelism() -> usize {
+    0
+}
+
 impl Default for IndexingConfig {
     fn default() -> Self {
         Self {
@@ -97,7 +107,19 @@ impl Default for IndexingConfig {
             max_files: default_max_files(),
             max_file_size: default_max_file_size(),
             max_depth: default_max_depth(),
+            parallelism: default_indexing_parallelism(),
         }
+    }
+}
+
+impl IndexingConfig {
+    /// Resolves the configured parallelism to a concrete worker count.
+    pub fn resolved_parallelism(&self) -> usize {
+        if self.parallelism > 0 {
+            return self.parallelism;
+        }
+        // Leave roughly half the cores for the editor and the rest of the server.
+        (num_cpus::get() / 2).clamp(1, 8)
     }
 }
 
@@ -136,6 +158,8 @@ pub struct EcologConfig {
     #[serde(default)]
     pub strict: StrictConfig,
     #[serde(default)]
+    pub masking: MaskingConfig,
+    #[serde(default)]
     pub inlay_hints: InlayHintConfig,
     #[serde(default)]
     pub workspace: abundantis::config::WorkspaceConfig,
@@ -165,6 +189,103 @@ pub struct FeatureConfig {
     pub definition: bool,
     #[serde(default)]
     pub inlay_hints: bool,
+}
+
+/// Controls whether resolved values are hidden when shown in the editor.
+///
+/// Off by default: turning it on changes what every hover and completion shows,
+/// which should be a deliberate choice rather than something an upgrade does.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MaskingConfig {
+    /// Master switch. When false nothing is masked.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Mask values in hover tooltips.
+    #[serde(default = "true_bool")]
+    pub mask_in_hover: bool,
+    /// Mask values in completion item documentation.
+    #[serde(default = "true_bool")]
+    pub mask_in_completion: bool,
+    /// Mask values in inlay hints.
+    #[serde(default = "true_bool")]
+    pub mask_in_inlay_hints: bool,
+    /// Character the value is replaced with.
+    #[serde(default = "default_mask_char")]
+    pub mask_char: char,
+    /// How many trailing characters stay visible, for recognising a value
+    /// without revealing it. `0` hides everything.
+    #[serde(default)]
+    pub show_last: usize,
+}
+
+fn default_mask_char() -> char {
+    '*'
+}
+
+impl Default for MaskingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mask_in_hover: true,
+            mask_in_completion: true,
+            mask_in_inlay_hints: true,
+            mask_char: default_mask_char(),
+            show_last: 0,
+        }
+    }
+}
+
+impl MaskingConfig {
+    /// Returns `value` with its characters replaced, honouring `show_last`.
+    ///
+    /// The mask is a fixed width so the original length is not leaked. An empty
+    /// value stays empty: revealing that a variable is set but blank is not a
+    /// disclosure, and callers render it as an explicit "empty" marker.
+    pub fn mask(&self, value: &str) -> String {
+        const MASK_WIDTH: usize = 8;
+
+        if value.is_empty() {
+            return String::new();
+        }
+
+        let chars: Vec<char> = value.chars().collect();
+        let revealed = self.show_last.min(chars.len());
+        let hidden = chars.len() - revealed;
+
+        if hidden == 0 {
+            // `show_last` covers the whole value; mask it entirely rather than
+            // print it verbatim.
+            return std::iter::repeat(self.mask_char).take(MASK_WIDTH).collect();
+        }
+
+        let mut out: String = std::iter::repeat(self.mask_char).take(MASK_WIDTH).collect();
+        out.extend(&chars[hidden..]);
+        out
+    }
+
+    /// Masks `value` when masking is enabled for the given surface.
+    pub fn apply(&self, value: &str, surface: MaskSurface) -> std::borrow::Cow<'_, str> {
+        let on = self.enabled
+            && match surface {
+                MaskSurface::Hover => self.mask_in_hover,
+                MaskSurface::Completion => self.mask_in_completion,
+                MaskSurface::InlayHint => self.mask_in_inlay_hints,
+            };
+
+        if on {
+            std::borrow::Cow::Owned(self.mask(value))
+        } else {
+            std::borrow::Cow::Owned(value.to_string())
+        }
+    }
+}
+
+/// Where a value is about to be displayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskSurface {
+    Hover,
+    Completion,
+    InlayHint,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -347,6 +468,14 @@ impl ConfigManager {
         self.cached_features.inlay_hints.load(Ordering::Relaxed)
     }
 
+    /// Snapshot of the masking settings.
+    ///
+    /// Cloned rather than borrowed so callers do not hold the config lock while
+    /// rendering.
+    pub async fn masking(&self) -> MaskingConfig {
+        self.get_config().read().await.masking.clone()
+    }
+
     pub fn get_config(&self) -> Arc<RwLock<EcologConfig>> {
         self.config.clone()
     }
@@ -368,9 +497,16 @@ impl ConfigManager {
         }
 
         let config_path = root.join("ecolog.toml");
-        if config_path.exists() {
-            let toml_content = fs::read_to_string(&config_path)
-                .map_err(|e| format!("Failed to read config: {}", e))?;
+        // Read straight away rather than checking `exists()` first: one syscall
+        // instead of two, no blocking of the async runtime, and no window between
+        // the check and the read.
+        let existing = match tokio::fs::read_to_string(&config_path).await {
+            Ok(content) => Some(content),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(format!("Failed to read config: {}", e)),
+        };
+
+        if let Some(toml_content) = existing {
 
             let toml_value: toml::Value = toml::from_str(&toml_content)
                 .map_err(|e| format!("Failed to parse config: {}", e))?;

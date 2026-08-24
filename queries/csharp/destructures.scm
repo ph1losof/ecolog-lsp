@@ -1,14 +1,13 @@
 ;; ═════════════════════════════════════════════════════════════════════════
 ;; C# Destructure Queries
 ;; ═════════════════════════════════════════════════════════════════════════
-
-;; ───────────────────────────────────────────────────────────────────────────
-;; var (a, b) = tuple; (tuple deconstruction)
-;; ───────────────────────────────────────────────────────────────────────────
-(local_declaration_statement
-  (variable_declaration
-    (variable_declarator
-      (tuple_pattern
-        (argument
-          (declaration_expression
-            (identifier) @destructure_key)))))) @destructure
+;;
+;; Intentionally empty.
+;;
+;; A destructure is only meaningful here when the source resolves to an
+;; environment *object* whose properties are variables, the way
+;; `const { PORT } = process.env` works in JavaScript. C# exposes the
+;; environment through `Environment.GetEnvironmentVariable(...)` calls and
+;; through an `IDictionary` that is read by indexing, not by destructuring.
+;; Tuple deconstruction (`var (a, b) = GetTuple();`) is positional and carries
+;; no key to match against a variable name, so there is nothing to bind.

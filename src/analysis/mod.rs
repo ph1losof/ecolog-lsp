@@ -14,7 +14,7 @@ pub use cross_module_resolver::{CrossModuleResolution, CrossModuleResolver};
 pub use document::{DocumentEntry, DocumentManager};
 pub use indexer::WorkspaceIndexer;
 pub use module_resolver::ModuleResolver;
-pub use pipeline::{ts_to_lsp_range, AnalysisPipeline};
+pub use pipeline::{ts_to_lsp_range, AnalysisMode, AnalysisPipeline};
 pub use query::QueryEngine;
 pub use resolver::BindingResolver;
 pub use workspace_index::{

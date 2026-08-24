@@ -15,7 +15,7 @@
         (string_literal
           (string_fragment) @bound_env_var))))
   (#eq? @_obj "System")
-  (#eq? @_method "getenv")) @env_binding
+  (#any-of? @_method "getenv" "getProperty")) @env_binding
 
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; var x = System.getenv("VAR"); (Java 10+ local variable type inference)
@@ -32,7 +32,7 @@
           (string_fragment) @bound_env_var))))
   (#eq? @_type "var")
   (#eq? @_obj "System")
-  (#eq? @_method "getenv")) @env_binding
+  (#any-of? @_method "getenv" "getProperty")) @env_binding
 
 ;; ───────────────────────────────────────────────────────────────────────────
 ;; Field declaration: private String x = System.getenv("VAR");
@@ -47,4 +47,4 @@
         (string_literal
           (string_fragment) @bound_env_var))))
   (#eq? @_obj "System")
-  (#eq? @_method "getenv")) @env_binding
+  (#any-of? @_method "getenv" "getProperty")) @env_binding

@@ -18,28 +18,9 @@
   index: (string)
 ) @completion_target
 
-; import.meta.env.VAR - dot access on import.meta.env
-(member_expression
-  object: (member_expression
-    object: (member_expression
-      object: (import)
-      property: (property_identifier) @meta)
-    property: (property_identifier) @env)
-  (#eq? @meta "meta")
-  (#eq? @env "env")
-) @completion_target
-
-; import.meta.env["VAR"] - subscript on import.meta.env
-(subscript_expression
-  object: (member_expression
-    object: (member_expression
-      object: (import)
-      property: (property_identifier) @meta)
-    property: (property_identifier) @env)
-  index: (string)
-  (#eq? @meta "meta")
-  (#eq? @env "env")
-) @completion_target
+; NOTE: `import.meta.env.VAR` and `import.meta.env["VAR"]` are matched by the
+; generic patterns below -- `import.meta` is a single `meta_property` node, so
+; the object of `import.meta.env` is an ordinary member expression.
 
 ; Generic member_expression - captures "env" from "env.X"
 (member_expression

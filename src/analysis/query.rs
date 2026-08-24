@@ -4,9 +4,8 @@ use crate::types::{
     AccessType, EnvReference, ExportResolution, FileExportEntry, ImportContext, ModuleExport,
 };
 use compact_str::CompactString;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tower_lsp::lsp_types::Range as LspRange;
 use tree_sitter::{Node, Parser, Query, QueryCursor, QueryMatch, Tree};
 
@@ -68,24 +67,49 @@ impl ParserPool {
     }
 }
 
-pub struct QueryEngine {
-    parser_pool: Arc<Mutex<ParserPool>>,
+thread_local! {
+    /// Parsers are pooled per worker thread. A single shared pool behind a mutex
+    /// serialized every parse and every query in the process, which showed up as
+    /// negative scaling once workspace indexing ran more than a few files at once.
+    static PARSER_POOL: RefCell<ParserPool> = RefCell::new(ParserPool::new());
 
-    cursor_pool: Arc<Mutex<Vec<QueryCursor>>>,
+    /// Query cursors are pooled per worker thread for the same reason.
+    static CURSOR_POOL: RefCell<Vec<QueryCursor>> = const { RefCell::new(Vec::new()) };
 }
 
-impl Default for QueryEngine {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Takes a parser for `language` from this thread's pool, creating one if needed.
+fn acquire_parser(language: &dyn LanguageSupport) -> Parser {
+    PARSER_POOL.with(|pool| pool.borrow_mut().acquire(language))
+}
+
+/// Returns a parser to this thread's pool.
+fn release_parser(language_id: &'static str, parser: Parser) {
+    PARSER_POOL.with(|pool| pool.borrow_mut().release(language_id, parser));
+}
+
+/// Takes a query cursor from this thread's pool, creating one if needed.
+fn acquire_cursor() -> QueryCursor {
+    CURSOR_POOL.with(|pool| pool.borrow_mut().pop().unwrap_or_else(QueryCursor::new))
+}
+
+/// Returns a query cursor to this thread's pool.
+fn release_cursor(cursor: QueryCursor) {
+    CURSOR_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if pool.len() < MAX_CURSORS {
+            pool.push(cursor);
+        }
+    });
+}
+
+#[derive(Default)]
+pub struct QueryEngine {
+    _private: (),
 }
 
 impl QueryEngine {
     pub fn new() -> Self {
-        Self {
-            parser_pool: Arc::new(Mutex::new(ParserPool::new())),
-            cursor_pool: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self { _private: () }
     }
 
     pub async fn parse(
@@ -94,19 +118,13 @@ impl QueryEngine {
         content: &str,
         old_tree: Option<&Tree>,
     ) -> Option<Tree> {
-        let mut parser = {
-            let mut pool = self.parser_pool.lock().await;
-            pool.acquire(language)
-        };
+        let mut parser = acquire_parser(language);
 
         let language_id = language.id();
 
         let tree = parser.parse(content, old_tree);
 
-        {
-            let mut pool = self.parser_pool.lock().await;
-            pool.release(language_id, parser);
-        }
+        release_parser(language_id, parser);
 
         tree
     }
@@ -121,9 +139,7 @@ impl QueryEngine {
     where
         F: FnMut(&QueryMatch<'_, 'a>, &[u8]) -> Option<T>,
     {
-        let mut cursor_guard = self.cursor_pool.lock().await;
-        let mut cursor = cursor_guard.pop().unwrap_or_else(QueryCursor::new);
-        drop(cursor_guard);
+        let mut cursor = acquire_cursor();
 
         let mut results = Vec::new();
 
@@ -137,10 +153,7 @@ impl QueryEngine {
             }
         }
 
-        let mut cursor_guard = self.cursor_pool.lock().await;
-        if cursor_guard.len() < MAX_CURSORS {
-            cursor_guard.push(cursor);
-        }
+        release_cursor(cursor);
 
         results
     }
@@ -392,6 +405,10 @@ impl QueryEngine {
         let idx_bound_env_var = query.capture_index_for_name("bound_env_var");
         let idx_env_binding = query.capture_index_for_name("env_binding");
         let idx_env_object_binding = query.capture_index_for_name("env_object_binding");
+        // Names the env object an alias points at, for languages that expose more
+        // than one (`process.env` vs `import.meta.env`, `$_ENV` vs `$_SERVER`).
+        // Distinct from `bound_env_var` so it does not register as a destructure key.
+        let idx_env_object_name = query.capture_index_for_name("env_object_name");
 
         let comment_kinds = language.comment_node_kinds();
 
@@ -402,6 +419,7 @@ impl QueryEngine {
             let mut declaration_range = None;
             let mut is_object_binding = false;
             let mut bound_env_var_range = None;
+            let mut env_object_name: Option<CompactString> = None;
 
             for capture in m.captures {
                 let idx = Some(capture.index);
@@ -418,13 +436,15 @@ impl QueryEngine {
                 } else if idx == idx_env_object_binding {
                     declaration_range = Some(capture.node.range());
                     is_object_binding = true;
+                } else if idx == idx_env_object_name {
+                    env_object_name = language.extract_var_name(capture.node, src);
                 }
             }
 
             if is_object_binding && env_var_name.is_none() {
-                if let Some(default_obj) = language.default_env_object_name() {
-                    env_var_name = Some(default_obj.into());
-                }
+                env_var_name = env_object_name.or_else(|| {
+                    language.default_env_object_name().map(CompactString::from)
+                });
             }
 
             if let (Some(bind_name), Some(env_name), Some(bind_r), Some(decl_r)) =
@@ -822,15 +842,16 @@ impl QueryEngine {
             let exported_name = match raw.export_name {
                 Some(name) => name,
                 None => {
-                    if raw.is_default && raw.declaration_range.is_some() {
-                        let export = ModuleExport {
+                    if let (true, Some(declaration_range)) =
+                        (raw.is_default, raw.declaration_range)
+                    {
+                        entry.default_export = Some(ModuleExport {
                             exported_name: CompactString::from("default"),
                             local_name: None,
                             resolution: ExportResolution::Unknown,
-                            declaration_range: raw.declaration_range.unwrap(),
+                            declaration_range,
                             is_default: true,
-                        };
-                        entry.default_export = Some(export);
+                        });
                     }
                     continue;
                 }

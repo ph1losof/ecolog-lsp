@@ -1,4 +1,5 @@
 use crate::analysis::CrossModuleResolver;
+use crate::server::config::{MaskSurface, MaskingConfig};
 use crate::server::state::ServerState;
 use abundantis::source::VariableSource;
 use std::path::Path;
@@ -74,18 +75,21 @@ pub(crate) fn format_hover_markdown(
     env_var_name: &str,
     identifier_name: Option<&str>,
     resolved: &ResolvedEnvVarValue,
+    masking: &MaskingConfig,
 ) -> String {
     let header = match identifier_name {
         Some(id) if id != env_var_name => format!("**`{}`** → **`{}`**", id, env_var_name),
         _ => format!("**`{}`**", env_var_name),
     };
 
-    let value_formatted = if resolved.value.is_empty() {
+    let value = masking.apply(&resolved.value, MaskSurface::Hover);
+
+    let value_formatted = if value.is_empty() {
         "*(empty)*".to_string()
-    } else if resolved.value.contains('\n') {
-        format!("`{}`", resolved.value.replace('\n', "`\n`"))
+    } else if value.contains('\n') {
+        format!("`{}`", value.replace('\n', "`\n`"))
     } else {
-        format!("`{}`", resolved.value)
+        format!("`{}`", value)
     };
 
     let mut markdown = format!(
@@ -100,6 +104,17 @@ pub(crate) fn format_hover_markdown(
     }
 
     markdown
+}
+
+/// Truncates `text` to at most `max_chars` characters, appending an ellipsis.
+///
+/// Counts characters, not bytes: slicing a `str` at a byte offset that lands
+/// inside a multi-byte character panics, and env values are arbitrary text.
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
+    match text.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => format!("{}...", &text[..byte_idx]),
+        None => text.to_string(),
+    }
 }
 
 pub(crate) fn get_line_col(content: &str, offset: usize) -> (u32, u32) {
@@ -286,7 +301,7 @@ mod tests {
             source: ".env".to_string(),
             description: None,
         };
-        let result = format_hover_markdown("DATABASE_URL", None, &resolved);
+        let result = format_hover_markdown("DATABASE_URL", None, &resolved, &MaskingConfig::default());
         assert!(result.contains("**`DATABASE_URL`**"));
         assert!(result.contains("`postgres://localhost`"));
         assert!(result.contains("`.env`"));
@@ -299,7 +314,7 @@ mod tests {
             source: ".env.local".to_string(),
             description: None,
         };
-        let result = format_hover_markdown("API_KEY", Some("apiKey"), &resolved);
+        let result = format_hover_markdown("API_KEY", Some("apiKey"), &resolved, &MaskingConfig::default());
         assert!(result.contains("**`apiKey`** → **`API_KEY`**"));
     }
 
@@ -311,7 +326,7 @@ mod tests {
             description: None,
         };
         // When binding name is same as env var name, no arrow
-        let result = format_hover_markdown("PORT", Some("PORT"), &resolved);
+        let result = format_hover_markdown("PORT", Some("PORT"), &resolved, &MaskingConfig::default());
         assert!(result.contains("**`PORT`**"));
         assert!(!result.contains("→"));
     }
@@ -323,7 +338,7 @@ mod tests {
             source: ".env".to_string(),
             description: Some(compact_str::CompactString::from("Enable debug mode")),
         };
-        let result = format_hover_markdown("DEBUG", None, &resolved);
+        let result = format_hover_markdown("DEBUG", None, &resolved, &MaskingConfig::default());
         assert!(result.contains("*Enable debug mode*"));
     }
 
@@ -334,7 +349,7 @@ mod tests {
             source: ".env".to_string(),
             description: None,
         };
-        let result = format_hover_markdown("MULTILINE", None, &resolved);
+        let result = format_hover_markdown("MULTILINE", None, &resolved, &MaskingConfig::default());
         // Newlines should be formatted specially
         assert!(result.contains("`line1`\n`line2`"));
     }
@@ -346,7 +361,7 @@ mod tests {
             source: ".env".to_string(),
             description: None,
         };
-        let result = format_hover_markdown("EMPTY_VAR", None, &resolved);
+        let result = format_hover_markdown("EMPTY_VAR", None, &resolved, &MaskingConfig::default());
         assert!(result.contains("**`EMPTY_VAR`**"));
         // Empty value should show italic indicator, not empty backticks
         assert!(result.contains("*(empty)*"));

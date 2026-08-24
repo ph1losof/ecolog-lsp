@@ -515,10 +515,11 @@ fn node_to_lsp_range(node: tree_sitter::Node) -> Range {
 /// Truncate text with ellipsis if too long.
 fn truncate_text(text: &str, max_len: usize) -> String {
     let trimmed = text.trim();
-    if trimmed.len() > max_len {
-        format!("{}...", &trimmed[..max_len])
-    } else {
-        trimmed.to_string()
+    // Count characters, not bytes: slicing at a byte offset inside a multi-byte
+    // character panics.
+    match trimmed.char_indices().nth(max_len) {
+        Some((byte_idx, _)) => format!("{}...", &trimmed[..byte_idx]),
+        None => trimmed.to_string(),
     }
 }
 

@@ -1,6 +1,7 @@
 use crate::analysis::graph::EnvVarLocationKind;
 use crate::analysis::BindingResolver;
 use crate::server::config::InlayHintConfig;
+use crate::server::config::{MaskSurface, MaskingConfig};
 use crate::server::handlers::util::resolve_env_var_value;
 use crate::server::state::ServerState;
 use compact_str::CompactString;
@@ -32,11 +33,11 @@ pub async fn handle_inlay_hints(
         return None;
     }
 
-    // 2. Get inlay hint config
-    let config = {
+    // 2. Get inlay hint and masking config in one read
+    let (config, masking) = {
         let config_arc = state.config.get_config();
         let config = config_arc.read().await;
-        config.inlay_hints.clone()
+        (config.inlay_hints.clone(), config.masking.clone())
     };
 
     // 3. Get binding graph
@@ -58,7 +59,7 @@ pub async fn handle_inlay_hints(
     let mut resolved: FxHashMap<CompactString, (String, String)> = FxHashMap::default();
     for var in &env_vars {
         if let Some(r) = resolve_env_var_value(var, &file_path, state).await {
-            let display = format_value(&r.value, &config);
+            let display = format_value(&r.value, &config, &masking);
             resolved.insert(var.clone(), (display, r.source));
         }
     }
@@ -113,7 +114,10 @@ pub async fn handle_inlay_hints(
     Some(hints)
 }
 
-fn format_value(value: &str, config: &InlayHintConfig) -> String {
+fn format_value(value: &str, config: &InlayHintConfig, masking: &MaskingConfig) -> String {
+    let value = masking.apply(value, MaskSurface::InlayHint);
+    let value = value.as_ref();
+
     if value.is_empty() {
         return "(empty)".to_string();
     }
@@ -124,11 +128,7 @@ fn format_value(value: &str, config: &InlayHintConfig) -> String {
         value.to_string()
     };
 
-    if value.len() > config.max_value_length {
-        format!("{}...", &value[..config.max_value_length])
-    } else {
-        value
-    }
+    crate::server::handlers::util::truncate_chars(&value, config.max_value_length)
 }
 
 fn should_show(kind: EnvVarLocationKind, config: &InlayHintConfig) -> bool {
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn test_format_value_simple() {
         let config = InlayHintConfig::default();
-        let result = format_value("simple_value", &config);
+        let result = format_value("simple_value", &config, &MaskingConfig::default());
         assert_eq!(result, "simple_value");
     }
 
@@ -172,21 +172,21 @@ mod tests {
             max_value_length: 10,
             ..Default::default()
         };
-        let result = format_value("this_is_a_very_long_value", &config);
+        let result = format_value("this_is_a_very_long_value", &config, &MaskingConfig::default());
         assert_eq!(result, "this_is_a_...");
     }
 
     #[test]
     fn test_format_value_multiline() {
         let config = InlayHintConfig::default();
-        let result = format_value("line1\nline2\nline3", &config);
+        let result = format_value("line1\nline2\nline3", &config, &MaskingConfig::default());
         assert_eq!(result, "line1...");
     }
 
     #[test]
     fn test_format_value_empty() {
         let config = InlayHintConfig::default();
-        let result = format_value("", &config);
+        let result = format_value("", &config, &MaskingConfig::default());
         assert_eq!(result, "(empty)");
     }
 

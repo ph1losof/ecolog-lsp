@@ -186,6 +186,13 @@ impl BindingGraph {
     /// Returns the most recent valid symbol with the given name that is
     /// visible from the specified scope.
     pub fn lookup_symbol(&self, name: &str, scope: ScopeId) -> Option<&Symbol> {
+        // Cheap rejection before walking the scope chain: most identifiers in a
+        // file never name a tracked symbol, and the per-scope lookup below has to
+        // build an owned key to probe `name_index`.
+        if !self.name_only_index.contains_key(name) {
+            return None;
+        }
+
         let mut current_scope = Some(scope);
 
         while let Some(scope_id) = current_scope {
@@ -236,8 +243,12 @@ impl BindingGraph {
             value: (id, size),
         });
 
-        // Clear scope cache since new scope was added
-        self.scope_cache.write().clear();
+        // Clear the scope cache since a new scope may be more specific than a
+        // cached answer. Scopes are added in bulk during analysis while the cache
+        // is empty, so check under a read lock before taking the write lock.
+        if !self.scope_cache.read().is_empty() {
+            self.scope_cache.write().clear();
+        }
 
         self.scopes.push(scope);
         id

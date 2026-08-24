@@ -1,5 +1,5 @@
 use crate::languages::LanguageSupport;
-use crate::types::EnvSourceKind;
+use crate::types::{EnvSourceKind, PropertyAccess};
 use compact_str::CompactString;
 use tree_sitter::{Language, Node};
 
@@ -60,6 +60,10 @@ impl LanguageSupport for JavaScript {
 
     impl_language_queries!("javascript");
 
+    fn property_access_at(&self, node: Node, source: &[u8]) -> Option<PropertyAccess> {
+        crate::languages::js_property_access_at(node, source, |t| self.strip_quotes(t))
+    }
+
     fn is_env_source_node(&self, node: Node, source: &[u8]) -> Option<EnvSourceKind> {
         if node.kind() == "member_expression" {
             let object = node.child_by_field_name("object")?;
@@ -74,20 +78,15 @@ impl LanguageSupport for JavaScript {
                 });
             }
 
-            if object.kind() == "member_expression" {
-                let inner_object = object.child_by_field_name("object")?;
-                let inner_property = object.child_by_field_name("property")?;
-                let inner_object_text = inner_object.utf8_text(source).ok()?;
-                let inner_property_text = inner_property.utf8_text(source).ok()?;
-
-                if inner_object_text == "import"
-                    && inner_property_text == "meta"
-                    && property_text == "env"
-                {
-                    return Some(EnvSourceKind::Object {
-                        canonical_name: "import.meta.env".into(),
-                    });
-                }
+            // `import.meta` parses as a single `meta_property` node, so the object of
+            // `import.meta.env` is that node rather than a nested member expression.
+            if object.kind() == "meta_property"
+                && object_text == "import.meta"
+                && property_text == "env"
+            {
+                return Some(EnvSourceKind::Object {
+                    canonical_name: "import.meta.env".into(),
+                });
             }
         }
 

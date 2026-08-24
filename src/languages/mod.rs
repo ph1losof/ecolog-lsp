@@ -1,4 +1,6 @@
-use crate::types::{EnvSourceKind, ScopeKind};
+use crate::analysis::ts_to_lsp_range;
+use crate::types::{EnvSourceKind, PropertyAccess, ScopeKind};
+use tower_lsp::lsp_types::{Position, Range};
 use compact_str::CompactString;
 use tree_sitter::{Language, Node, Query};
 
@@ -33,6 +35,20 @@ macro_rules! define_language_queries {
             match ::tree_sitter::Query::new(grammar, source) {
                 Ok(query) => query,
                 Err(e) => {
+                    // Under test this is a hard failure. The empty fallback below
+                    // is indistinguishable from a query that legitimately matches
+                    // nothing, so without this the `*_queries_compile` tests pass
+                    // no matter how broken a query is -- which is exactly how
+                    // several queries stayed broken.
+                    if cfg!(test) {
+                        panic!(
+                            "Failed to compile {} {} query: {}",
+                            $lang_name, query_name, e
+                        );
+                    }
+
+                    // At runtime a broken query must not take down the server, so
+                    // it degrades to matching nothing.
                     ::tracing::error!(
                         language = $lang_name,
                         query = query_name,
@@ -179,6 +195,100 @@ pub mod zig;
 
 pub use registry::LanguageRegistry;
 
+
+/// Builds a [`PropertyAccess`] from the object node, the node holding the key
+/// text, and the node covering the whole expression.
+///
+/// `key_range` is given separately because some grammars expose the key with its
+/// quotes (`"PORT"`) and others without (`string_content`).
+pub(crate) fn property_access(
+    object: Node,
+    object_name: &str,
+    key_name: &str,
+    key_range: Range,
+    whole: Node,
+) -> PropertyAccess {
+    PropertyAccess {
+        object_name: object_name.into(),
+        object_position: Position::new(
+            object.start_position().row as u32,
+            object.start_position().column as u32,
+        ),
+        property_name: key_name.into(),
+        property_range: key_range,
+        usage_range: ts_to_lsp_range(whole.range()),
+    }
+}
+
+/// The range of a quoted string node with the quote characters trimmed.
+///
+/// Grammars that expose an unquoted `string_content` child should use that
+/// node's range directly instead.
+pub(crate) fn unquoted_range(string_node: Node) -> Range {
+    let r = string_node.range();
+    Range {
+        start: Position {
+            line: r.start_point.row as u32,
+            character: r.start_point.column as u32 + 1,
+        },
+        end: Position {
+            line: r.end_point.row as u32,
+            character: (r.end_point.column as u32).saturating_sub(1),
+        },
+    }
+}
+
+/// Finds the first descendant named `kind` directly under `node`.
+pub(crate) fn named_child_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node.named_children(&mut cursor).find(|c| c.kind() == kind);
+    found
+}
+
+
+/// Shared implementation for the JavaScript-family grammars.
+///
+/// Covers `obj.KEY` (`member_expression`) and `obj["KEY"]`
+/// (`subscript_expression`).
+pub(crate) fn js_property_access_at(
+    node: Node,
+    source: &[u8],
+    strip: impl Fn(&str) -> &str,
+) -> Option<PropertyAccess> {
+    match node.kind() {
+        "member_expression" => {
+            let object = node.child_by_field_name("object")?;
+            let property = node.child_by_field_name("property")?;
+            if object.kind() != "identifier" {
+                return None;
+            }
+            Some(crate::languages::property_access(
+                object,
+                object.utf8_text(source).ok()?,
+                property.utf8_text(source).ok()?,
+                crate::analysis::ts_to_lsp_range(property.range()),
+                node,
+            ))
+        }
+        "subscript_expression" => {
+            let object = node.child_by_field_name("object")?;
+            let index = node.child_by_field_name("index")?;
+            if object.kind() != "identifier" || index.kind() != "string" {
+                return None;
+            }
+            let raw = index.utf8_text(source).ok()?;
+            Some(crate::languages::property_access(
+                object,
+                object.utf8_text(source).ok()?,
+                strip(raw),
+                crate::languages::unquoted_range(index),
+                node,
+            ))
+        }
+        _ => None,
+    }
+}
+
 pub trait LanguageSupport: Send + Sync {
     fn id(&self) -> &'static str;
 
@@ -248,6 +358,19 @@ pub trait LanguageSupport: Send + Sync {
     }
 
     fn is_env_source_node(&self, _node: Node, _source: &[u8]) -> Option<EnvSourceKind> {
+        None
+    }
+
+    /// Extracts a read of a named key off an object, if `node` is one.
+    ///
+    /// This is what makes an env-object alias work: given `const e = process.env`,
+    /// every `e.PORT` has to be recognised as a read of `PORT`. Each grammar
+    /// spells that differently -- `member_expression`, `subscript`,
+    /// `element_reference` -- so the shape lives here rather than in the pipeline.
+    ///
+    /// Languages whose binding query emits `@env_object_binding` must implement
+    /// this, or reads through the alias they create resolve to nothing.
+    fn property_access_at(&self, _node: Node, _source: &[u8]) -> Option<PropertyAccess> {
         None
     }
 

@@ -2,23 +2,43 @@ use crate::analysis::graph::BindingGraph;
 use crate::analysis::query::QueryEngine;
 use crate::languages::LanguageSupport;
 use crate::types::{
-    ImportContext, Scope, ScopeId, Symbol, SymbolId, SymbolKind, SymbolOrigin, SymbolUsage,
+    ImportContext, PropertyAccess, Scope, ScopeId, Symbol, SymbolId, SymbolKind, SymbolOrigin,
+    SymbolUsage,
 };
 use compact_str::CompactString;
 use tower_lsp::lsp_types::{Position, Range};
 use tree_sitter::Tree;
 
-#[derive(Debug)]
-struct PropertyAccessCandidate {
-    object_name: CompactString,
+/// How much of the binding graph a caller needs.
+///
+/// Workspace indexing only asks "which env vars does this file touch?", while
+/// interactive requests (hover, rename, inlay hints) need positional indices and
+/// per-symbol usages. Building the latter for every file in a large repository is
+/// the bulk of indexing cost, so indexing opts out of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisMode {
+    /// Everything: symbol usages and all interval trees.
+    Full,
+    /// Only what is needed to enumerate a file's env vars and exports.
+    Index,
+}
 
-    property_name: CompactString,
+impl AnalysisMode {
+    #[inline]
+    fn needs_usages(self) -> bool {
+        matches!(self, AnalysisMode::Full)
+    }
+}
 
-    usage_range: Range,
-
-    property_range: Range,
-
-    object_position: Position,
+/// Flattened range, for cheap set membership.
+#[inline]
+fn range_key(range: Range) -> (u32, u32, u32, u32) {
+    (
+        range.start.line,
+        range.start.character,
+        range.end.line,
+        range.end.character,
+    )
 }
 
 pub struct AnalysisPipeline;
@@ -31,15 +51,75 @@ impl AnalysisPipeline {
         source: &[u8],
         import_context: &ImportContext,
     ) -> BindingGraph {
+        Self::analyze_with_mode(
+            query_engine,
+            language,
+            tree,
+            source,
+            import_context,
+            AnalysisMode::Full,
+        )
+        .await
+    }
+
+    /// Analyze a file, building only the parts of the graph that `mode` requires.
+    pub async fn analyze_with_mode(
+        query_engine: &QueryEngine,
+        language: &dyn LanguageSupport,
+        tree: &Tree,
+        source: &[u8],
+        import_context: &ImportContext,
+        mode: AnalysisMode,
+    ) -> BindingGraph {
         let mut graph = BindingGraph::new();
 
         let root_range = ts_to_lsp_range(tree.root_node().range());
         graph.set_root_range(root_range);
 
-        let property_candidates =
-            Self::extract_scopes_and_collect_property_accesses(language, tree, source, &mut graph);
+        // The symbol-producing queries are scope-free, so run them first. If a
+        // file declares no symbols at all -- the common case across a repository,
+        // since the binding queries are anchored on `process.env` and friends --
+        // there is nothing for a scope tree to be useful for.
+        let bindings = query_engine.extract_bindings(language, tree, source).await;
+        let assignments = query_engine
+            .extract_assignments(language, tree, source)
+            .await;
+        let destructures = query_engine
+            .extract_destructures(language, tree, source)
+            .await;
 
-        graph.rebuild_scope_range_index();
+        let has_symbols =
+            !bindings.is_empty() || !assignments.is_empty() || !destructures.is_empty();
+
+        // An env-object alias (`const e = process.env`) turns every `e.KEY` read
+        // into an env var reference. Those are recorded as usages, so even index
+        // mode has to collect property accesses when such a binding exists --
+        // otherwise the file is indexed as referencing nothing.
+        let has_env_object_binding = bindings
+            .iter()
+            .any(|b| b.kind == crate::types::BindingKind::Object);
+
+        // Walking every node to build the scope tree is the single most expensive
+        // step of indexing. Skip it when no symbol will ever be looked up in a
+        // scope. `Full` mode still builds it: open documents answer positional
+        // requests (completion, hover) against the scope index.
+        let build_scopes = has_symbols || mode.needs_usages();
+
+        let collect_property_accesses = mode.needs_usages() || has_env_object_binding;
+
+        let property_candidates = if build_scopes {
+            let candidates = Self::extract_scopes_and_collect_property_accesses(
+                language,
+                tree,
+                source,
+                &mut graph,
+                collect_property_accesses,
+            );
+            graph.rebuild_scope_range_index();
+            candidates
+        } else {
+            Vec::new()
+        };
 
         Self::extract_direct_references(
             query_engine,
@@ -51,17 +131,27 @@ impl AnalysisPipeline {
         )
         .await;
 
-        Self::extract_bindings(query_engine, language, tree, source, &mut graph).await;
+        Self::apply_bindings(bindings, assignments, destructures, language, &mut graph);
 
         Self::resolve_origins(&mut graph);
 
-        Self::extract_usages(query_engine, language, tree, source, &mut graph).await;
+        if mode.needs_usages() {
+            Self::extract_usages(query_engine, language, tree, source, &mut graph).await;
+        }
 
-        Self::process_property_access_candidates(&property_candidates, &mut graph);
+        if collect_property_accesses {
+            Self::process_property_access_candidates(&property_candidates, &mut graph);
+        }
 
-        Self::process_reassignments(query_engine, language, tree, source, &mut graph).await;
+        // Reassignments only invalidate existing symbols, so with no symbols the
+        // query and the pass over its results are both dead work.
+        if has_symbols {
+            Self::process_reassignments(query_engine, language, tree, source, &mut graph).await;
+        }
 
-        graph.rebuild_range_index();
+        if mode.needs_usages() {
+            graph.rebuild_range_index();
+        }
 
         graph
     }
@@ -71,132 +161,80 @@ impl AnalysisPipeline {
         tree: &Tree,
         source: &[u8],
         graph: &mut BindingGraph,
-    ) -> Vec<PropertyAccessCandidate> {
+        collect_candidates: bool,
+    ) -> Vec<PropertyAccess> {
         let mut candidates = Vec::new();
         Self::walk_combined(
-            tree.root_node(),
+            tree,
             language,
             source,
             graph,
-            ScopeId::root(),
             &mut candidates,
+            collect_candidates,
         );
         candidates
     }
 
+    /// Single-pass pre-order traversal that assigns scopes and (in `Full` mode)
+    /// collects property-access candidates.
+    ///
+    /// Uses one reusable `TreeCursor` for the whole tree. The previous recursive
+    /// version allocated and freed a cursor per node via `Node::walk()`, which
+    /// dominated indexing profiles.
     fn walk_combined(
-        node: tree_sitter::Node,
+        tree: &Tree,
         language: &dyn LanguageSupport,
         source: &[u8],
         graph: &mut BindingGraph,
-        parent_scope: ScopeId,
-        candidates: &mut Vec<PropertyAccessCandidate>,
+        candidates: &mut Vec<PropertyAccess>,
+        collect_candidates: bool,
     ) {
-        let current_scope = if language.is_scope_node(node) && !language.is_root_node(node) {
-            let scope_kind = language.node_to_scope_kind(node.kind());
-            let scope = Scope {
-                id: ScopeId::root(),
-                parent: Some(parent_scope),
-                range: ts_to_lsp_range(node.range()),
-                kind: scope_kind,
+        let mut cursor = tree.walk();
+        // Scope stack: the scope in effect for the children at each depth.
+        let mut scope_stack: Vec<ScopeId> = vec![ScopeId::root()];
+
+        loop {
+            let node = cursor.node();
+            let parent_scope = *scope_stack.last().expect("scope stack is never empty");
+
+            let current_scope = if language.is_scope_node(node) && !language.is_root_node(node) {
+                let scope_kind = language.node_to_scope_kind(node.kind());
+                graph.add_scope(Scope {
+                    id: ScopeId::root(),
+                    parent: Some(parent_scope),
+                    range: ts_to_lsp_range(node.range()),
+                    kind: scope_kind,
+                })
+            } else {
+                parent_scope
             };
-            graph.add_scope(scope)
-        } else {
-            parent_scope
-        };
 
-        if node.kind() == "member_expression" {
-            if let Some(candidate) = Self::extract_member_expression_candidate(node, source) {
-                candidates.push(candidate);
+            if collect_candidates {
+                if let Some(candidate) = language.property_access_at(node, source) {
+                    candidates.push(candidate);
+                }
+            }
+
+            if cursor.goto_first_child() {
+                scope_stack.push(current_scope);
+                continue;
+            }
+
+            // Leaf: advance to the next sibling, unwinding as far as needed.
+            loop {
+                if cursor.goto_next_sibling() {
+                    break;
+                }
+                if !cursor.goto_parent() {
+                    return;
+                }
+                scope_stack.pop();
             }
         }
-
-        if node.kind() == "subscript_expression" {
-            if let Some(candidate) =
-                Self::extract_subscript_expression_candidate(node, source, language)
-            {
-                candidates.push(candidate);
-            }
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            Self::walk_combined(child, language, source, graph, current_scope, candidates);
-        }
-    }
-
-    fn extract_member_expression_candidate(
-        node: tree_sitter::Node,
-        source: &[u8],
-    ) -> Option<PropertyAccessCandidate> {
-        let object = node.child_by_field_name("object")?;
-        let property = node.child_by_field_name("property")?;
-
-        if object.kind() != "identifier" {
-            return None;
-        }
-
-        let obj_name = object.utf8_text(source).ok()?;
-        let prop_name = property.utf8_text(source).ok()?;
-
-        Some(PropertyAccessCandidate {
-            object_name: obj_name.into(),
-            property_name: prop_name.into(),
-            usage_range: ts_to_lsp_range(node.range()),
-            property_range: ts_to_lsp_range(property.range()),
-            object_position: Position::new(
-                object.start_position().row as u32,
-                object.start_position().column as u32,
-            ),
-        })
-    }
-
-    fn extract_subscript_expression_candidate(
-        node: tree_sitter::Node,
-        source: &[u8],
-        language: &dyn LanguageSupport,
-    ) -> Option<PropertyAccessCandidate> {
-        let object = node.child_by_field_name("object")?;
-        let index = node.child_by_field_name("index")?;
-
-        if object.kind() != "identifier" {
-            return None;
-        }
-
-        if index.kind() != "string" {
-            return None;
-        }
-
-        let obj_name = object.utf8_text(source).ok()?;
-        let raw = index.utf8_text(source).ok()?;
-        let prop_name = language.strip_quotes(raw);
-
-        let index_range = index.range();
-        let prop_range = Range {
-            start: Position {
-                line: index_range.start_point.row as u32,
-                character: index_range.start_point.column as u32 + 1,
-            },
-            end: Position {
-                line: index_range.end_point.row as u32,
-                character: index_range.end_point.column as u32 - 1,
-            },
-        };
-
-        Some(PropertyAccessCandidate {
-            object_name: obj_name.into(),
-            property_name: prop_name.into(),
-            usage_range: ts_to_lsp_range(node.range()),
-            property_range: prop_range,
-            object_position: Position::new(
-                object.start_position().row as u32,
-                object.start_position().column as u32,
-            ),
-        })
     }
 
     fn process_property_access_candidates(
-        candidates: &[PropertyAccessCandidate],
+        candidates: &[PropertyAccess],
         graph: &mut BindingGraph,
     ) {
         for candidate in candidates {
@@ -234,24 +272,37 @@ impl AnalysisPipeline {
         }
     }
 
-    async fn extract_bindings(
-        query_engine: &QueryEngine,
+    /// Applies previously collected query results to the graph.
+    ///
+    /// Split from the queries themselves so callers can decide whether a scope
+    /// tree is needed before any symbol is inserted.
+    fn apply_bindings(
+        bindings: Vec<crate::types::EnvBinding>,
+        assignments: Vec<(CompactString, Range, CompactString)>,
+        destructures: Vec<(CompactString, Range, CompactString, Range, CompactString)>,
         language: &dyn LanguageSupport,
-        tree: &Tree,
-        source: &[u8],
         graph: &mut BindingGraph,
     ) {
-        let bindings = query_engine.extract_bindings(language, tree, source).await;
+        let mut bound_ranges: rustc_hash::FxHashSet<(u32, u32, u32, u32)> =
+            rustc_hash::FxHashSet::default();
+
+        for binding in &bindings {
+            bound_ranges.insert(range_key(binding.binding_range));
+        }
 
         for binding in bindings {
             let scope = graph.scope_at_position(binding.binding_range.start);
 
             let (origin, kind) = match binding.kind {
                 crate::types::BindingKind::Object => {
+                    // A language can expose several env objects (`process.env` and
+                    // `import.meta.env`; `$_ENV` and `$_SERVER`), so ask whether
+                    // this name is one of them rather than comparing against the
+                    // single default.
                     let is_env_object = language
-                        .default_env_object_name()
-                        .map(|name| binding.env_var_name == name)
-                        .unwrap_or(false);
+                        .is_standard_env_object(binding.env_var_name.as_str())
+                        || language.default_env_object_name()
+                            == Some(binding.env_var_name.as_str());
 
                     if is_env_object {
                         (
@@ -292,11 +343,14 @@ impl AnalysisPipeline {
             graph.add_symbol(symbol);
         }
 
-        let assignments = query_engine
-            .extract_assignments(language, tree, source)
-            .await;
-
+        // Languages without a distinct declaration syntax (`$e = $_ENV;` in PHP)
+        // match both the binding query and the generic assignment query at the
+        // same site. The generic match resolves to nothing and, being added
+        // later, would win `lookup_symbol`, so skip sites already bound.
         for (target_name, target_range, source_name) in assignments {
+            if bound_ranges.contains(&range_key(target_range)) {
+                continue;
+            }
             let scope = graph.scope_at_position(target_range.start);
 
             let symbol = Symbol {
@@ -321,11 +375,10 @@ impl AnalysisPipeline {
             }
         }
 
-        let destructures = query_engine
-            .extract_destructures(language, tree, source)
-            .await;
-
         for (target_name, target_range, key_name, key_range, source_name) in destructures {
+            if bound_ranges.contains(&range_key(target_range)) {
+                continue;
+            }
             let scope = graph.scope_at_position(target_range.start);
 
             let source_id = graph.lookup_symbol_id(&source_name, scope);
@@ -438,6 +491,19 @@ impl AnalysisPipeline {
             // Use name-only index for O(1) lookup instead of scanning all symbols
             for symbol_id in graph.lookup_symbols_by_name(name) {
                 if let Some(symbol) = graph.get_symbol(symbol_id) {
+                    // In languages where a declaration *is* an assignment
+                    // (`$e = $_ENV;`), the binding's own declaration matches the
+                    // reassignment query. It must not invalidate itself.
+                    if symbol.name_range == *range {
+                        continue;
+                    }
+
+                    // An assignment before the declaration says nothing about the
+                    // value the declaration binds.
+                    if !Self::is_after(range.start, symbol.declaration_range.end) {
+                        continue;
+                    }
+
                     if Self::is_scope_visible(graph, symbol.scope, reassignment_scope) {
                         symbols_to_invalidate.push(symbol_id);
                     }
@@ -448,6 +514,12 @@ impl AnalysisPipeline {
         for symbol_id in symbols_to_invalidate {
             graph.invalidate_symbol(symbol_id);
         }
+    }
+
+    /// Whether `pos` lies strictly after `mark`.
+    #[inline]
+    fn is_after(pos: Position, mark: Position) -> bool {
+        pos.line > mark.line || (pos.line == mark.line && pos.character > mark.character)
     }
 
     fn is_scope_visible(graph: &BindingGraph, from_scope: ScopeId, target_scope: ScopeId) -> bool {

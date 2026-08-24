@@ -1,0 +1,19 @@
+# Build output
+/target/
+
+# Backup files left by `cargo fix` / rustfmt
+**/*.rs.bk
+
+# Coverage instrumentation
+*.profraw
+*.profdata
+
+# Editor and OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Note: Cargo.lock is intentionally NOT ignored. This crate ships the
+# `ecolog-lsp` binary, and Cargo's guidance is to commit the lockfile for
+# packages that produce binaries so builds are reproducible.

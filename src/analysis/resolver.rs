@@ -377,7 +377,7 @@ impl<'a> BindingResolver<'a> {
     }
 
     pub fn all_env_vars(&self) -> Vec<CompactString> {
-        let mut vars = std::collections::HashSet::new();
+        let mut vars = rustc_hash::FxHashSet::default();
 
         for reference in self.graph.direct_references() {
             vars.insert(reference.name.clone());
@@ -386,6 +386,22 @@ impl<'a> BindingResolver<'a> {
         for symbol in self.graph.symbols() {
             if let Some(ResolvedEnv::Variable(name)) = self.graph.resolve_to_env(symbol.id) {
                 vars.insert(name);
+            }
+        }
+
+        // A property read through an env-object alias -- `const e = process.env;`
+        // then `e.PORT` -- references PORT just as directly as `process.env.PORT`
+        // does, but it is recorded as a usage rather than as a symbol. Without
+        // this the workspace index, and with it cross-file references, rename and
+        // inlay hints, cannot see those files.
+        for usage in self.graph.usages() {
+            if let Some(property) = &usage.property_access {
+                if matches!(
+                    self.graph.resolve_to_env(usage.symbol_id),
+                    Some(ResolvedEnv::Object(_))
+                ) {
+                    vars.insert(property.clone());
+                }
             }
         }
 
@@ -487,14 +503,20 @@ impl<'a> BindingResolver<'a> {
     }
 
     pub fn get_binding_kind(&self, name: &str) -> Option<BindingKind> {
-        for symbol in self.graph.symbols() {
-            if symbol.name == name && symbol.is_valid {
-                if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
-                    return Some(match resolved {
-                        ResolvedEnv::Variable(_) => BindingKind::Value,
-                        ResolvedEnv::Object(_) => BindingKind::Object,
-                    });
-                }
+        // Uses the name index rather than scanning every symbol: this is called
+        // once per export while resolving a file's exports.
+        for symbol_id in self.graph.lookup_symbols_by_name(name) {
+            let Some(symbol) = self.graph.get_symbol(symbol_id) else {
+                continue;
+            };
+            if !symbol.is_valid {
+                continue;
+            }
+            if let Some(resolved) = self.graph.resolve_to_env(symbol.id) {
+                return Some(match resolved {
+                    ResolvedEnv::Variable(_) => BindingKind::Value,
+                    ResolvedEnv::Object(_) => BindingKind::Object,
+                });
             }
         }
         None

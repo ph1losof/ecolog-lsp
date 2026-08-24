@@ -56,6 +56,31 @@ impl LanguageRegistry {
     pub fn all_languages(&self) -> Vec<Arc<dyn LanguageSupport>> {
         self.by_id.values().cloned().collect()
     }
+
+    /// Builds a registry containing every language this server supports.
+    pub fn with_all_languages() -> Self {
+        let mut registry = Self::new();
+
+        registry.register(Arc::new(crate::languages::javascript::JavaScript));
+        registry.register(Arc::new(crate::languages::typescript::TypeScript));
+        registry.register(Arc::new(crate::languages::typescript::TypeScriptReact));
+        registry.register(Arc::new(crate::languages::python::Python));
+        registry.register(Arc::new(crate::languages::rust::Rust));
+        registry.register(Arc::new(crate::languages::go::Go));
+        registry.register(Arc::new(crate::languages::lua::Lua));
+        registry.register(Arc::new(crate::languages::php::Php));
+        registry.register(Arc::new(crate::languages::ruby::Ruby));
+        registry.register(Arc::new(crate::languages::bash::Bash));
+        registry.register(Arc::new(crate::languages::c::C));
+        registry.register(Arc::new(crate::languages::cpp::Cpp));
+        registry.register(Arc::new(crate::languages::java::Java));
+        registry.register(Arc::new(crate::languages::kotlin::Kotlin));
+        registry.register(Arc::new(crate::languages::csharp::CSharp));
+        registry.register(Arc::new(crate::languages::elixir::Elixir));
+        registry.register(Arc::new(crate::languages::zig::Zig));
+
+        registry
+    }
 }
 
 #[cfg(test)]

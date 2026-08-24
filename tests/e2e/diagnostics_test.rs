@@ -1,5 +1,4 @@
 use crate::harness::{LspTestClient, TempWorkspace};
-use std::thread;
 use std::time::Duration;
 
 #[test]
@@ -102,7 +101,13 @@ fn test_diagnostics_update_on_document_change() {
     client
         .open_document(&uri, "javascript", "process.env.DB_URL")
         .expect("Failed to open");
-    thread::sleep(Duration::from_millis(500));
+
+    // Wait for the didOpen diagnostics rather than sleeping a fixed amount: on a
+    // loaded machine they can arrive after the sleep, land in the queue after the
+    // clear below, and be mistaken for the post-change diagnostics.
+    client
+        .wait_for_notification("textDocument/publishDiagnostics", Duration::from_secs(5))
+        .expect("Should receive diagnostics after open");
     client.clear_notifications();
 
     client
